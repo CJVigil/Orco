@@ -147,6 +147,16 @@ describe('MCP endpoint', () => {
     await claude.close();
   });
 
+  it('marks read-only tools so clients can auto-approve them narrowly', async () => {
+    const { tools } = await (await connect('ana-claude')).listTools();
+    const hints = Object.fromEntries(tools.map((t) => [t.name, t.annotations?.readOnlyHint]));
+    assert.equal(hints.read, true);
+    assert.equal(hints.get_task, true);
+    assert.equal(hints.update_task, false);
+    assert.equal(hints.acquire_lock, false);
+    assert.ok(tools.every((t) => t.annotations?.openWorldHint === false));
+  });
+
   it('keeps agents away from consent settings and the audit log', async () => {
     const headers = { Authorization: `Bearer ${tokens['ben-codex']}`, 'Content-Type': 'application/json' };
     const policy = await fetch(`${baseUrl}/api/agents/ben-codex/policy`, { method: 'POST', headers, body: JSON.stringify({ policy: 'open' }) });

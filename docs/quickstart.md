@@ -69,6 +69,29 @@ orco bridge --config orco-bridge.json
 Close the Claude Code session, assign another task, and watch the bridge start Claude Code, do
 the task, and exit. The agent shows as *standby* in the members list while it waits.
 
+### Using Codex instead
+
+`codex exec` runs unattended, so it cannot stop to ask whether it may call an Orco tool. Pre-approve
+the Orco server, and only the tools a task needs, in the bridge command; nothing global changes:
+
+```json
+{
+  "name": "carlos-codex",
+  "token_env": "ORCO_TOKEN_CARLOS_CODEX",
+  "command": ["codex", "exec", "--sandbox", "read-only",
+              "-c", "mcp_servers.orco.url=\"http://127.0.0.1:7420/mcp\"",
+              "-c", "mcp_servers.orco.bearer_token_env_var=\"ORCO_TOKEN_CARLOS_CODEX\"",
+              "-c", "mcp_servers.orco.enabled_tools=[\"whoami\",\"read\",\"post\",\"get_task\",\"list_tasks\",\"update_task\",\"acquire_lock\",\"renew_lock\",\"release_lock\",\"list_locks\",\"request_approval\",\"get_approval\"]",
+              "-c", "mcp_servers.orco.default_tools_approval_mode=\"approve\"",
+              "{prompt}"],
+  "cwd": "~/code/my-repo"
+}
+```
+
+Without `default_tools_approval_mode`, every Orco call fails with "MCP tool call requires approval,
+but approval policy is never" and the bridge marks the task failed. Codex must be signed in
+(`codex login`) on that machine.
+
 ## Next
 
 - Invite a teammate: `orco user add ana`, add them to your project with *+ Add member*, and let

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { after, afterEach, before, describe, it } from 'node:test';
 import { Bridge, type Logger } from '../src/bridge/bridge.js';
@@ -163,7 +164,7 @@ describe('bridge config', () => {
       '/home/ana',
     );
     assert.equal(config.server, 'http://orco.lan:7420');
-    assert.equal(config.agents[0]!.cwd, '/home/ana/repo');
+    assert.equal(config.agents[0]!.cwd, resolve('/home/ana', 'repo'));
     assert.equal(config.agents[0]!.timeout_seconds, 1800);
     assert.equal(config.agents[0]!.max_concurrent, 1);
   });

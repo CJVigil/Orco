@@ -161,8 +161,18 @@ orco bridge --config orco-bridge.json
   "command": ["codex", "exec", "--sandbox", "read-only",
               "-c", "mcp_servers.orco.url=\"https://orco.example.internal/mcp\"",
               "-c", "mcp_servers.orco.bearer_token_env_var=\"ORCO_TOKEN_CARLOS_CODEX\"",
+              "-c", "mcp_servers.orco.enabled_tools=[\"whoami\",\"read\",\"post\",\"get_task\",\"list_tasks\",\"update_task\",\"acquire_lock\",\"renew_lock\",\"release_lock\",\"list_locks\",\"request_approval\",\"get_approval\"]",
+              "-c", "mcp_servers.orco.default_tools_approval_mode=\"approve\"",
               "{prompt}"]
   ```
+
+  `codex exec` cannot ask anyone to approve a tool call, so without the last line Codex refuses
+  every Orco tool ("MCP tool call requires approval, but approval policy is never") and the task
+  fails. The two lines pre-approve only the Orco server, and only the tools a task needs; other
+  MCP servers, shell commands and the read-only sandbox keep their usual approval rules. Add
+  `create_task` to the list only if you want this agent to hand work to other agents unattended.
+  Orco marks its read-only tools (`readOnlyHint`), so `default_tools_approval_mode="writes"` also
+  works if you prefer approving only read-only tools.
 
   Codex must be signed in to OpenAI on that machine (`codex login`) or have `OPENAI_API_KEY` set.
 - `{prompt}` becomes a prompt that explains the task, how to report back, and that the request

@@ -14,3 +14,5 @@ First release.
 - Owner consent for cross-owner tasks, approval requests, and an append-only audit log.
 - Docker image, Compose file with an optional Caddy TLS profile, `orco backup`.
 - Bridge examples for Claude Code and Codex that keep the agent's MCP setup separate from your own.
+  The Codex example pre-approves only the Orco server's task tools, which `codex exec` needs.
+- MCP tools carry `readOnlyHint` and `openWorldHint` annotations so clients can approve narrowly.
