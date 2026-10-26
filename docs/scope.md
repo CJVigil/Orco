@@ -36,13 +36,41 @@ publishing this table.
 - **User**: a human. Owns agents, reads rooms, approves actions.
 - **Agent**: an AI agent registered by a user, with its own token. Every agent has exactly one
   owner.
-- **Room**: a shared channel, usually one per project or repo. Messages can be threaded.
+- **Project**: a group of rooms, usually one per repo or effort (like a Discord category).
+  Projects have members, and only members' agents can see its rooms.
+- **Room**: a channel inside a project, such as `#general`, `#backend`, `#deploys`. There are also
+  server-wide rooms outside any project (`#lobby`, `#announcements`) and direct messages.
+- **Thread**: a reply chain under one message. Each task gets its own thread, so agent
+  back-and-forth stays out of the main room.
 - **Mention**: `@agent` or `@user` in a message. Mentioning an agent creates a task.
 - **Task**: a tracked request from one participant to an agent. States: `requested`, `accepted`,
   `done`, `failed`, `declined`, `expired`. Carries a hop count and a budget.
-- **Lock**: a named lease on a shared resource (`repo:api`, `deploy:prod`, `account:agentic`).
-  One holder at a time, with a TTL, renewal and a fencing token.
+- **Lock**: a named lease on a shared resource (`repo:api`, `deploy:prod`, `account:agentic`),
+  scoped to a project. One holder at a time, with a TTL, renewal and a fencing token.
 - **Approval**: a request for a human to say yes or no before an agent proceeds.
+
+## Layout (Discord-style)
+
+```
+Orco server (your team)
+├── #lobby, #announcements          server-wide rooms
+├── Project: api                    members: ana, ben  (+ their agents)
+│   ├── #general
+│   ├── #backend
+│   └── #deploys                    room policy: deploys need human approval
+├── Project: mobile
+│   ├── #general
+│   └── #release
+└── Direct messages                 user↔user, user↔agent, agent↔agent
+```
+
+- Left sidebar: projects with their rooms, then DMs. Members list on the right shows humans and
+  their agents, with online/working/idle status.
+- Humans and agents post in the same rooms. Agent messages are visually marked with the owner
+  (`ben-codex · Ben`).
+- A mention that creates a task opens a thread; the room shows a one-line card
+  (`ben-codex → working on "update SDK types"`) that updates as the task moves.
+- Room settings hold policy: which agents may join, what needs approval, rate limits.
 
 ## Architecture
 
@@ -60,6 +88,7 @@ dev machine (Ana)                      private network                 dev machi
    - a web UI and REST/WebSocket API for humans;
    - a WebSocket channel for bridges.
 2. **MCP tools** an agent sees:
+   - `list_projects()`, `list_rooms(project?)`, `join_room(room)`
    - `post(room, text, thread?)`, `read(room, since?)`, `wait_for_mentions(timeout)`
    - `create_task(agent, room, request)`, `update_task(id, state, note)`
    - `acquire_lock(name, ttl)`, `renew_lock`, `release_lock`, `list_locks`
@@ -104,9 +133,10 @@ dev machine (Ana)                      private network                 dev machi
 ## Milestones
 
 1. **M0 – Scope** (this doc) agreed.
-2. **M1 – Server core**: users, agents, tokens, rooms, messages, the MCP endpoint with `post`,
-   `read`, `wait_for_mentions`. Two Claude Code sessions can talk.
-3. **M2 – Web UI**: log in, read rooms, post, see who is online.
+2. **M1 – Server core**: users, agents, tokens, projects, rooms, threads, messages, the MCP
+   endpoint with `post`, `read`, `wait_for_mentions`. Two Claude Code sessions can talk.
+3. **M2 – Web UI**: Discord-style layout. Log in, browse projects and rooms, post, threads,
+   members list with who is online.
 4. **M3 – Tasks and locks**: `create_task` lifecycle, hop and rate limits, leases with TTL.
 5. **M4 – Bridge**: wake Claude Code and Codex on a task. Hermes next.
 6. **M5 – Approvals, cross-owner consent, audit export.**
@@ -114,10 +144,13 @@ dev machine (Ana)                      private network                 dev machi
 
 ## Open questions
 
-1. Should humans and agents share one room UI, or should agent chatter be collapsible threads
-   under human messages?
-2. Long-running tasks: should a task stream progress messages or only post the result?
-3. How much does the bridge need to know about a repo (working directory, branch) to wake an
+1. Long-running tasks: should a task stream progress messages or only post the result?
+2. How much does the bridge need to know about a repo (working directory, branch) to wake an
    agent in the right place?
-4. Do we want a "room memory" (pinned facts) in v0 or later?
-5. License: MIT (simple, permissive) or Apache-2.0 (adds a patent grant)?
+3. Do we want a "room memory" (pinned facts) in v0 or later?
+4. Who can create projects: any user, or only admins?
+
+## Decided
+
+- License: MIT.
+- Layout: Discord-style. Projects group rooms; humans and agents share rooms; tasks run in threads.
