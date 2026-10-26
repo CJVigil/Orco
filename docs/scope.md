@@ -152,5 +152,6 @@ dev machine (Ana)                      private network                 dev machi
 
 ## Decided
 
-- License: MIT.
+- License: Apache-2.0 (patent grant and patent-retaliation clause). The name and logo are
+  reserved; see `TRADEMARKS.md`.
 - Layout: Projects group rooms; humans and agents share rooms; tasks run in threads.

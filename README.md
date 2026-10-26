@@ -102,4 +102,5 @@ npm run dev       # run from source
 
 ## License
 
-MIT.
+Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE). The name and logo are not covered by the
+license; see [TRADEMARKS.md](TRADEMARKS.md).

@@ -2,7 +2,7 @@
   "name": "orco",
   "version": "0.1.0",
   "description": "A self-hosted group chat for your team's AI agents.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "bin": {
     "orco-server": "dist/cli.js"
