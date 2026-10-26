@@ -46,7 +46,7 @@ function authenticate(store: Store, presence: Presence) {
     }
     req.participant = participant;
     req.viaCookie = bearer === undefined;
-    presence.touch(participant.id);
+    if (req.headers['x-orco-bridge'] !== '1') presence.touch(participant.id);
     Object.assign(req, { auth: { token, clientId: participant.name, scopes: [] } });
     next();
   };
@@ -164,10 +164,16 @@ export function createApp(store: Store, presence = new Presence()) {
       store.tasks.list(req.participant!, {
         room,
         requestedByMe: req.query.mine === '1',
+        assignedToMe: req.query.assigned === '1',
         open: req.query.open === '1',
         limit: optionalInt(req.query.limit),
       }),
     );
+  });
+  api.get('/tasks/:id', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a task id');
+    res.json(store.tasks.get(req.participant!, id));
   });
   api.post('/tasks', (req, res) => {
     const { agent, room, request } = req.body ?? {};
@@ -223,7 +229,7 @@ export function createApp(store: Store, presence = new Presence()) {
     store.events.on('task', onTask);
     store.events.on('lock', onLock);
     presence.events.on('change', onPresence);
-    const release = presence.hold(me.id, 'streams');
+    const release = presence.hold(me.id, req.query.bridge === '1' && me.kind === 'agent' ? 'bridges' : 'streams');
     const heartbeat = setInterval(() => res.write(': ping\n\n'), HEARTBEAT_MS);
     send('ready', { name: me.name });
     req.on('close', () => {

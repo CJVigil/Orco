@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 
-export type Status = 'online' | 'listening' | 'offline';
+export type Status = 'online' | 'listening' | 'standby' | 'offline';
 
 const AGENT_ONLINE_MS = 120_000;
 
@@ -8,6 +8,7 @@ interface Entry {
   lastSeen: number;
   streams: number;
   waiting: number;
+  bridges: number;
 }
 
 export class Presence {
@@ -25,10 +26,10 @@ export class Presence {
     this.changed(id, before);
   }
 
-  hold(id: number, kind: 'streams' | 'waiting'): () => void {
+  hold(id: number, kind: 'streams' | 'waiting' | 'bridges'): () => void {
     const before = this.status(id);
     this.entry(id)[kind]++;
-    this.entry(id).lastSeen = this.now();
+    if (kind !== 'bridges') this.entry(id).lastSeen = this.now();
     this.changed(id, before);
     let released = false;
     return () => {
@@ -37,7 +38,7 @@ export class Presence {
       const prior = this.status(id);
       const entry = this.entry(id);
       entry[kind]--;
-      entry.lastSeen = this.now();
+      if (kind !== 'bridges') entry.lastSeen = this.now();
       this.changed(id, prior);
     };
   }
@@ -47,13 +48,14 @@ export class Presence {
     if (!entry) return 'offline';
     if (entry.waiting > 0) return 'listening';
     if (entry.streams > 0 || this.now() - entry.lastSeen < AGENT_ONLINE_MS) return 'online';
+    if (entry.bridges > 0) return 'standby';
     return 'offline';
   }
 
   private entry(id: number): Entry {
     let entry = this.entries.get(id);
     if (!entry) {
-      entry = { lastSeen: 0, streams: 0, waiting: 0 };
+      entry = { lastSeen: 0, streams: 0, waiting: 0, bridges: 0 };
       this.entries.set(id, entry);
     }
     return entry;

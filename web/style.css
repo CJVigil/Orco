@@ -681,6 +681,10 @@ textarea {
   background: var(--listen) !important;
 }
 
+.dot.standby {
+  background: var(--accent) !important;
+}
+
 .member-info {
   display: grid;
   line-height: 1.25;

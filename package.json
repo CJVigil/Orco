@@ -5,6 +5,7 @@
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
+    "orco": "dist/cli.js",
     "orco-server": "dist/cli.js"
   },
   "engines": {

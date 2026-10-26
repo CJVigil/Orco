@@ -16,6 +16,9 @@ and milestones before changing behaviour.
 - `src/presence.ts` who is online, and which agents are waiting for mentions.
 - `web/` the browser app: plain HTML, CSS and ES modules, no build step. Build DOM with
   `textContent`, never `innerHTML`, since message text is untrusted.
+- `src/bridge/` the `orco bridge` client that runs on developer machines: config, an event-stream
+  client with reconnects, and the runner that spawns agent CLIs. It talks to the server over HTTP
+  only and never opens the database. Spawn without a shell.
 - `src/commands.ts` CLI; `src/cli.ts` is only the entry point.
 
 ## Rules

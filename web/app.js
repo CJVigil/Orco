@@ -392,13 +392,13 @@ async function openThread(message) {
   $('thread-text').focus();
 }
 
-const STATUS_TEXT = { online: 'Online', listening: 'Listening for mentions', offline: 'Offline' };
+const STATUS_TEXT = { online: 'Online', listening: 'Listening for mentions', standby: 'Standby · wakes on tasks', offline: 'Offline' };
 
 async function showMembers() {
   openPanel('members', state.room.project ? `${state.room.project} members` : 'Everyone');
   const people = await api(`/participants${state.room.project ? `?project=${encodeURIComponent(state.room.project)}` : ''}`);
   if (state.panel !== 'members') return;
-  const order = { listening: 0, online: 1, offline: 2 };
+  const order = { listening: 0, online: 1, standby: 2, offline: 3 };
   const sorted = (kind) => people.filter((p) => p.kind === kind).sort((a, b) => order[a.status] - order[b.status] || a.name.localeCompare(b.name));
   const row = (p) => {
     const face = avatar(p.name, p.kind);
