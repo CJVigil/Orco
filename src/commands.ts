@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { parseArgs } from 'node:util';
 import { Bridge } from './bridge/bridge.js';
 import { loadBridgeConfig } from './bridge/config.js';
@@ -15,6 +17,8 @@ Server commands (run where the database lives):
   agent policy <agent> <p>   Who may give the agent tasks: open, ask (default) or owner_only
   agent trust <agent> <user> Let a user's tasks reach the agent without asking (untrust to undo)
   audit export [--since N]   Print the audit log as JSON lines
+  backup <file>              Write a consistent copy of the database, safe while serving
+  version                    Print the version
   list                       List users and agents
 
 Bridge commands (run on each developer's machine):
@@ -27,6 +31,8 @@ Options:
   --host <host>   Address to listen on (env ORCO_HOST, default 127.0.0.1)
   --port <port>   Port to listen on (env ORCO_PORT, default 7420)
 `;
+
+const VERSION = (createRequire(import.meta.url)('../package.json') as { version: string }).version;
 
 function limitsFromEnv(): Partial<Limits> {
   const read = (key: string) => {
@@ -94,9 +100,14 @@ export function main(): void {
       config: { type: 'string', default: process.env.ORCO_BRIDGE_CONFIG ?? './orco-bridge.json' },
       since: { type: 'string' },
       help: { type: 'boolean', short: 'h' },
+      version: { type: 'boolean', short: 'v' },
     },
   });
   const [command, sub, ...args] = positionals;
+  if (values.version || command === 'version') {
+    console.log(VERSION);
+    return;
+  }
   if (values.help || !command) {
     process.stdout.write(USAGE);
     return;
@@ -113,20 +124,38 @@ export function main(): void {
   }
 
   const store = new Store(openDatabase(values.db), { limits: limitsFromEnv() });
-  const key = sub && command !== 'serve' && command !== 'list' ? `${command} ${sub}` : command;
+  const key = sub && !['serve', 'list', 'backup'].includes(command) ? `${command} ${sub}` : command;
 
   switch (key) {
     case 'serve': {
-      const { app } = createApp(store);
+      const { app, close } = createApp(store);
       if (process.env.ORCO_TRUST_PROXY) app.set('trust proxy', process.env.ORCO_TRUST_PROXY);
       const port = Number(values.port);
-      app.listen(port, values.host, () => {
-        console.log(`Orco listening on http://${values.host}:${port}`);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) throw new OrcoError('invalid', `Invalid port ${values.port}`);
+      const server = app.listen(port, values.host, () => {
+        console.log(`Orco ${VERSION} listening on http://${values.host}:${port}`);
         console.log(`  MCP endpoint: http://${values.host}:${port}/mcp`);
+        console.log(`  Database: ${values.db}`);
         if (values.host !== '127.0.0.1' && values.host !== 'localhost') {
-          console.log('  Not bound to localhost: put TLS in front of this (see docs/scope.md).');
+          console.log('  Not bound to localhost: put TLS in front of this (see docs/deploy.md).');
         }
       });
+      server.on('error', (err) => {
+        console.error(`Could not listen on ${values.host}:${port}: ${err.message}`);
+        process.exit(1);
+      });
+      const shutdown = (signal: string) => {
+        console.log(`${signal} received, shutting down`);
+        server.close();
+        server.closeAllConnections();
+        void close().finally(() => {
+          store.db.close();
+          process.exit(0);
+        });
+        setTimeout(() => process.exit(1), 5_000).unref();
+      };
+      process.once('SIGINT', () => shutdown('SIGINT'));
+      process.once('SIGTERM', () => shutdown('SIGTERM'));
       return;
     }
     case 'user add': {
@@ -162,6 +191,14 @@ export function main(): void {
       if (!name || !user) throw new OrcoError('invalid', `Usage: orco ${key} <agent> <user>`);
       const settings = store.setTrust(null, name, user, sub === 'trust');
       console.log(`${settings.name} trusts: ${settings.trusted.join(', ') || 'nobody beyond its owner'}`);
+      return;
+    }
+    case 'backup': {
+      const target = sub;
+      if (!target) throw new OrcoError('invalid', 'Usage: orco backup <file>');
+      if (existsSync(target)) throw new OrcoError('conflict', `${target} already exists; pick a new file name`);
+      store.db.exec(`VACUUM INTO '${target.replace(/'/g, "''")}'`);
+      console.log(`Backed up ${values.db} to ${target}`);
       return;
     }
     case 'audit export': {

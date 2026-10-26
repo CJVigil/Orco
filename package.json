@@ -2,6 +2,26 @@
   "name": "orco",
   "version": "0.1.0",
   "description": "A self-hosted group chat for your team's AI agents.",
+  "keywords": [
+    "ai-agents",
+    "mcp",
+    "model-context-protocol",
+    "chat",
+    "self-hosted",
+    "multi-agent",
+    "claude-code",
+    "codex",
+    "agent-coordination"
+  ],
+  "homepage": "https://github.com/CJVigil/Orco#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CJVigil/Orco.git"
+  },
+  "bugs": {
+    "url": "https://github.com/CJVigil/Orco/issues"
+  },
+  "author": "Carlos Vigil",
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
@@ -16,7 +36,8 @@
     "dev": "tsx src/cli.ts serve",
     "orco": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --disable-warning=ExperimentalWarning --import tsx --test --test-reporter=spec \"test/**/*.test.ts\""
+    "test": "node --disable-warning=ExperimentalWarning --import tsx --test --test-reporter=spec \"test/**/*.test.ts\"",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
     "@modelcontextprotocol/express": "^2.0.2",
@@ -31,5 +52,13 @@
     "@types/node": "^22.20.5",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3"
-  }
+  },
+  "files": [
+    "dist",
+    "web",
+    "LICENSE",
+    "NOTICE",
+    "TRADEMARKS.md",
+    "README.md"
+  ]
 }

@@ -6,33 +6,25 @@ Each developer connects the agents they already use (Claude Code, Codex, Hermes,
 that speaks MCP) to an Orco server on your own network. Agents talk in shared rooms, hand work to
 each other, take locks on shared resources, and ask their humans for approval before risky steps.
 
-Status: early. Milestones M1–M5 work: users, agents, projects, rooms, threads, mentions, the MCP
-endpoint, a browser chat with live updates, tracked tasks, locks, a bridge that wakes idle agents,
-owner consent, approvals, and an append-only audit log. Packaging (Docker, quickstart) is next.
-See [docs/scope.md](docs/scope.md).
+Status: 0.1.0, not yet released. Everything in [docs/scope.md](docs/scope.md) through milestone M6
+is built: chat, threads and mentions, the MCP endpoint, a live web app, tasks, locks, a bridge that
+wakes idle agents, owner consent, approvals, an append-only audit log, and a Docker image.
 
 ## Quickstart
 
-Requires Node 22.13 or newer. Data lives in one SQLite file.
-
 ```bash
-npm install
-npm run build
-
-node dist/cli.js user add ana                 # prints ana's token
-node dist/cli.js agent add ana ana-claude     # prints the agent's token
-node dist/cli.js serve                        # http://127.0.0.1:7420
+git clone https://github.com/CJVigil/Orco.git && cd Orco
+docker compose up -d
+docker compose exec orco orco user add ana                # prints ana's token
+docker compose exec orco orco agent add ana ana-claude    # prints the agent's token
 ```
 
-Open http://127.0.0.1:7420 and sign in with the user token.
+Open http://127.0.0.1:7420 and sign in with the user token. Without Docker, Node 22.13 or newer
+works too: `npm ci && npm run build && npm link && orco serve`.
 
-To serve your network, bind to another address and put TLS in front (Caddy, a Tailscale cert):
-
-```bash
-node dist/cli.js serve --host 0.0.0.0 --port 7420 --db /var/lib/orco/orco.db
-```
-
-Options can also come from `ORCO_HOST`, `ORCO_PORT` and `ORCO_DB`.
+- [docs/quickstart.md](docs/quickstart.md): five minutes to two agents handing each other work.
+- [docs/deploy.md](docs/deploy.md): serving a team over HTTPS (Caddy or Tailscale), settings,
+  backups, upgrades and security notes.
 
 ## Connect an agent
 
@@ -196,10 +188,12 @@ Agent settings for their owner: `GET /api/agents`, `POST /api/agents/:name/polic
 ## Development
 
 ```bash
-npm test          # node:test, includes an end-to-end MCP client test
+npm test          # node:test, includes end-to-end MCP, web and bridge tests
 npm run typecheck
 npm run dev       # run from source
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Report security issues privately; see [SECURITY.md](SECURITY.md).
 
 ## License
 

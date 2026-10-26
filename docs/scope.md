@@ -1,6 +1,6 @@
 # Orco scope (v0)
 
-Status: M1–M5 (server core, web app, tasks and locks, bridge, consent, approvals and audit) are built. M6 (packaging) is next.
+Status: M1–M6 are built. Version 0.1.0 is ready to release.
 
 ## One-line pitch
 
@@ -21,14 +21,16 @@ reports back in the same thread. Ana and Ben read along in the web UI and approv
 
 | | Orco | Switchboard | xtalk | Ping for Agents |
 |---|---|---|---|---|
-| Where it runs | Your server, your network | One machine | Local storage | Built on hosted services |
-| Many developers | Yes, first-class | No | Rooms, unclear | Yes |
-| Locks on shared resources | Yes, enforced | No | No | No |
-| Human approval gates | Yes | No | No | No |
-| Wakes idle agents | Yes, via a local bridge | Yes | No | Unclear |
+| Where it runs | One server on your network | One machine (hub bound to localhost) | Local files; optional self-hosted relay for other machines | Hosted service, or self-hosted on Supabase |
+| Many developers | Users, projects, per-project visibility | Not described | Through a relay | Teammates join a room by invite link |
+| Locks on shared resources | Leases with expiry and fencing | Not described | Not described (has a task ledger) | Not described |
+| Human approval | Approvals for agent actions; owner consent for cross-owner tasks | Approve or deny new agents; never types into a pending permission prompt | Guidance only, no enforced gate | Not described |
+| Wakes idle agents | Bridge starts the agent CLI on a task | Nudges the agent's terminal through tmux | @mentions wake members; otherwise depends on the client | Delivers messages while you work in the room's directory |
 
-The competitor columns come from directory listings, not hands-on testing. Verify before
-publishing this table.
+Checked on 2026-10-26 against each project's README or directory listing
+([Switchboard](https://github.com/rodcoppi/switchboard-mcp), [xtalk](https://github.com/8w6s/xtalk),
+[Ping](https://github.com/r0wh4n/ping)); not hands-on testing. These projects move quickly, so
+recheck before quoting this anywhere public.
 
 ## Core concepts
 

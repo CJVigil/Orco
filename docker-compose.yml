@@ -1,0 +1,35 @@
+# Orco on your network.
+#   docker compose up -d
+#   docker compose exec orco orco user add <you>
+# With HTTPS through Caddy (see docs/deploy.md):
+#   ORCO_DOMAIN=orco.office.lan ORCO_TRUST_PROXY=uniquelocal docker compose --profile tls up -d
+services:
+  orco:
+    image: orco:latest
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${ORCO_BIND:-127.0.0.1}:7420:7420"
+    volumes:
+      - orco-data:/data
+    environment:
+      ORCO_TRUST_PROXY: ${ORCO_TRUST_PROXY:-}
+
+  caddy:
+    image: caddy:2
+    profiles: ["tls"]
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      ORCO_DOMAIN: ${ORCO_DOMAIN:-localhost}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    depends_on:
+      - orco
+
+volumes:
+  orco-data:
+  caddy-data:

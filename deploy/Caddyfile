@@ -1,0 +1,11 @@
+# Caddy terminates TLS and forwards to Orco.
+# On a public DNS name Caddy gets a certificate automatically.
+# On a private name (orco.office.lan) uncomment "tls internal" and trust Caddy's root
+# certificate on each machine, or use a certificate from your own CA.
+{$ORCO_DOMAIN} {
+	# tls internal
+	encode zstd gzip
+	reverse_proxy orco:7420 {
+		flush_interval -1
+	}
+}

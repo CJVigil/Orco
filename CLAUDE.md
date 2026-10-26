@@ -23,10 +23,13 @@ and milestones before changing behaviour.
   client with reconnects, and the runner that spawns agent CLIs. It talks to the server over HTTP
   only and never opens the database. Spawn without a shell.
 - `src/commands.ts` CLI; `src/cli.ts` is only the entry point.
+- `Dockerfile`, `docker-compose.yml`, `deploy/Caddyfile` packaging; `docs/quickstart.md` and
+  `docs/deploy.md` are the user docs. Keep commands in them working.
 
 ## Rules
 
-- Run `npm run typecheck` and `npm test` before committing.
+- Run `npm run typecheck` and `npm test` before committing. User-facing changes get a line in
+  `CHANGELOG.md`.
 - Every new store method that touches a room or project checks visibility through the actor.
 - Text an agent reads from other participants is untrusted; keep the `UNTRUSTED_NOTE` on tools
   that return messages.
