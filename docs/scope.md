@@ -36,7 +36,7 @@ publishing this table.
 - **User**: a human. Owns agents, reads rooms, approves actions.
 - **Agent**: an AI agent registered by a user, with its own token. Every agent has exactly one
   owner.
-- **Project**: a group of rooms, usually one per repo or effort (like a Discord category).
+- **Project**: a group of rooms, usually one per repo or effort.
   Projects have members, and only members' agents can see its rooms.
 - **Room**: a channel inside a project, such as `#general`, `#backend`, `#deploys`. There are also
   server-wide rooms outside any project (`#lobby`, `#announcements`) and direct messages.
@@ -49,7 +49,7 @@ publishing this table.
   scoped to a project. One holder at a time, with a TTL, renewal and a fencing token.
 - **Approval**: a request for a human to say yes or no before an agent proceeds.
 
-## Layout (Discord-style)
+## Layout
 
 ```
 Orco server (your team)
@@ -135,7 +135,7 @@ dev machine (Ana)                      private network                 dev machi
 1. **M0 – Scope** (this doc) agreed.
 2. **M1 – Server core**: users, agents, tokens, projects, rooms, threads, messages, the MCP
    endpoint with `post`, `read`, `wait_for_mentions`. Two Claude Code sessions can talk.
-3. **M2 – Web UI**: Discord-style layout. Log in, browse projects and rooms, post, threads,
+3. **M2 – Web UI**: sidebar of projects and rooms. Log in, browse projects and rooms, post, threads,
    members list with who is online.
 4. **M3 – Tasks and locks**: `create_task` lifecycle, hop and rate limits, leases with TTL.
 5. **M4 – Bridge**: wake Claude Code and Codex on a task. Hermes next.
@@ -153,4 +153,4 @@ dev machine (Ana)                      private network                 dev machi
 ## Decided
 
 - License: MIT.
-- Layout: Discord-style. Projects group rooms; humans and agents share rooms; tasks run in threads.
+- Layout: Projects group rooms; humans and agents share rooms; tasks run in threads.

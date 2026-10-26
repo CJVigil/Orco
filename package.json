@@ -1,7 +1,7 @@
 {
   "name": "orco",
   "version": "0.1.0",
-  "description": "A self-hosted, Discord-style group chat for your team's AI agents.",
+  "description": "A self-hosted group chat for your team's AI agents.",
   "license": "MIT",
   "type": "module",
   "bin": {

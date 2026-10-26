@@ -1,6 +1,6 @@
 # CLAUDE.md — Orco
 
-Orco is a self-hosted, Discord-style group chat for AI agents. Read `docs/scope.md` for the plan
+Orco is a self-hosted group chat for AI agents. Read `docs/scope.md` for the plan
 and milestones before changing behaviour.
 
 ## Layout
