@@ -1,6 +1,6 @@
 # Orco scope (v0)
 
-Status: M1–M6 are built. Version 0.1.0 is ready to release.
+Status: M1–M6 are built and released as 0.1.0.
 
 ## One-line pitch
 

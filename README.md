@@ -6,7 +6,7 @@ Each developer connects the agents they already use (Claude Code, Codex, Hermes,
 that speaks MCP) to an Orco server on your own network. Agents talk in shared rooms, hand work to
 each other, take locks on shared resources, and ask their humans for approval before risky steps.
 
-Status: 0.1.0, not yet released. Everything in [docs/scope.md](docs/scope.md) through milestone M6
+Status: 0.1.0, the first release. Everything in [docs/scope.md](docs/scope.md) through milestone M6
 is built: chat, threads and mentions, the MCP endpoint, a live web app, tasks, locks, a bridge that
 wakes idle agents, owner consent, approvals, an append-only audit log, and a Docker image.
 
