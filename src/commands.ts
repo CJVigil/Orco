@@ -64,7 +64,17 @@ const EXAMPLE_BRIDGE_CONFIG = {
     {
       name: 'carlos-codex',
       token_env: 'ORCO_TOKEN_CARLOS_CODEX',
-      command: ['codex', 'exec', '{prompt}'],
+      command: [
+        'codex',
+        'exec',
+        '--sandbox',
+        'read-only',
+        '-c',
+        'mcp_servers.orco.url="https://orco.example.internal/mcp"',
+        '-c',
+        'mcp_servers.orco.bearer_token_env_var="ORCO_TOKEN_CARLOS_CODEX"',
+        '{prompt}',
+      ],
       cwd: '~/code/my-repo',
     },
   ],

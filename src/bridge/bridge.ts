@@ -155,13 +155,25 @@ class AgentRunner {
     }
     this.running.set(task.id, child);
 
-    const capture = (chunk: Buffer) => {
+    const prefix = `[${this.config.name} #${task.id}] `;
+    const partial = { stdout: '', stderr: '' };
+    const capture = (stream: 'stdout' | 'stderr') => (chunk: Buffer) => {
       const text = chunk.toString();
       tail = (tail + text).slice(-OUTPUT_TAIL);
-      if (this.echoOutput) process.stdout.write(text.replace(/^/gm, `[${this.config.name} #${task.id}] `));
+      if (!this.echoOutput) return;
+      const lines = (partial[stream] + text).split('\n');
+      partial[stream] = lines.pop()!;
+      for (const line of lines) process.stdout.write(`${prefix}${line}\n`);
     };
-    child.stdout?.on('data', capture);
-    child.stderr?.on('data', capture);
+    const flush = () => {
+      if (!this.echoOutput) return;
+      for (const stream of ['stdout', 'stderr'] as const) {
+        if (partial[stream]) process.stdout.write(`${prefix}${partial[stream]}\n`);
+        partial[stream] = '';
+      }
+    };
+    child.stdout?.on('data', capture('stdout'));
+    child.stderr?.on('data', capture('stderr'));
 
     const timer = setTimeout(() => {
       timedOut = true;
@@ -175,6 +187,7 @@ class AgentRunner {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      flush();
       this.running.delete(task.id);
       const seconds = Math.round((Date.now() - started) / 1000);
       this.log.info(`[${this.config.name}] task #${task.id} agent exited after ${seconds}s (${reason})`);

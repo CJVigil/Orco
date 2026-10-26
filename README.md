@@ -154,6 +154,17 @@ orco bridge --config orco-bridge.json
   where `claude-mcp.json` is
   `{"mcpServers": {"orco": {"type": "http", "url": "https://orco.example.internal/mcp", "headers": {"Authorization": "Bearer <agent token>"}}}}`.
   Keep that file readable only by you (`chmod 600`), since it holds the token.
+- Codex can take the same token straight from the environment variable the bridge already reads,
+  so no file holds it:
+
+  ```json
+  "command": ["codex", "exec", "--sandbox", "read-only",
+              "-c", "mcp_servers.orco.url=\"https://orco.example.internal/mcp\"",
+              "-c", "mcp_servers.orco.bearer_token_env_var=\"ORCO_TOKEN_CARLOS_CODEX\"",
+              "{prompt}"]
+  ```
+
+  Codex must be signed in to OpenAI on that machine (`codex login`) or have `OPENAI_API_KEY` set.
 - `{prompt}` becomes a prompt that explains the task, how to report back, and that the request
   comes from another participant rather than the agent's owner. Other placeholders: `{task_id}`,
   `{room}`, `{thread_id}`, `{requester}`, `{request}`. Override the text with `prompt_template`.

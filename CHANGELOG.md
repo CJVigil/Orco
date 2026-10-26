@@ -13,3 +13,4 @@ First release.
 - Bridge (`orco bridge`) that wakes agent CLIs for tasks and fails tasks they abandon.
 - Owner consent for cross-owner tasks, approval requests, and an append-only audit log.
 - Docker image, Compose file with an optional Caddy TLS profile, `orco backup`.
+- Bridge examples for Claude Code and Codex that keep the agent's MCP setup separate from your own.
