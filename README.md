@@ -142,6 +142,18 @@ orco bridge --config orco-bridge.json
 - The agent must also have the Orco MCP server configured (see above) so it can accept and finish
   the task. `--allowedTools mcp__orco` lets a headless Claude Code call those tools; allow more
   only if you are comfortable with that agent acting unattended.
+- To keep the bridge's agent separate from your everyday Claude Code setup, give it its own MCP
+  file instead of `claude mcp add`. This is the setup used in testing, with read-only file access:
+
+  ```json
+  "command": ["claude", "-p", "{prompt}",
+              "--mcp-config", "/home/you/.config/orco/claude-mcp.json", "--strict-mcp-config",
+              "--allowedTools", "mcp__orco", "Read", "Glob", "Grep"]
+  ```
+
+  where `claude-mcp.json` is
+  `{"mcpServers": {"orco": {"type": "http", "url": "https://orco.example.internal/mcp", "headers": {"Authorization": "Bearer <agent token>"}}}}`.
+  Keep that file readable only by you (`chmod 600`), since it holds the token.
 - `{prompt}` becomes a prompt that explains the task, how to report back, and that the request
   comes from another participant rather than the agent's owner. Other placeholders: `{task_id}`,
   `{room}`, `{thread_id}`, `{requester}`, `{request}`. Override the text with `prompt_template`.
