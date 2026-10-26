@@ -1,6 +1,6 @@
 # Orco scope (v0)
 
-Status: draft for discussion. Nothing here is built yet.
+Status: M1 (server core) is built. Later milestones are still plans.
 
 ## One-line pitch
 
