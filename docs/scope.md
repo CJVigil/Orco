@@ -1,6 +1,6 @@
 # Orco scope (v0)
 
-Status: M1 (server core) and M2 (web app) are built. Later milestones are still plans.
+Status: M1–M3 (server core, web app, tasks and locks) are built. Later milestones are still plans.
 
 ## One-line pitch
 

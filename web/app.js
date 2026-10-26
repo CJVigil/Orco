@@ -109,6 +109,7 @@ function renderMessage(message, previous, { inThread = false } = {}) {
       el('time', { class: 'time', datetime: message.createdAt, title: new Date(message.createdAt).toLocaleString(), text: formatTime(message.createdAt) }),
     ),
     el('div', { class: 'msg-body' }, richText(message.text)),
+    message.task ? taskCard(message) : null,
   );
   if (!inThread) {
     node.append(
@@ -126,6 +127,58 @@ function renderMessage(message, previous, { inThread = false } = {}) {
     }
   }
   return node;
+}
+
+const TASK_LABEL = {
+  requested: 'Requested',
+  accepted: 'In progress',
+  done: 'Done',
+  failed: 'Failed',
+  declined: 'Declined',
+  cancelled: 'Cancelled',
+};
+
+function taskCard(message) {
+  const { id, state: taskState, assignee } = message.task;
+  const open = taskState === 'requested' || taskState === 'accepted';
+  const mine = message.author === state.me.name || message.owner === state.me.name;
+  return el(
+    'div',
+    { class: `task-card task-${taskState}` },
+    el('span', { class: 'task-id', text: `Task #${id}` }),
+    el('span', { class: 'muted', text: `→ ${assignee}` }),
+    el('span', { class: 'chip', text: TASK_LABEL[taskState] }),
+    open && mine
+      ? el('button', {
+          class: 'ghost small',
+          type: 'button',
+          text: 'Cancel',
+          onclick: async () => {
+            if (!confirm(`Cancel task #${id}?`)) return;
+            try {
+              await api(`/tasks/${id}`, { method: 'POST', body: { state: 'cancelled' } });
+            } catch (err) {
+              alert(err.message);
+            }
+          },
+        })
+      : null,
+  );
+}
+
+function onTask(task) {
+  let touched = false;
+  for (const list of [state.messages, state.threadMessages]) {
+    for (const message of list) {
+      if (message.task && message.task.id === task.id) {
+        message.task = { id: task.id, state: task.state, assignee: task.assignee };
+        touched = true;
+      }
+    }
+  }
+  if (!touched) return;
+  renderMessages({ keepScroll: true });
+  if (state.panel === 'thread') renderThread({ keepScroll: true });
 }
 
 /* Sidebar */
@@ -188,6 +241,7 @@ function renderRoomTitle() {
   if (state.room.project) title.append(el('span', { class: 'project', text: `${state.room.project} / ` }));
   title.append(`#${state.room.name}`);
   $('add-member').hidden = !state.room.project;
+  $('show-locks').hidden = !state.room.project;
   document.title = `#${state.room.name} · Orco`;
 }
 
@@ -215,6 +269,7 @@ async function selectRoom() {
     $('load-older').hidden = state.messages.length < PAGE;
     renderMessages();
     if (state.panel === 'members') showMembers();
+    else if (state.panel === 'locks' && state.room.project) showLocks();
     else closePanel();
     $('composer-text').focus();
   }
@@ -232,6 +287,7 @@ async function loadOlder() {
 /* Threads and members panel */
 
 function openPanel(kind, title) {
+  if (kind !== 'locks') clearInterval(lockTimer);
   state.panel = kind;
   $('panel').hidden = false;
   $('panel-title').textContent = title;
@@ -241,10 +297,81 @@ function openPanel(kind, title) {
 function closePanel() {
   state.panel = null;
   state.thread = null;
+  clearInterval(lockTimer);
   $('panel').hidden = true;
 }
 
-function renderThread() {
+let lockTimer = null;
+
+function timeLeft(iso) {
+  const seconds = Math.max(0, Math.round((new Date(iso) - Date.now()) / 1000));
+  if (seconds < 90) return `${seconds}s`;
+  if (seconds < 90 * 60) return `${Math.round(seconds / 60)}m`;
+  return `${Math.floor(seconds / 3600)}h ${Math.round((seconds % 3600) / 60)}m`;
+}
+
+async function releaseLock(lock, force) {
+  const question = force
+    ? `Force-release ${lock.name}? ${lock.holder} may still be using it. This is posted in #general.`
+    : `Release ${lock.name}?`;
+  if (!confirm(question)) return;
+  try {
+    await api('/locks/release', { method: 'POST', body: { project: lock.project, name: lock.name, force } });
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+async function takeLock() {
+  const project = state.room.project;
+  await ask({
+    title: `Take a lock in ${project}`,
+    label: 'Lock name',
+    hint: 'Like deploy:prod or account:agentic. You hold it for 30 minutes; take it again to extend.',
+    submit: (name) => api('/locks', { method: 'POST', body: { project, name, ttl_seconds: 1800 } }),
+  });
+}
+
+async function showLocks() {
+  const project = state.room.project;
+  if (!project) return closePanel();
+  if (state.panel !== 'locks') {
+    openPanel('locks', `${project} locks`);
+    clearInterval(lockTimer);
+    lockTimer = setInterval(() => {
+      if (state.panel === 'locks') void showLocks();
+    }, 15_000);
+  }
+  const locks = await api(`/locks?project=${encodeURIComponent(project)}`);
+  if (state.panel !== 'locks') return;
+  const rows = locks.map((lock) => {
+    const mine = lock.holder === state.me.name || lock.holderOwner === state.me.name;
+    return el(
+      'div',
+      { class: 'lock' },
+      el(
+        'div',
+        { class: 'lock-main' },
+        el('span', { class: 'lock-name', text: lock.name }),
+        el('span', { class: 'sub', text: `${lock.holder}${lock.holderOwner ? ` · ${lock.holderOwner}'s agent` : ''}` }),
+        lock.note ? el('span', { class: 'sub', text: lock.note }) : null,
+        el('span', { class: 'sub', text: `Fence ${lock.fence} · expires in ${timeLeft(lock.expiresAt)}`, title: lock.expiresAt }),
+      ),
+      el('button', {
+        class: 'ghost small',
+        type: 'button',
+        text: mine ? 'Release' : 'Force release',
+        onclick: () => void releaseLock(lock, !mine),
+      }),
+    );
+  });
+  $('panel-body').replaceChildren(
+    el('div', { class: 'panel-actions' }, el('button', { class: 'ghost small', type: 'button', text: '+ Take a lock', onclick: () => void takeLock() })),
+    rows.length ? el('div', {}, rows) : el('p', { class: 'empty muted', text: 'No locks held. Agents take locks with acquire_lock before touching shared things.' }),
+  );
+}
+
+function renderThread({ keepScroll = false } = {}) {
   const items = state.threadMessages;
   const [root, ...replies] = items;
   const list = el('ol', { class: 'message-list' });
@@ -252,8 +379,9 @@ function renderThread() {
   list.append(el('li', { class: 'thread-divider', text: `${replies.length} ${replies.length === 1 ? 'reply' : 'replies'}` }));
   replies.forEach((m, i) => list.append(renderMessage(m, replies[i - 1], { inThread: true })));
   const body = $('panel-body');
+  const top = body.scrollTop;
   body.replaceChildren(list);
-  body.scrollTop = body.scrollHeight;
+  body.scrollTop = keepScroll ? top : body.scrollHeight;
 }
 
 async function openThread(message) {
@@ -339,7 +467,14 @@ function connect() {
     dot.title = 'Live';
   });
   events.addEventListener('message', (event) => onMessage(JSON.parse(event.data)));
-  events.addEventListener('structure', () => void loadStructure());
+  events.addEventListener('structure', async () => {
+    await loadStructure();
+    await selectRoom();
+  });
+  events.addEventListener('task', (event) => onTask(JSON.parse(event.data)));
+  events.addEventListener('locks', () => {
+    if (state.panel === 'locks') void showLocks();
+  });
   events.addEventListener('presence', () => {
     if (state.panel !== 'members') return;
     clearTimeout(presenceTimer);
@@ -452,7 +587,7 @@ function wireComposer(form, textarea, send) {
       const message = await send(text);
       textarea.value = '';
       autosize(textarea);
-      onMessage(message);
+      if (message) onMessage(message);
     } catch (err) {
       alert(err.message);
     } finally {
@@ -507,6 +642,7 @@ $('logout').addEventListener('click', async () => {
 $('new-project').addEventListener('click', () => void newProject());
 $('add-member').addEventListener('click', () => void addMember());
 $('show-members').addEventListener('click', () => (state.panel === 'members' ? closePanel() : void showMembers()));
+$('show-locks').addEventListener('click', () => (state.panel === 'locks' ? closePanel() : void showLocks()));
 $('close-panel').addEventListener('click', closePanel);
 $('load-older').addEventListener('click', () => void loadOlder());
 $('toggle-sidebar').addEventListener('click', () => $('sidebar').classList.toggle('open'));
@@ -519,7 +655,17 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
-wireComposer($('composer'), $('composer-text'), (text) => api('/messages', { method: 'POST', body: { room: state.room.ref, text } }));
+const TASK_COMMAND = /^\/task\s+@?([a-z0-9][a-z0-9-]{0,31})\s+([\s\S]+)$/;
+
+wireComposer($('composer'), $('composer-text'), async (text) => {
+  if (text.startsWith('/task')) {
+    const match = TASK_COMMAND.exec(text);
+    if (!match) throw new Error('Use /task @agent what you need');
+    await api('/tasks', { method: 'POST', body: { agent: match[1], room: state.room.ref, request: match[2] } });
+    return null;
+  }
+  return api('/messages', { method: 'POST', body: { room: state.room.ref, text } });
+});
 wireComposer($('thread-composer'), $('thread-text'), (text) =>
   api('/messages', { method: 'POST', body: { room: state.thread.room, text, thread_id: state.thread.id } }),
 );

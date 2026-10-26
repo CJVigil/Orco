@@ -54,6 +54,37 @@ const MIGRATIONS = [
 
   INSERT INTO rooms (project_id, name) VALUES (NULL, 'lobby'), (NULL, 'announcements');
   `,
+  `
+  CREATE TABLE tasks (
+    id INTEGER PRIMARY KEY,
+    message_id INTEGER NOT NULL UNIQUE REFERENCES messages(id),
+    room_id INTEGER NOT NULL REFERENCES rooms(id),
+    requester_id INTEGER NOT NULL REFERENCES participants(id),
+    assignee_id INTEGER NOT NULL REFERENCES participants(id),
+    parent_id INTEGER REFERENCES tasks(id),
+    depth INTEGER NOT NULL DEFAULT 0,
+    request TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'requested'
+      CHECK (state IN ('requested', 'accepted', 'done', 'failed', 'declined', 'cancelled')),
+    note TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+  CREATE INDEX tasks_assignee ON tasks (assignee_id, state);
+  CREATE INDEX tasks_requester ON tasks (requester_id, state);
+  CREATE INDEX tasks_room ON tasks (room_id, id);
+
+  CREATE TABLE locks (
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    name TEXT NOT NULL,
+    holder_id INTEGER REFERENCES participants(id),
+    fence INTEGER NOT NULL DEFAULT 0,
+    note TEXT,
+    acquired_at INTEGER,
+    expires_at INTEGER,
+    PRIMARY KEY (project_id, name)
+  );
+  `,
 ];
 
 export function openDatabase(path: string): DatabaseSync {

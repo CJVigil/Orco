@@ -6,6 +6,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import { buildMcpServer } from './mcp.js';
 import { Presence } from './presence.js';
 import { type Message, OrcoError, type Participant, type Store } from './store.js';
+import type { Task, TaskState } from './tasks.js';
 
 declare module 'express-serve-static-core' {
   interface Request {
@@ -14,8 +15,15 @@ declare module 'express-serve-static-core' {
   }
 }
 
-const STATUS: Record<OrcoError['code'], number> = { invalid: 400, not_found: 404, forbidden: 403, conflict: 409 };
+const STATUS: Record<OrcoError['code'], number> = {
+  invalid: 400,
+  not_found: 404,
+  forbidden: 403,
+  conflict: 409,
+  rate_limited: 429,
+};
 const COOKIE = 'orco_token';
+const TASK_STATES = new Set(['accepted', 'declined', 'done', 'failed', 'cancelled']);
 const WEB_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
 const HEARTBEAT_MS = 25_000;
 
@@ -150,6 +158,46 @@ export function createApp(store: Store, presence = new Presence()) {
     res.status(201).json(store.post(req.participant!, String(room ?? ''), String(text ?? ''), optionalInt(thread_id)));
   });
 
+  api.get('/tasks', (req, res) => {
+    const room = typeof req.query.room === 'string' && req.query.room ? req.query.room : undefined;
+    res.json(
+      store.tasks.list(req.participant!, {
+        room,
+        requestedByMe: req.query.mine === '1',
+        open: req.query.open === '1',
+        limit: optionalInt(req.query.limit),
+      }),
+    );
+  });
+  api.post('/tasks', (req, res) => {
+    const { agent, room, request } = req.body ?? {};
+    res.status(201).json(
+      store.tasks.create(req.participant!, { agent: String(agent ?? ''), room: String(room ?? ''), request: String(request ?? '') }),
+    );
+  });
+  api.post('/tasks/:id', (req, res) => {
+    const id = optionalInt(req.params.id);
+    const state = String(req.body?.state ?? '');
+    if (id === undefined || !TASK_STATES.has(state)) throw new OrcoError('invalid', 'Expected a task id and a valid state');
+    res.json(store.tasks.update(req.participant!, id, state as TaskState, req.body?.note));
+  });
+
+  api.get('/locks', (req, res) => {
+    const project = typeof req.query.project === 'string' && req.query.project ? req.query.project : undefined;
+    res.json(store.locks.list(req.participant!, project));
+  });
+  api.post('/locks', (req, res) => {
+    const { project, name, ttl_seconds, note } = req.body ?? {};
+    res.status(201).json(
+      store.locks.acquire(req.participant!, String(project ?? ''), String(name ?? ''), optionalInt(ttl_seconds) ?? 300, note),
+    );
+  });
+  api.post('/locks/release', (req, res) => {
+    const { project, name, force } = req.body ?? {};
+    store.locks.release(req.participant!, String(project ?? ''), String(name ?? ''), force === true);
+    res.status(204).end();
+  });
+
   api.get('/events', (req, res) => {
     const me = req.participant!;
     res.writeHead(200, {
@@ -163,9 +211,17 @@ export function createApp(store: Store, presence = new Presence()) {
       if (store.canSee(me, message.projectId)) send('message', message);
     };
     const onStructure = () => send('structure', {});
+    const onTask = (task: Task) => {
+      if (store.canSee(me, task.projectId)) send('task', task);
+    };
+    const onLock = ({ projectId }: { projectId: number }) => {
+      if (store.canSee(me, projectId)) send('locks', { projectId });
+    };
     const onPresence = () => send('presence', {});
     store.events.on('message', onMessage);
     store.events.on('structure', onStructure);
+    store.events.on('task', onTask);
+    store.events.on('lock', onLock);
     presence.events.on('change', onPresence);
     const release = presence.hold(me.id, 'streams');
     const heartbeat = setInterval(() => res.write(': ping\n\n'), HEARTBEAT_MS);
@@ -174,6 +230,8 @@ export function createApp(store: Store, presence = new Presence()) {
       clearInterval(heartbeat);
       store.events.off('message', onMessage);
       store.events.off('structure', onStructure);
+      store.events.off('task', onTask);
+      store.events.off('lock', onLock);
       presence.events.off('change', onPresence);
       release();
     });

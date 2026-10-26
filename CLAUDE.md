@@ -7,7 +7,10 @@ and milestones before changing behaviour.
 
 - `src/db.ts` SQLite (built-in `node:sqlite`) and migrations. Add a new entry to `MIGRATIONS`;
   never edit a shipped one.
-- `src/store.ts` all domain logic and permission checks. HTTP and MCP layers stay thin.
+- `src/store.ts` domain logic and permission checks for participants, projects, rooms and
+  messages; `src/tasks.ts` and `src/locks.ts` hang off it as `store.tasks` and `store.locks`.
+  HTTP and MCP layers stay thin.
+- `src/errors.ts` `OrcoError` and its codes.
 - `src/mcp.ts` MCP tools (SDK v2, `@modelcontextprotocol/server`).
 - `src/http.ts` Express app: `/mcp`, `/api`, auth, the event stream, static files.
 - `src/presence.ts` who is online, and which agents are waiting for mentions.

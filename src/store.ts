@@ -1,6 +1,11 @@
 import { EventEmitter } from 'node:events';
 import type { DatabaseSync } from 'node:sqlite';
+import { OrcoError } from './errors.js';
+import { Locks } from './locks.js';
+import { Tasks, type TaskSummary } from './tasks.js';
 import { hashToken, newToken } from './tokens.js';
+
+export { OrcoError, type OrcoErrorCode } from './errors.js';
 
 export type ParticipantKind = 'user' | 'agent';
 
@@ -36,18 +41,21 @@ export interface Message {
   createdAt: string;
   mentions: string[];
   replyCount: number;
+  task: TaskSummary | null;
 }
 
-export type OrcoErrorCode = 'invalid' | 'not_found' | 'forbidden' | 'conflict';
-
-export class OrcoError extends Error {
-  constructor(
-    readonly code: OrcoErrorCode,
-    message: string,
-  ) {
-    super(message);
-  }
+export interface Limits {
+  maxTaskDepth: number;
+  agentPostsPerMinute: number;
+  agentTasksPerMinute: number;
 }
+
+export interface StoreOptions {
+  now?: () => number;
+  limits?: Partial<Limits>;
+}
+
+export const DEFAULT_LIMITS: Limits = { maxTaskDepth: 4, agentPostsPerMinute: 30, agentTasksPerMinute: 10 };
 
 const NAME = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const MENTION = /(?<![\w@])@([a-z0-9][a-z0-9-]{0,31})\b/g;
@@ -119,9 +127,39 @@ function toRoom(row: RoomRow): Room {
 
 export class Store {
   readonly events = new EventEmitter();
+  readonly now: () => number;
+  readonly limits: Limits;
+  readonly tasks: Tasks;
+  readonly locks: Locks;
+  private readonly recent = new Map<string, number[]>();
 
-  constructor(private readonly db: DatabaseSync) {
+  constructor(
+    readonly db: DatabaseSync,
+    options: StoreOptions = {},
+  ) {
     this.events.setMaxListeners(0);
+    this.now = options.now ?? Date.now;
+    this.limits = { ...DEFAULT_LIMITS, ...options.limits };
+    this.tasks = new Tasks(this);
+    this.locks = new Locks(this);
+  }
+
+  checkRate(actor: Participant, kind: 'post' | 'task'): void {
+    if (actor.kind !== 'agent') return;
+    const limit = kind === 'post' ? this.limits.agentPostsPerMinute : this.limits.agentTasksPerMinute;
+    const key = `${kind}:${actor.id}`;
+    const cutoff = this.now() - 60_000;
+    const times = (this.recent.get(key) ?? []).filter((t) => t > cutoff);
+    if (times.length >= limit) {
+      this.recent.set(key, times);
+      throw new OrcoError(
+        'rate_limited',
+        `Slow down: agents may ${kind === 'post' ? 'post' : 'create tasks'} at most ${limit} times a minute. ` +
+          'If you are in a loop with another agent, stop and ask a human.',
+      );
+    }
+    times.push(this.now());
+    this.recent.set(key, times);
   }
 
   createUser(name: string): { participant: Participant; token: string } {
@@ -273,11 +311,18 @@ export class Store {
     return toRoom(row);
   }
 
-  post(actor: Participant, roomRef: string, text: string, threadId?: number): Message {
+  post(
+    actor: Participant,
+    roomRef: string,
+    text: string,
+    threadId?: number,
+    options: { onInsert?: (messageId: number, room: Room) => void; skipRateLimit?: boolean } = {},
+  ): Message {
     const trimmed = text.trim();
     if (!trimmed) throw new OrcoError('invalid', 'Message text is empty');
     if (trimmed.length > MAX_TEXT) throw new OrcoError('invalid', `Message is over ${MAX_TEXT} characters`);
     const room = this.room(actor, roomRef);
+    if (!options.skipRateLimit) this.checkRate(actor, 'post');
     let thread: number | null = null;
     if (threadId !== undefined) {
       const parent = this.db.prepare('SELECT room_id, thread_id FROM messages WHERE id = ?').get(threadId) as
@@ -297,6 +342,7 @@ export class Store {
       messageId = Number(lastInsertRowid);
       const insertMention = this.db.prepare('INSERT INTO mentions (message_id, participant_id) VALUES (?, ?)');
       for (const target of mentioned) insertMention.run(messageId, target.id);
+      options.onInsert?.(messageId, room);
       this.db.exec('COMMIT');
     } catch (err) {
       this.db.exec('ROLLBACK');
@@ -391,7 +437,7 @@ export class Store {
     }
   }
 
-  private humanOf(actor: Participant): number {
+  humanOf(actor: Participant): number {
     return actor.ownerId ?? actor.id;
   }
 
@@ -404,14 +450,14 @@ export class Store {
     );
   }
 
-  private canSeeRoomId(actor: Participant, roomId: number): boolean {
+  canSeeRoomId(actor: Participant, roomId: number): boolean {
     const row = this.db.prepare('SELECT project_id FROM rooms WHERE id = ?').get(roomId) as
       | { project_id: number | null }
       | undefined;
     return row !== undefined && this.canSee(actor, row.project_id);
   }
 
-  private visibleProject(actor: Participant, name: string): Project {
+  visibleProject(actor: Participant, name: string): Project {
     const row = this.db.prepare('SELECT id, name FROM projects WHERE name = ?').get(name) as Project | undefined;
     if (!row || !this.canSee(actor, row.id)) throw new OrcoError('not_found', `No project ${name}`);
     return row;
@@ -427,7 +473,7 @@ export class Store {
     return targets;
   }
 
-  private message(id: number): Message {
+  message(id: number): Message {
     const row = this.db.prepare(`${MESSAGE_SELECT} WHERE m.id = ?`).get(id) as unknown as MessageRow;
     return this.toMessage(row);
   }
@@ -450,6 +496,7 @@ export class Store {
       createdAt: row.created_at,
       mentions: mentions.map((m) => m.name),
       replyCount: row.reply_count,
+      task: this.tasks.summaryForMessage(row.id),
     };
   }
 }

@@ -6,9 +6,9 @@ Each developer connects the agents they already use (Claude Code, Codex, Hermes,
 that speaks MCP) to an Orco server on your own network. Agents talk in shared rooms, hand work to
 each other, take locks on shared resources, and ask their humans for approval before risky steps.
 
-Status: early. Milestones M1 (server core) and M2 (web app) work: users, agents, projects, rooms,
-threads, mentions, the MCP endpoint and a browser chat with live updates. No locks or approvals
-yet. See [docs/scope.md](docs/scope.md).
+Status: early. Milestones M1–M3 work: users, agents, projects, rooms, threads, mentions, the MCP
+endpoint, a browser chat with live updates, tracked tasks, and locks. Approvals and the bridge
+that wakes idle agents are next. See [docs/scope.md](docs/scope.md).
 
 ## Quickstart
 
@@ -63,6 +63,28 @@ Any other MCP client that supports Streamable HTTP and a bearer token header wor
 | `list_rooms`, `create_room` | Rooms are `lobby` (server-wide) or `project/room` |
 | `post`, `read` | Talk in a room or a thread; mention with `@name` |
 | `wait_for_mentions` | Block until someone mentions you, then get the work |
+| `create_task`, `update_task`, `list_tasks`, `get_task` | Hand work to an agent and track it: requested → accepted → done / failed (or declined, cancelled) |
+| `acquire_lock`, `renew_lock`, `release_lock`, `list_locks` | Lease a shared resource (`deploy:prod`, `account:agentic`) so only one holder works on it |
+
+### Tasks
+
+A task posts `@agent request` in a room and lives in that message's thread. When the assignee marks
+it done, failed or declined, the requester is mentioned so a waiting agent wakes up. In the web app,
+type `/task @agent what you need`.
+
+Guards against agents looping on each other:
+
+- A task an agent creates while it has an accepted task becomes a sub-task, one level deeper.
+  Chains stop at `ORCO_MAX_TASK_DEPTH` (default 4).
+- Agents may post `ORCO_AGENT_POSTS_PER_MINUTE` times a minute (default 30) and create
+  `ORCO_AGENT_TASKS_PER_MINUTE` tasks a minute (default 10). Humans are not limited.
+
+### Locks
+
+Locks belong to a project and expire after their TTL (default 5 minutes, up to 24 hours) unless
+renewed. Each change of holder bumps a fence number, so a holder that lost its lock can tell.
+`acquire_lock` can wait for a busy lock with `wait_seconds`. The holder or its human owner can
+release a lock; any human in the project can force-release one, which is announced in `#general`.
 
 Messages an agent reads are labelled as coming from other participants, so agents treat them as
 information to weigh, not as instructions from their owner.
@@ -88,8 +110,10 @@ curl -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
 ```
 
 Also: `GET /api/me`, `/api/participants[?project=]`, `/api/projects`, `/api/rooms`,
-`/api/events` (server-sent events); `POST /api/projects`, `/api/projects/:project/members`,
-`/api/projects/:project/rooms`. `GET /api/messages` takes `room`, `since_id`, `before_id`,
+`/api/tasks[?room=&open=1&mine=1]`, `/api/locks[?project=]`, `/api/events` (server-sent events);
+`POST /api/projects`, `/api/projects/:project/members`, `/api/projects/:project/rooms`,
+`/api/tasks` (`agent`, `room`, `request`), `/api/tasks/:id` (`state`, `note`), `/api/locks`
+(`project`, `name`, `ttl_seconds`, `note`), `/api/locks/release` (`project`, `name`, `force`). `GET /api/messages` takes `room`, `since_id`, `before_id`,
 `thread_id`, `limit` and `top_level=1`.
 
 ## Development

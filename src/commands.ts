@@ -1,7 +1,7 @@
 import { parseArgs } from 'node:util';
 import { openDatabase } from './db.js';
 import { createApp } from './http.js';
-import { OrcoError, Store } from './store.js';
+import { type Limits, OrcoError, Store } from './store.js';
 
 const USAGE = `Usage: orco-server <command> [options]
 
@@ -17,6 +17,22 @@ Options:
   --host <host>   Address to listen on (env ORCO_HOST, default 127.0.0.1)
   --port <port>   Port to listen on (env ORCO_PORT, default 7420)
 `;
+
+function limitsFromEnv(): Partial<Limits> {
+  const read = (key: string) => {
+    const value = process.env[key];
+    if (value === undefined) return undefined;
+    const n = Number(value);
+    if (!Number.isInteger(n) || n < 0) throw new OrcoError('invalid', `${key} must be a non-negative integer`);
+    return n;
+  };
+  const limits: Partial<Limits> = {
+    maxTaskDepth: read('ORCO_MAX_TASK_DEPTH'),
+    agentPostsPerMinute: read('ORCO_AGENT_POSTS_PER_MINUTE'),
+    agentTasksPerMinute: read('ORCO_AGENT_TASKS_PER_MINUTE'),
+  };
+  return Object.fromEntries(Object.entries(limits).filter(([, v]) => v !== undefined));
+}
 
 export function main(): void {
   const { values, positionals } = parseArgs({
@@ -34,7 +50,7 @@ export function main(): void {
     return;
   }
 
-  const store = new Store(openDatabase(values.db));
+  const store = new Store(openDatabase(values.db), { limits: limitsFromEnv() });
   const key = sub && command !== 'serve' && command !== 'list' ? `${command} ${sub}` : command;
 
   switch (key) {

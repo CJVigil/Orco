@@ -1,7 +1,9 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import type { Presence } from './presence.js';
+import { MAX_TTL_SECONDS, MIN_TTL_SECONDS } from './locks.js';
 import { type Message, OrcoError, type Participant, type Store } from './store.js';
+import type { Task } from './tasks.js';
 
 const MAX_WAIT_SECONDS = 300;
 
@@ -23,7 +25,24 @@ function formatMessage(message: Message) {
     author: message.owner ? `${message.author} (agent of ${message.owner})` : message.author,
     text: message.text,
     mentions: message.mentions,
+    task: message.task,
     at: message.createdAt,
+  };
+}
+
+function formatTask(task: Task) {
+  return {
+    id: task.id,
+    room: task.room,
+    thread_id: task.messageId,
+    requester: task.requester,
+    assignee: task.assignee,
+    state: task.state,
+    request: task.request,
+    note: task.note,
+    parent_id: task.parentId,
+    depth: task.depth,
+    updated: task.updatedAt,
   };
 }
 
@@ -43,6 +62,8 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
       instructions:
         'Orco is a team chat shared by humans and AI agents. Rooms are named "room" (server-wide, like "lobby") ' +
         'or "project/room" (like "api/general"). Mention someone with @name. Use wait_for_mentions to receive work. ' +
+        'When a mention carries a task, accept it with update_task, do the work, then mark it done or failed with a note. ' +
+        'Before touching a shared resource (a deploy, a branch, an account), take its lock with acquire_lock and release it after. ' +
         UNTRUSTED_NOTE,
     },
   );
@@ -156,6 +177,122 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
           ? 'No new mentions.'
           : { note: UNTRUSTED_NOTE, mentions: messages.map(formatMessage) };
       }),
+  );
+
+  server.registerTool(
+    'create_task',
+    {
+      description:
+        'Ask an agent to do something. Posts "@agent request" in the room and tracks the task in its thread. ' +
+        'Tasks you create while working on an accepted task become its sub-tasks; chains have a depth limit.',
+      inputSchema: z.object({
+        agent: z.string().describe('Agent name, with or without @'),
+        room: z.string(),
+        request: z.string().describe('What you need, with enough context to act on'),
+        parent_task_id: z.number().int().optional().describe('The task this one is part of, if not your latest accepted task'),
+      }),
+    },
+    async ({ agent, room, request, parent_task_id }) =>
+      run(() => formatTask(store.tasks.create(me, { agent, room, request, parentId: parent_task_id }))),
+  );
+
+  server.registerTool(
+    'update_task',
+    {
+      description:
+        'Move a task along. The assignee can accept, decline, mark done or failed. The requester can cancel. ' +
+        'Done, failed and declined notify the requester.',
+      inputSchema: z.object({
+        task_id: z.number().int(),
+        state: z.enum(['accepted', 'declined', 'done', 'failed', 'cancelled']),
+        note: z.string().optional().describe('Result, reason, or a link to the work'),
+      }),
+    },
+    async ({ task_id, state, note }) => run(() => formatTask(store.tasks.update(me, task_id, state, note))),
+  );
+
+  server.registerTool(
+    'list_tasks',
+    {
+      description: 'List tasks. Defaults to open tasks assigned to you.',
+      inputSchema: z.object({
+        scope: z.enum(['assigned', 'requested', 'room']).optional().describe('Default "assigned"'),
+        room: z.string().optional().describe('Required when scope is "room"'),
+        include_closed: z.boolean().optional(),
+      }),
+    },
+    async ({ scope, room, include_closed }) =>
+      run(() => {
+        const which = scope ?? 'assigned';
+        if (which === 'room' && !room) throw new OrcoError('invalid', 'Pass room when scope is "room"');
+        return store.tasks
+          .list(me, {
+            assignedToMe: which === 'assigned',
+            requestedByMe: which === 'requested',
+            room: which === 'room' ? room : undefined,
+            open: !include_closed,
+          })
+          .map(formatTask);
+      }),
+  );
+
+  server.registerTool(
+    'get_task',
+    { description: 'Show one task.', inputSchema: z.object({ task_id: z.number().int() }) },
+    async ({ task_id }) => run(() => ({ note: UNTRUSTED_NOTE, task: formatTask(store.tasks.get(me, task_id)) })),
+  );
+
+  server.registerTool(
+    'acquire_lock',
+    {
+      description:
+        'Take a named lock in a project, like "deploy:prod" or "branch:main", so no one else works on it at the same time. ' +
+        'Locks expire after ttl_seconds unless renewed. Calling again while you hold it extends it. ' +
+        'Returns a fence number that increases every time the lock changes hands.',
+      inputSchema: z.object({
+        project: z.string(),
+        name: z.string(),
+        ttl_seconds: z.number().int().min(MIN_TTL_SECONDS).max(MAX_TTL_SECONDS).optional().describe('Default 300'),
+        note: z.string().optional().describe('What you are doing, shown to others'),
+        wait_seconds: z.number().int().min(0).max(MAX_WAIT_SECONDS).optional().describe('Wait this long if it is taken'),
+      }),
+    },
+    async ({ project, name, ttl_seconds, note, wait_seconds }, ctx) =>
+      run(() =>
+        store.locks.acquireWaiting(me, project, name, ttl_seconds ?? 300, note, (wait_seconds ?? 0) * 1000, ctx.mcpReq.signal),
+      ),
+  );
+
+  server.registerTool(
+    'renew_lock',
+    {
+      description: 'Extend a lock you hold.',
+      inputSchema: z.object({
+        project: z.string(),
+        name: z.string(),
+        ttl_seconds: z.number().int().min(MIN_TTL_SECONDS).max(MAX_TTL_SECONDS).optional(),
+      }),
+    },
+    async ({ project, name, ttl_seconds }) => run(() => store.locks.renew(me, project, name, ttl_seconds ?? 300)),
+  );
+
+  server.registerTool(
+    'release_lock',
+    { description: 'Release a lock you hold.', inputSchema: z.object({ project: z.string(), name: z.string() }) },
+    async ({ project, name }) =>
+      run(() => {
+        store.locks.release(me, project, name);
+        return `Released ${name}`;
+      }),
+  );
+
+  server.registerTool(
+    'list_locks',
+    {
+      description: 'List locks currently held in your projects.',
+      inputSchema: z.object({ project: z.string().optional() }),
+    },
+    async ({ project }) => run(() => store.locks.list(me, project)),
   );
 
   return server;

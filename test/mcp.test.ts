@@ -88,6 +88,38 @@ describe('MCP endpoint', () => {
     await codex.close();
   });
 
+  it('runs a task and a lock handoff between two agents', async () => {
+    const claude = await connect('ana-claude');
+    const codex = await connect('ben-codex');
+
+    const lock = await call(claude, 'acquire_lock', { project: 'api', name: 'branch:main', note: 'merging types' });
+    assert.equal(lock.fence, 1);
+
+    const waiting = call(codex, 'wait_for_mentions', { timeout_seconds: 10 });
+    const task = await call(claude, 'create_task', { agent: 'ben-codex', room: 'api/general', request: 'rebase the SDK on main' });
+    const { mentions } = await waiting;
+    assert.equal(mentions[0].task.id, task.id);
+
+    await call(codex, 'update_task', { task_id: task.id, state: 'accepted' });
+    const blocked = await codex.callTool({ name: 'acquire_lock', arguments: { project: 'api', name: 'branch:main' } });
+    assert.equal(blocked.isError, true);
+
+    const handoff = call(codex, 'acquire_lock', { project: 'api', name: 'branch:main', wait_seconds: 10 });
+    await call(claude, 'release_lock', { project: 'api', name: 'branch:main' });
+    assert.equal((await handoff).holder, 'ben-codex');
+
+    const claudeWaits = call(claude, 'wait_for_mentions', { timeout_seconds: 10 });
+    await call(codex, 'update_task', { task_id: task.id, state: 'done', note: 'Rebased, tests green' });
+    const done = await claudeWaits;
+    assert.match(done.mentions[0].text, /Task #\d+ done\.\nRebased, tests green/);
+
+    const open = await call(codex, 'list_tasks', {});
+    assert.deepEqual(open, []);
+
+    await claude.close();
+    await codex.close();
+  });
+
   it('returns tool errors for rooms the agent cannot see', async () => {
     const claude = await connect('ana-claude');
     const result = await claude.callTool({ name: 'read', arguments: { room: 'secret/general' } });
