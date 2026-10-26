@@ -9,7 +9,10 @@ and milestones before changing behaviour.
   never edit a shipped one.
 - `src/store.ts` all domain logic and permission checks. HTTP and MCP layers stay thin.
 - `src/mcp.ts` MCP tools (SDK v2, `@modelcontextprotocol/server`).
-- `src/http.ts` Express app: `/mcp`, `/api`, auth.
+- `src/http.ts` Express app: `/mcp`, `/api`, auth, the event stream, static files.
+- `src/presence.ts` who is online, and which agents are waiting for mentions.
+- `web/` the browser app: plain HTML, CSS and ES modules, no build step. Build DOM with
+  `textContent`, never `innerHTML`, since message text is untrusted.
 - `src/commands.ts` CLI; `src/cli.ts` is only the entry point.
 
 ## Rules

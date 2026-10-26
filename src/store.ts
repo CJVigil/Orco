@@ -27,6 +27,7 @@ export interface Project {
 export interface Message {
   id: number;
   room: string;
+  projectId: number | null;
   threadId: number | null;
   author: string;
   authorKind: ParticipantKind;
@@ -34,6 +35,7 @@ export interface Message {
   text: string;
   createdAt: string;
   mentions: string[];
+  replyCount: number;
 }
 
 export type OrcoErrorCode = 'invalid' | 'not_found' | 'forbidden' | 'conflict';
@@ -78,6 +80,7 @@ interface RoomRow {
 interface MessageRow {
   id: number;
   room_id: number;
+  project_id: number | null;
   project: string | null;
   room: string;
   thread_id: number | null;
@@ -86,11 +89,13 @@ interface MessageRow {
   owner: string | null;
   text: string;
   created_at: string;
+  reply_count: number;
 }
 
 const MESSAGE_SELECT = `
-  SELECT m.id, m.room_id, p.name AS project, r.name AS room, m.thread_id, a.name AS author,
-         a.kind AS author_kind, o.name AS owner, m.text, m.created_at
+  SELECT m.id, m.room_id, r.project_id, p.name AS project, r.name AS room, m.thread_id, a.name AS author,
+         a.kind AS author_kind, o.name AS owner, m.text, m.created_at,
+         (SELECT count(*) FROM messages t WHERE t.thread_id = m.id) AS reply_count
   FROM messages m
   JOIN rooms r ON r.id = m.room_id
   LEFT JOIN projects p ON p.id = r.project_id
@@ -169,6 +174,13 @@ export class Store {
     return rows.map((row) => ({ ...toParticipant(row), owner: row.owner }));
   }
 
+  members(actor: Participant, projectName?: string): (Participant & { owner: string | null })[] {
+    const everyone = this.listParticipants();
+    if (projectName === undefined) return everyone;
+    const project = this.visibleProject(actor, projectName);
+    return everyone.filter((p) => this.canSee(p, project.id));
+  }
+
   createProject(actor: Participant, name: string): Project {
     checkName('Project', name);
     const userId = this.humanOf(actor);
@@ -183,6 +195,7 @@ export class Store {
         .prepare("INSERT INTO rooms (project_id, name, created_by) VALUES (?, 'general', ?)")
         .run(projectId, actor.id);
       this.db.exec('COMMIT');
+      this.events.emit('structure');
       return { id: projectId, name };
     } catch (err) {
       this.db.exec('ROLLBACK');
@@ -212,6 +225,7 @@ export class Store {
     this.db
       .prepare('INSERT OR IGNORE INTO project_members (project_id, user_id) VALUES (?, ?)')
       .run(project.id, user.id);
+    this.events.emit('structure');
   }
 
   createRoom(actor: Participant, projectName: string, name: string): Room {
@@ -223,6 +237,7 @@ export class Store {
       if (isUniqueViolation(err)) throw new OrcoError('conflict', `Room ${projectName}/${name} already exists`);
       throw err;
     }
+    this.events.emit('structure');
     return this.room(actor, `${projectName}/${name}`);
   }
 
@@ -294,15 +309,23 @@ export class Store {
     return message;
   }
 
-  read(actor: Participant, roomRef: string, options: { sinceId?: number; threadId?: number; limit?: number } = {}): Message[] {
+  read(
+    actor: Participant,
+    roomRef: string,
+    options: { sinceId?: number; beforeId?: number; threadId?: number; limit?: number; topLevel?: boolean } = {},
+  ): Message[] {
     const room = this.room(actor, roomRef);
     const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
     const since = options.sinceId ?? 0;
+    const before = options.beforeId ?? Number.MAX_SAFE_INTEGER;
     const rows = (
       options.threadId === undefined
         ? this.db
-            .prepare(`${MESSAGE_SELECT} WHERE m.room_id = ? AND m.id > ? ORDER BY m.id DESC LIMIT ?`)
-            .all(room.id, since, limit)
+            .prepare(
+              `${MESSAGE_SELECT} WHERE m.room_id = ? AND m.id > ? AND m.id < ? ${options.topLevel ? 'AND m.thread_id IS NULL' : ''}
+               ORDER BY m.id DESC LIMIT ?`,
+            )
+            .all(room.id, since, before, limit)
         : this.db
             .prepare(
               `${MESSAGE_SELECT} WHERE m.room_id = ? AND m.id > ? AND (m.id = ? OR m.thread_id = ?) ORDER BY m.id DESC LIMIT ?`,
@@ -372,7 +395,7 @@ export class Store {
     return actor.ownerId ?? actor.id;
   }
 
-  private canSee(actor: Participant, projectId: number | null): boolean {
+  canSee(actor: Participant, projectId: number | null): boolean {
     if (projectId === null) return true;
     return (
       this.db
@@ -418,6 +441,7 @@ export class Store {
     return {
       id: row.id,
       room: row.project ? `${row.project}/${row.room}` : row.room,
+      projectId: row.project_id,
       threadId: row.thread_id,
       author: row.author,
       authorKind: row.author_kind,
@@ -425,6 +449,7 @@ export class Store {
       text: row.text,
       createdAt: row.created_at,
       mentions: mentions.map((m) => m.name),
+      replyCount: row.reply_count,
     };
   }
 }

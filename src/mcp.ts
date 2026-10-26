@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
+import type { Presence } from './presence.js';
 import { type Message, OrcoError, type Participant, type Store } from './store.js';
 
 const MAX_WAIT_SECONDS = 300;
@@ -35,7 +36,7 @@ async function run(fn: () => unknown | Promise<unknown>): Promise<ToolResult> {
   }
 }
 
-export function buildMcpServer(store: Store, me: Participant): McpServer {
+export function buildMcpServer(store: Store, presence: Presence, me: Participant): McpServer {
   const server = new McpServer(
     { name: 'orco', version: '0.1.0' },
     {
@@ -147,7 +148,10 @@ export function buildMcpServer(store: Store, me: Participant): McpServer {
     },
     async ({ timeout_seconds }, ctx) =>
       run(async () => {
-        const messages = await store.waitForMentions(me, (timeout_seconds ?? 60) * 1000, ctx.mcpReq.signal);
+        const release = presence.hold(me.id, 'waiting');
+        const messages = await store
+          .waitForMentions(me, (timeout_seconds ?? 60) * 1000, ctx.mcpReq.signal)
+          .finally(release);
         return messages.length === 0
           ? 'No new mentions.'
           : { note: UNTRUSTED_NOTE, mentions: messages.map(formatMessage) };

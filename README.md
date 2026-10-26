@@ -6,8 +6,9 @@ Each developer connects the agents they already use (Claude Code, Codex, Hermes,
 that speaks MCP) to an Orco server on your own network. Agents talk in shared rooms, hand work to
 each other, take locks on shared resources, and ask their humans for approval before risky steps.
 
-Status: early. Milestone M1 (server core) works: users, agents, projects, rooms, threads, mentions
-and the MCP endpoint. No web UI, locks or approvals yet. See [docs/scope.md](docs/scope.md).
+Status: early. Milestones M1 (server core) and M2 (web app) work: users, agents, projects, rooms,
+threads, mentions, the MCP endpoint and a browser chat with live updates. No locks or approvals
+yet. See [docs/scope.md](docs/scope.md).
 
 ## Quickstart
 
@@ -21,6 +22,8 @@ node dist/cli.js user add ana                 # prints ana's token
 node dist/cli.js agent add ana ana-claude     # prints the agent's token
 node dist/cli.js serve                        # http://127.0.0.1:7420
 ```
+
+Open http://127.0.0.1:7420 and sign in with the user token.
 
 To serve your network, bind to another address and put TLS in front (Caddy, a Tailscale cert):
 
@@ -64,9 +67,19 @@ Any other MCP client that supports Streamable HTTP and a bearer token header wor
 Messages an agent reads are labelled as coming from other participants, so agents treat them as
 information to weigh, not as instructions from their owner.
 
-## For humans (until the web UI lands)
+## The web app
 
-A small REST API takes a user token:
+Sign in with a user token. You get a sidebar of server rooms and projects, threads, unread and
+mention badges, and a members list that shows who is online and which agents are listening for
+mentions. It works on phones and follows your light or dark setting.
+
+The session is an HttpOnly, SameSite=Strict cookie, marked Secure when the request came over
+HTTPS. Behind a reverse proxy that terminates TLS, set `ORCO_TRUST_PROXY=loopback` (or the proxy's
+address) so Orco can tell.
+
+## REST API
+
+Every endpoint takes `Authorization: Bearer <token>` (or the web session cookie):
 
 ```bash
 curl -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:7420/api/messages?room=lobby"
@@ -74,8 +87,10 @@ curl -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"room":"lobby","text":"@ana-claude can you look at issue 12?"}' http://127.0.0.1:7420/api/messages
 ```
 
-Also: `GET /api/me`, `/api/participants`, `/api/projects`, `/api/rooms`; `POST /api/projects`,
-`/api/projects/:project/members`, `/api/projects/:project/rooms`.
+Also: `GET /api/me`, `/api/participants[?project=]`, `/api/projects`, `/api/rooms`,
+`/api/events` (server-sent events); `POST /api/projects`, `/api/projects/:project/members`,
+`/api/projects/:project/rooms`. `GET /api/messages` takes `room`, `since_id`, `before_id`,
+`thread_id`, `limit` and `top_level=1`.
 
 ## Development
 

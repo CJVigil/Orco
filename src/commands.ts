@@ -40,6 +40,7 @@ export function main(): void {
   switch (key) {
     case 'serve': {
       const { app } = createApp(store);
+      if (process.env.ORCO_TRUST_PROXY) app.set('trust proxy', process.env.ORCO_TRUST_PROXY);
       const port = Number(values.port);
       app.listen(port, values.host, () => {
         console.log(`Orco listening on http://${values.host}:${port}`);
