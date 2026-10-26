@@ -3,7 +3,7 @@ import { Bridge } from './bridge/bridge.js';
 import { loadBridgeConfig } from './bridge/config.js';
 import { openDatabase } from './db.js';
 import { createApp } from './http.js';
-import { type Limits, OrcoError, Store } from './store.js';
+import { type Limits, OrcoError, Store, type TaskPolicy } from './store.js';
 
 const USAGE = `Usage: orco <command> [options]
 
@@ -12,6 +12,9 @@ Server commands (run where the database lives):
   user add <name>            Create a user and print their token
   agent add <owner> <name>   Create an agent owned by a user and print its token
   token rotate <name>        Replace a user's or agent's token and print the new one
+  agent policy <agent> <p>   Who may give the agent tasks: open, ask (default) or owner_only
+  agent trust <agent> <user> Let a user's tasks reach the agent without asking (untrust to undo)
+  audit export [--since N]   Print the audit log as JSON lines
   list                       List users and agents
 
 Bridge commands (run on each developer's machine):
@@ -89,6 +92,7 @@ export function main(): void {
       host: { type: 'string', default: process.env.ORCO_HOST ?? '127.0.0.1' },
       port: { type: 'string', default: process.env.ORCO_PORT ?? '7420' },
       config: { type: 'string', default: process.env.ORCO_BRIDGE_CONFIG ?? './orco-bridge.json' },
+      since: { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -127,22 +131,41 @@ export function main(): void {
     }
     case 'user add': {
       const [name] = args;
-      if (!name) throw new OrcoError('invalid', 'Usage: orco-server user add <name>');
+      if (!name) throw new OrcoError('invalid', 'Usage: orco user add <name>');
       const { token } = store.createUser(name);
       console.log(`Created user ${name}. Token (shown once):\n${token}`);
       return;
     }
     case 'agent add': {
       const [owner, name] = args;
-      if (!owner || !name) throw new OrcoError('invalid', 'Usage: orco-server agent add <owner> <name>');
+      if (!owner || !name) throw new OrcoError('invalid', 'Usage: orco agent add <owner> <name>');
       const { token } = store.createAgent(owner, name);
       console.log(`Created agent ${name} owned by ${owner}. Token (shown once):\n${token}`);
       return;
     }
     case 'token rotate': {
       const [name] = args;
-      if (!name) throw new OrcoError('invalid', 'Usage: orco-server token rotate <name>');
+      if (!name) throw new OrcoError('invalid', 'Usage: orco token rotate <name>');
       console.log(`New token for ${name} (shown once):\n${store.rotateToken(name)}`);
+      return;
+    }
+    case 'agent policy': {
+      const [name, policy] = args;
+      if (!name || !policy) throw new OrcoError('invalid', 'Usage: orco agent policy <agent> <open|ask|owner_only>');
+      const settings = store.setTaskPolicy(null, name, policy as TaskPolicy);
+      console.log(`${settings.name} now has task policy ${settings.taskPolicy}`);
+      return;
+    }
+    case 'agent trust':
+    case 'agent untrust': {
+      const [name, user] = args;
+      if (!name || !user) throw new OrcoError('invalid', `Usage: orco ${key} <agent> <user>`);
+      const settings = store.setTrust(null, name, user, sub === 'trust');
+      console.log(`${settings.name} trusts: ${settings.trusted.join(', ') || 'nobody beyond its owner'}`);
+      return;
+    }
+    case 'audit export': {
+      for (const entry of store.audit.all(Number(values.since ?? 0))) process.stdout.write(`${JSON.stringify(entry)}\n`);
       return;
     }
     case 'list': {

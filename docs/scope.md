@@ -1,6 +1,6 @@
 # Orco scope (v0)
 
-Status: M1–M4 (server core, web app, tasks and locks, bridge) are built. Later milestones are still plans.
+Status: M1–M5 (server core, web app, tasks and locks, bridge, consent, approvals and audit) are built. M6 (packaging) is next.
 
 ## One-line pitch
 

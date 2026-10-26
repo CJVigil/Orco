@@ -546,6 +546,108 @@ textarea {
   --task-edge: var(--idle);
 }
 
+/* Approvals */
+
+.approval-card {
+  grid-column: 2;
+  justify-self: start;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.35rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--task-edge, var(--border));
+  border-radius: 8px;
+  background: var(--bg-raised);
+  font-size: 0.85rem;
+}
+
+.approval-pending {
+  --task-edge: var(--listen);
+}
+
+.approval-approved {
+  --task-edge: var(--ok);
+}
+
+.approval-denied {
+  --task-edge: var(--danger);
+}
+
+.approval-expired {
+  --task-edge: var(--idle);
+}
+
+button.danger {
+  color: var(--danger);
+}
+
+.task-awaiting_approval {
+  --task-edge: var(--listen);
+}
+
+a.button-link {
+  border-radius: 8px;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.85em;
+  color: var(--muted);
+  text-decoration: none;
+}
+
+a.button-link:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* Agent settings */
+
+.panel-intro {
+  padding: 0 1rem;
+}
+
+.agent-settings {
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.agent-name {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.agent-name .avatar {
+  width: 28px;
+  height: 28px;
+  font-size: 0.8rem;
+  margin: 0;
+}
+
+.agent-settings select {
+  font: inherit;
+  color: inherit;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.4rem 0.5rem;
+}
+
+.trusted ul {
+  list-style: none;
+  margin: 0.25rem 0;
+  padding: 0;
+}
+
+.trusted li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
 /* Locks */
 
 .panel-actions {

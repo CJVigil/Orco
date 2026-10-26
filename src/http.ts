@@ -7,6 +7,7 @@ import { buildMcpServer } from './mcp.js';
 import { Presence } from './presence.js';
 import { type Message, OrcoError, type Participant, type Store } from './store.js';
 import type { Task, TaskState } from './tasks.js';
+import type { Approval } from './approvals.js';
 
 declare module 'express-serve-static-core' {
   interface Request {
@@ -204,6 +205,66 @@ export function createApp(store: Store, presence = new Presence()) {
     res.status(204).end();
   });
 
+  api.get('/approvals', (req, res) => {
+    const room = typeof req.query.room === 'string' && req.query.room ? req.query.room : undefined;
+    res.json(
+      store.approvals.list(req.participant!, {
+        room,
+        pending: req.query.pending === '1',
+        forMe: req.query.mine === '1',
+        limit: optionalInt(req.query.limit),
+      }),
+    );
+  });
+  api.post('/approvals', (req, res) => {
+    const { room, summary, details, ttl_seconds, approver } = req.body ?? {};
+    res.status(201).json(
+      store.approvals.request(req.participant!, {
+        room: String(room ?? ''),
+        summary: String(summary ?? ''),
+        details: typeof details === 'string' ? details : undefined,
+        approver: approver === 'owner' || approver === 'members' ? approver : undefined,
+        ttlSeconds: optionalInt(ttl_seconds),
+      }),
+    );
+  });
+  api.post('/approvals/:id', (req, res) => {
+    const id = optionalInt(req.params.id);
+    const decision = req.body?.decision;
+    if (id === undefined || (decision !== 'approved' && decision !== 'denied')) {
+      throw new OrcoError('invalid', 'Expected an approval id and decision "approved" or "denied"');
+    }
+    const note = typeof req.body?.note === 'string' ? req.body.note : undefined;
+    res.json(store.approvals.decide(req.participant!, id, decision, note, { alwaysAllow: req.body?.always_allow === true }));
+  });
+
+  api.get('/agents', (req, res) => {
+    res.json(store.myAgents(req.participant!));
+  });
+  api.post('/agents/:name/policy', (req, res) => {
+    res.json(store.setTaskPolicy(req.participant!, String(req.params.name), req.body?.policy));
+  });
+  api.post('/agents/:name/trust', (req, res) => {
+    res.json(store.setTrust(req.participant!, String(req.params.name), String(req.body?.user ?? ''), req.body?.trusted !== false));
+  });
+
+  api.get('/audit', (req, res) => {
+    const project = typeof req.query.project === 'string' && req.query.project ? req.query.project : undefined;
+    const entries = store.audit.list(req.participant!, {
+      project,
+      sinceId: optionalInt(req.query.since_id),
+      limit: optionalInt(req.query.limit),
+    });
+    if (req.query.format === 'jsonl') {
+      const name = `orco-audit-${project ?? 'all'}-${new Date(store.now()).toISOString().slice(0, 10)}.jsonl`;
+      res.set('Content-Type', 'application/x-ndjson; charset=utf-8');
+      res.set('Content-Disposition', `attachment; filename="${name}"`);
+      res.send(entries.map((entry) => JSON.stringify(entry)).join('\n') + (entries.length ? '\n' : ''));
+      return;
+    }
+    res.json(entries);
+  });
+
   api.get('/events', (req, res) => {
     const me = req.participant!;
     res.writeHead(200, {
@@ -220,6 +281,9 @@ export function createApp(store: Store, presence = new Presence()) {
     const onTask = (task: Task) => {
       if (store.canSee(me, task.projectId)) send('task', task);
     };
+    const onApproval = (approval: Approval) => {
+      if (store.canSee(me, approval.projectId)) send('approval', approval);
+    };
     const onLock = ({ projectId }: { projectId: number }) => {
       if (store.canSee(me, projectId)) send('locks', { projectId });
     };
@@ -228,6 +292,7 @@ export function createApp(store: Store, presence = new Presence()) {
     store.events.on('structure', onStructure);
     store.events.on('task', onTask);
     store.events.on('lock', onLock);
+    store.events.on('approval', onApproval);
     presence.events.on('change', onPresence);
     const release = presence.hold(me.id, req.query.bridge === '1' && me.kind === 'agent' ? 'bridges' : 'streams');
     const heartbeat = setInterval(() => res.write(': ping\n\n'), HEARTBEAT_MS);
@@ -238,6 +303,7 @@ export function createApp(store: Store, presence = new Presence()) {
       store.events.off('structure', onStructure);
       store.events.off('task', onTask);
       store.events.off('lock', onLock);
+      store.events.off('approval', onApproval);
       presence.events.off('change', onPresence);
       release();
     });

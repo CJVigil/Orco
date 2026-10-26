@@ -20,6 +20,8 @@ function setup(limits = {}) {
   caraBot = store.createAgent('cara', 'cara-bot').participant;
   store.createProject(ana, 'api');
   store.addMember(ana, 'api', 'ben');
+  store.setTaskPolicy(ben, 'ben-codex', 'open');
+  store.setTaskPolicy(ana, 'ana-claude', 'open');
 }
 
 function code(fn: () => unknown): string | undefined {

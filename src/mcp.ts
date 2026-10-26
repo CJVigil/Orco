@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import type { Presence } from './presence.js';
+import { MAX_APPROVAL_TTL_SECONDS } from './approvals.js';
 import { MAX_TTL_SECONDS, MIN_TTL_SECONDS } from './locks.js';
 import { type Message, OrcoError, type Participant, type Store } from './store.js';
 import type { Task } from './tasks.js';
@@ -26,6 +27,7 @@ function formatMessage(message: Message) {
     text: message.text,
     mentions: message.mentions,
     task: message.task,
+    approval: message.approval,
     at: message.createdAt,
   };
 }
@@ -64,6 +66,7 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         'or "project/room" (like "api/general"). Mention someone with @name. Use wait_for_mentions to receive work. ' +
         'When a mention carries a task, accept it with update_task, do the work, then mark it done or failed with a note. ' +
         'Before touching a shared resource (a deploy, a branch, an account), take its lock with acquire_lock and release it after. ' +
+        'Before a risky or irreversible step, ask your owner with request_approval and wait for the answer. ' +
         UNTRUSTED_NOTE,
     },
   );
@@ -240,6 +243,42 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
     'get_task',
     { description: 'Show one task.', inputSchema: z.object({ task_id: z.number().int() }) },
     async ({ task_id }) => run(() => ({ note: UNTRUSTED_NOTE, task: formatTask(store.tasks.get(me, task_id)) })),
+  );
+
+  server.registerTool(
+    'request_approval',
+    {
+      description:
+        'Ask a human before a risky or irreversible step (a deploy, a merge, spending money, deleting data). ' +
+        'Posts the request in the room with Approve and Deny buttons for your owner. ' +
+        'Set wait_seconds to wait for the decision; otherwise check later with get_approval. Do not proceed unless the state is "approved".',
+      inputSchema: z.object({
+        room: z.string(),
+        summary: z.string().describe('One line: what you want to do'),
+        details: z.string().optional().describe('Why, what could go wrong, how to undo it'),
+        approver: z.enum(['owner', 'members']).optional().describe('Default "owner"; "members" lets any other person in the project decide'),
+        ttl_seconds: z.number().int().min(60).max(MAX_APPROVAL_TTL_SECONDS).optional().describe('How long the request stays open; default 3600'),
+        wait_seconds: z.number().int().min(0).max(MAX_WAIT_SECONDS).optional(),
+      }),
+    },
+    async ({ room, summary, details, approver, ttl_seconds, wait_seconds }, ctx) =>
+      run(async () => {
+        const approval = store.approvals.request(me, { room, summary, details, approver, ttlSeconds: ttl_seconds });
+        return store.approvals.wait(me, approval.id, (wait_seconds ?? 0) * 1000, ctx.mcpReq.signal);
+      }),
+  );
+
+  server.registerTool(
+    'get_approval',
+    {
+      description: 'Check an approval request, optionally waiting for a decision. Only "approved" means go ahead.',
+      inputSchema: z.object({
+        approval_id: z.number().int(),
+        wait_seconds: z.number().int().min(0).max(MAX_WAIT_SECONDS).optional(),
+      }),
+    },
+    async ({ approval_id, wait_seconds }, ctx) =>
+      run(() => store.approvals.wait(me, approval_id, (wait_seconds ?? 0) * 1000, ctx.mcpReq.signal)),
   );
 
   server.registerTool(

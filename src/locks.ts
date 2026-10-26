@@ -101,7 +101,13 @@ export class Locks {
         )
         .run(projectId, name, actor.id, trimmedNote, now, now + ttlSeconds * 1000);
     }
-    return this.changed(projectId, name);
+    const lock = this.changed(projectId, name);
+    this.store.audit.record(actor, 'lock.acquire', {
+      projectId,
+      subject: `lock:${name}`,
+      detail: { fence: lock.fence, expiresAt: lock.expiresAt, note: lock.note },
+    });
+    return lock;
   }
 
   async acquireWaiting(
@@ -136,7 +142,9 @@ export class Locks {
     this.store.db
       .prepare('UPDATE locks SET expires_at = ? WHERE project_id = ? AND name = ?')
       .run(this.store.now() + ttlSeconds * 1000, projectId, name);
-    return this.changed(projectId, name);
+    const lock = this.changed(projectId, name);
+    this.store.audit.record(actor, 'lock.renew', { projectId, subject: `lock:${name}`, detail: { expiresAt: lock.expiresAt } });
+    return lock;
   }
 
   release(actor: Participant, project: string, name: string, force = false): void {
@@ -153,6 +161,11 @@ export class Locks {
     this.store.db
       .prepare('UPDATE locks SET holder_id = NULL, note = NULL, expires_at = NULL WHERE project_id = ? AND name = ?')
       .run(projectId, name);
+    this.store.audit.record(actor, ownHold ? 'lock.release' : 'lock.force_release', {
+      projectId,
+      subject: `lock:${name}`,
+      detail: { holder: current.holder, fence: current.fence },
+    });
     if (!ownHold) {
       this.store.post(actor, `${project}/general`, `Force-released lock ${name}, which was held by @${current.holder}.`, undefined, {
         skipRateLimit: true,

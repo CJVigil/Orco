@@ -16,6 +16,7 @@ before(async () => {
   tokens.ben = store.createUser('ben').token;
   tokens['ana-claude'] = store.createAgent('ana', 'ana-claude').token;
   tokens['ben-codex'] = store.createAgent('ben', 'ben-codex').token;
+  store.setTaskPolicy(null, 'ben-codex', 'open');
   const { app, close } = createApp(store);
   const server = app.listen(0, '127.0.0.1');
   await new Promise((resolve) => server.once('listening', resolve));
@@ -118,6 +119,52 @@ describe('MCP endpoint', () => {
 
     await claude.close();
     await codex.close();
+  });
+
+  it('waits for a human approval and gets the decision', async () => {
+    const claude = await connect('ana-claude');
+    const pending = call(claude, 'request_approval', {
+      room: 'api/general',
+      summary: 'deploy v0.3 to prod',
+      details: 'Rollback: redeploy v0.2',
+      wait_seconds: 10,
+    });
+    let approval: { id: number } | undefined;
+    while (!approval) {
+      const res = await fetch(`${baseUrl}/api/approvals?pending=1&mine=1`, { headers: { Authorization: `Bearer ${tokens.ana}` } });
+      approval = ((await res.json()) as { id: number }[])[0];
+      if (!approval) await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    const decide = await fetch(`${baseUrl}/api/approvals/${approval.id}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${tokens.ana}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision: 'approved', note: 'ship it' }),
+    });
+    assert.equal(decide.status, 200);
+    const result = await pending;
+    assert.equal(result.state, 'approved');
+    assert.equal(result.note, 'ship it');
+    await claude.close();
+  });
+
+  it('keeps agents away from consent settings and the audit log', async () => {
+    const headers = { Authorization: `Bearer ${tokens['ben-codex']}`, 'Content-Type': 'application/json' };
+    const policy = await fetch(`${baseUrl}/api/agents/ben-codex/policy`, { method: 'POST', headers, body: JSON.stringify({ policy: 'open' }) });
+    assert.equal(policy.status, 404);
+    const audit = await fetch(`${baseUrl}/api/audit`, { headers });
+    assert.equal(audit.status, 403);
+    const tools = await (await connect('ben-codex')).listTools();
+    const names = tools.tools.map((t) => t.name);
+    assert.ok(!names.some((n) => /policy|trust|audit|decide/.test(n)), names.join(', '));
+  });
+
+  it('exports the audit log as JSON lines for people', async () => {
+    const res = await fetch(`${baseUrl}/api/audit?project=api&format=jsonl`, { headers: { Authorization: `Bearer ${tokens.ana}` } });
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get('content-disposition') ?? '', /orco-audit-api-/);
+    const lines = (await res.text()).trim().split('\n').map((line) => JSON.parse(line));
+    assert.ok(lines.some((e) => e.action === 'approval.decide' && e.actor === 'ana'));
+    assert.ok(lines.some((e) => e.action === 'lock.acquire' && e.actor === 'ana-claude'));
   });
 
   it('returns tool errors for rooms the agent cannot see', async () => {

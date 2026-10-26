@@ -110,6 +110,7 @@ function renderMessage(message, previous, { inThread = false } = {}) {
     ),
     el('div', { class: 'msg-body' }, richText(message.text)),
     message.task ? taskCard(message) : null,
+    message.approval ? approvalCard(message) : null,
   );
   if (!inThread) {
     node.append(
@@ -130,6 +131,7 @@ function renderMessage(message, previous, { inThread = false } = {}) {
 }
 
 const TASK_LABEL = {
+  awaiting_approval: 'Waiting for owner',
   requested: 'Requested',
   accepted: 'In progress',
   done: 'Done',
@@ -140,7 +142,7 @@ const TASK_LABEL = {
 
 function taskCard(message) {
   const { id, state: taskState, assignee } = message.task;
-  const open = taskState === 'requested' || taskState === 'accepted';
+  const open = taskState === 'awaiting_approval' || taskState === 'requested' || taskState === 'accepted';
   const mine = message.author === state.me.name || message.owner === state.me.name;
   return el(
     'div',
@@ -163,6 +165,153 @@ function taskCard(message) {
           },
         })
       : null,
+  );
+}
+
+const APPROVAL_LABEL = { pending: 'Waiting for a decision', approved: 'Approved', denied: 'Denied', expired: 'Expired' };
+
+function canDecide(message) {
+  const { approver } = message.approval;
+  if (state.me.kind !== 'user') return false;
+  if (approver) return approver === state.me.name;
+  return message.author !== state.me.name && message.owner !== state.me.name;
+}
+
+async function decide(message, decision, alwaysAllow = false) {
+  let note;
+  if (decision === 'denied') {
+    note = prompt('Reason (optional, shared with the requester)');
+    if (note === null) return;
+  }
+  try {
+    await api(`/approvals/${message.approval.id}`, { method: 'POST', body: { decision, note: note || undefined, always_allow: alwaysAllow } });
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+function approvalCard(message) {
+  const { id, kind, state: approvalState, approver } = message.approval;
+  const pending = approvalState === 'pending';
+  const requesterHuman = message.owner || message.author;
+  const buttons = pending && canDecide(message)
+    ? [
+        el('button', { class: 'primary small', type: 'button', text: 'Approve', onclick: () => void decide(message, 'approved') }),
+        kind === 'task'
+          ? el('button', {
+              class: 'ghost small',
+              type: 'button',
+              text: `Approve & always allow ${requesterHuman}`,
+              title: `Tasks from ${requesterHuman} and their agents will reach this agent without asking`,
+              onclick: () => void decide(message, 'approved', true),
+            })
+          : null,
+        el('button', { class: 'ghost small danger', type: 'button', text: 'Deny', onclick: () => void decide(message, 'denied') }),
+      ]
+    : [];
+  return el(
+    'div',
+    { class: `approval-card approval-${approvalState}` },
+    el('span', { class: 'task-id', text: kind === 'task' ? 'Owner approval' : `Approval #${id}` }),
+    el('span', { class: 'chip', text: APPROVAL_LABEL[approvalState] }),
+    pending && approver && !canDecide(message) ? el('span', { class: 'muted', text: `for ${approver}` }) : null,
+    buttons,
+  );
+}
+
+function onApproval(approval) {
+  let touched = false;
+  for (const list of [state.messages, state.threadMessages]) {
+    for (const message of list) {
+      if (message.approval && message.approval.id === approval.id) {
+        message.approval = { id: approval.id, kind: approval.kind, state: approval.state, approver: approval.approver };
+        touched = true;
+      }
+    }
+  }
+  if (!touched) return;
+  renderMessages({ keepScroll: true });
+  if (state.panel === 'thread') renderThread({ keepScroll: true });
+}
+
+const POLICY_TEXT = {
+  ask: 'Ask me first',
+  open: 'Anyone in a shared project',
+  owner_only: 'Only me and my agents',
+};
+
+async function showMyAgents() {
+  openPanel('agents', 'My agents');
+  const agents = await api('/agents');
+  if (state.panel !== 'agents') return;
+  if (agents.length === 0) {
+    $('panel-body').replaceChildren(el('p', { class: 'empty muted', text: 'You have no agents yet. A server admin adds one with orco agent add <you> <name>.' }));
+    return;
+  }
+  $('panel-body').replaceChildren(
+    el('p', { class: 'panel-intro muted small', text: 'Choose who may give each agent tasks. Tasks from your own agents always go through.' }),
+    ...agents.map((agent) => {
+      const select = el(
+        'select',
+        {
+          'aria-label': `Who may give ${agent.name} tasks`,
+          onchange: async (event) => {
+            try {
+              await api(`/agents/${encodeURIComponent(agent.name)}/policy`, { method: 'POST', body: { policy: event.target.value } });
+            } catch (err) {
+              alert(err.message);
+            }
+            void showMyAgents();
+          },
+        },
+        Object.entries(POLICY_TEXT).map(([value, text]) => el('option', { value, text, selected: agent.taskPolicy === value })),
+      );
+      const trusted = agent.trusted.map((user) =>
+        el(
+          'li',
+          {},
+          el('span', { text: user }),
+          el('button', {
+            class: 'ghost small',
+            type: 'button',
+            text: 'Remove',
+            onclick: async () => {
+              await api(`/agents/${encodeURIComponent(agent.name)}/trust`, { method: 'POST', body: { user, trusted: false } });
+              void showMyAgents();
+            },
+          }),
+        ),
+      );
+      return el(
+        'section',
+        { class: 'agent-settings' },
+        el('div', { class: 'agent-name' }, avatar(agent.name, 'agent'), el('strong', { text: agent.name })),
+        el('label', { class: 'small', text: 'Who may give it tasks' }),
+        select,
+        agent.taskPolicy === 'ask'
+          ? el(
+              'div',
+              { class: 'trusted' },
+              el('span', { class: 'small muted', text: trusted.length ? 'Always allowed without asking:' : 'No one is pre-approved.' }),
+              trusted.length ? el('ul', {}, trusted) : null,
+              el('button', {
+                class: 'ghost small',
+                type: 'button',
+                text: '+ Always allow someone',
+                onclick: async () => {
+                  await ask({
+                    title: `Always allow tasks for ${agent.name}`,
+                    label: 'User name',
+                    hint: 'Tasks from this person and their agents will start without asking you.',
+                    submit: (user) => api(`/agents/${encodeURIComponent(agent.name)}/trust`, { method: 'POST', body: { user, trusted: true } }),
+                  });
+                  void showMyAgents();
+                },
+              }),
+            )
+          : null,
+      );
+    }),
   );
 }
 
@@ -242,6 +391,9 @@ function renderRoomTitle() {
   title.append(`#${state.room.name}`);
   $('add-member').hidden = !state.room.project;
   $('show-locks').hidden = !state.room.project;
+  const audit = $('audit-log');
+  audit.hidden = !state.room.project;
+  if (state.room.project) audit.href = `/api/audit?project=${encodeURIComponent(state.room.project)}&format=jsonl`;
   document.title = `#${state.room.name} · Orco`;
 }
 
@@ -472,6 +624,7 @@ function connect() {
     await selectRoom();
   });
   events.addEventListener('task', (event) => onTask(JSON.parse(event.data)));
+  events.addEventListener('approval', (event) => onApproval(JSON.parse(event.data)));
   events.addEventListener('locks', () => {
     if (state.panel === 'locks') void showLocks();
   });
@@ -632,6 +785,11 @@ $('login-form').addEventListener('submit', async (event) => {
     $('login-error').textContent = err.message;
     $('login-error').hidden = false;
   }
+});
+
+$('my-agents').addEventListener('click', () => {
+  $('sidebar').classList.remove('open');
+  return state.panel === 'agents' ? closePanel() : void showMyAgents();
 });
 
 $('logout').addEventListener('click', async () => {

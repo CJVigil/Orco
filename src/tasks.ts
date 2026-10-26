@@ -1,9 +1,9 @@
 import { OrcoError } from './errors.js';
 import type { Participant, Store } from './store.js';
 
-export type TaskState = 'requested' | 'accepted' | 'done' | 'failed' | 'declined' | 'cancelled';
+export type TaskState = 'awaiting_approval' | 'requested' | 'accepted' | 'done' | 'failed' | 'declined' | 'cancelled';
 
-export const OPEN_STATES: readonly TaskState[] = ['requested', 'accepted'];
+export const OPEN_STATES: readonly TaskState[] = ['awaiting_approval', 'requested', 'accepted'];
 
 export interface TaskSummary {
   id: number;
@@ -47,6 +47,8 @@ interface TaskRow {
   request: string;
   state: TaskState;
   note: string | null;
+  approval_id: number | null;
+  approval_state: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -55,8 +57,10 @@ const TASK_SELECT = `
   SELECT t.id, t.room_id, r.project_id, p.name AS project, r.name AS room, t.message_id,
          t.requester_id, rq.name AS requester, rq.owner_id AS requester_owner_id,
          t.assignee_id, a.name AS assignee, a.owner_id AS assignee_owner_id, ao.name AS assignee_owner,
-         t.parent_id, t.depth, t.request, t.state, t.note, t.created_at, t.updated_at
+         t.parent_id, t.depth, t.request, t.state, t.note, t.approval_id, ap.state AS approval_state,
+         t.created_at, t.updated_at
   FROM tasks t
+  LEFT JOIN approvals ap ON ap.id = t.approval_id
   JOIN rooms r ON r.id = t.room_id
   LEFT JOIN projects p ON p.id = r.project_id
   JOIN participants rq ON rq.id = t.requester_id
@@ -65,6 +69,7 @@ const TASK_SELECT = `
 `;
 
 const ASSIGNEE_MOVES: Record<TaskState, TaskState[]> = {
+  awaiting_approval: [],
   requested: ['accepted', 'declined', 'done', 'failed'],
   accepted: ['done', 'failed'],
   done: [],
@@ -74,6 +79,10 @@ const ASSIGNEE_MOVES: Record<TaskState, TaskState[]> = {
 };
 
 const MAX_REQUEST = 4_000;
+
+function effectiveState(row: { state: TaskState; approval_state: string | null }): TaskState {
+  return row.state === 'requested' && row.approval_state === 'pending' ? 'awaiting_approval' : row.state;
+}
 
 function toTask(row: TaskRow): Task {
   return {
@@ -87,7 +96,7 @@ function toTask(row: TaskRow): Task {
     parentId: row.parent_id,
     depth: row.depth,
     request: row.request,
-    state: row.state,
+    state: effectiveState(row),
     note: row.note,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -117,24 +126,72 @@ export class Tasks {
         `Task chain is too deep (limit ${this.store.limits.maxTaskDepth}). Finish the work you have, or ask a human to take over.`,
       );
     }
+    const owner = this.store.participantById(assignee.ownerId!)!;
+    const needsApproval = this.consent(actor, assignee, owner);
     this.store.checkRate(actor, 'task');
 
+    const text = needsApproval
+      ? `@${owner.name} ${actor.name} asks your agent ${assignee.name} to: ${request}\nApprove to let ${assignee.name} start, or deny.`
+      : `@${assignee.name} ${request}`;
     let taskId = 0;
-    this.store.post(actor, room.ref, `@${assignee.name} ${request}`, undefined, {
+    this.store.post(actor, room.ref, text, undefined, {
       skipRateLimit: true,
       onInsert: (messageId, inserted) => {
+        const approvalId = needsApproval
+          ? this.store.approvals.createForTask(actor, inserted, messageId, owner, `${assignee.name}: ${request}`.slice(0, 300))
+          : null;
         const { lastInsertRowid } = this.store.db
           .prepare(
-            `INSERT INTO tasks (message_id, room_id, requester_id, assignee_id, parent_id, depth, request)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO tasks (message_id, room_id, requester_id, assignee_id, parent_id, depth, request, approval_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           )
-          .run(messageId, inserted.id, actor.id, assignee.id, parent?.id ?? null, depth, request);
+          .run(messageId, inserted.id, actor.id, assignee.id, parent?.id ?? null, depth, request, approvalId);
         taskId = Number(lastInsertRowid);
       },
     });
     const task = this.byId(taskId)!;
+    this.store.audit.record(actor, 'task.create', {
+      projectId: task.projectId,
+      subject: `task:${task.id}`,
+      detail: { assignee: assignee.name, room: task.room, request, parentId: task.parentId, depth, needsApproval },
+    });
     this.store.events.emit('task', task);
     return task;
+  }
+
+  resolveApproval(actor: Participant, approvalId: number, decision: 'approved' | 'denied', note: string | null): void {
+    const row = this.store.db.prepare(`${TASK_SELECT} WHERE t.approval_id = ?`).get(approvalId) as TaskRow | undefined;
+    if (!row || row.state !== 'requested') return;
+    const room = toTask(row).room;
+    if (decision === 'approved') {
+      this.store.post(actor, room, `@${row.assignee} Task #${row.id} approved by ${actor.name}. Go ahead.${note ? `\n${note}` : ''}`, row.message_id, {
+        skipRateLimit: true,
+      });
+    } else {
+      const reason = `Not approved by ${actor.name}${note ? `: ${note}` : '.'}`;
+      this.store.post(actor, room, `@${row.requester} Task #${row.id} declined. ${reason}`, row.message_id, {
+        skipRateLimit: true,
+        onInsert: () => {
+          this.store.db
+            .prepare("UPDATE tasks SET state = 'declined', note = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?")
+            .run(reason, row.id);
+        },
+      });
+    }
+    const task = this.byId(row.id)!;
+    this.store.audit.record(actor, 'task.update', { projectId: task.projectId, subject: `task:${task.id}`, detail: { state: task.state, via: 'approval' } });
+    this.store.events.emit('task', task);
+  }
+
+  private consent(actor: Participant, assignee: Participant, owner: Participant): boolean {
+    const requesterHuman = this.store.humanOf(actor);
+    if (requesterHuman === owner.id) return false;
+    const policy = this.store.taskPolicyFor(assignee);
+    if (policy === 'open') return false;
+    if (policy === 'owner_only') {
+      throw new OrcoError('forbidden', `${assignee.name} only takes tasks from ${owner.name} and ${owner.name}'s agents`);
+    }
+    return !this.store.trusts(assignee, requesterHuman);
   }
 
   update(actor: Participant, id: number, state: TaskState, note?: string): Task {
@@ -142,16 +199,19 @@ export class Tasks {
     if (!row || !this.store.canSeeRoomId(actor, row.room_id)) throw new OrcoError('not_found', `No task ${id}`);
     const trimmedNote = note?.trim() || null;
 
+    const current = effectiveState(row);
     if (state === 'cancelled') {
       const allowed = [row.requester_id, row.requester_owner_id, row.assignee_owner_id].includes(actor.id);
       if (!allowed) throw new OrcoError('forbidden', 'Only the requester or a human owner can cancel a task');
-      if (!OPEN_STATES.includes(row.state)) throw new OrcoError('conflict', `Task ${id} is already ${row.state}`);
+      if (!OPEN_STATES.includes(current)) throw new OrcoError('conflict', `Task ${id} is already ${current}`);
     } else {
       if (actor.id !== row.assignee_id) throw new OrcoError('forbidden', `Only ${row.assignee} can update task ${id}`);
-      if (!ASSIGNEE_MOVES[row.state].includes(state)) {
-        throw new OrcoError('conflict', `Task ${id} is ${row.state}; it cannot move to ${state}`);
+      if (!ASSIGNEE_MOVES[current].includes(state)) {
+        const why = current === 'awaiting_approval' ? `Task ${id} is waiting for your owner's approval` : `Task ${id} is ${current}`;
+        throw new OrcoError('conflict', `${why}; it cannot move to ${state}`);
       }
     }
+    if (state === 'cancelled' && row.approval_id !== null) this.store.approvals.withdraw(row.approval_id);
 
     const notify = state === 'cancelled' ? row.assignee : row.requester;
     const ping = state === 'accepted' || notify === actor.name ? '' : `@${notify} `;
@@ -167,6 +227,7 @@ export class Tasks {
       },
     });
     const task = this.byId(id)!;
+    this.store.audit.record(actor, 'task.update', { projectId: task.projectId, subject: `task:${id}`, detail: { state, note: trimmedNote } });
     this.store.events.emit('task', task);
     return task;
   }
@@ -203,11 +264,20 @@ export class Tasks {
     return rows.filter((row) => this.store.canSee(actor, row.project_id)).map(toTask);
   }
 
+  forApproval(approvalId: number): Task | null {
+    const row = this.store.db.prepare(`${TASK_SELECT} WHERE t.approval_id = ?`).get(approvalId) as TaskRow | undefined;
+    return row ? toTask(row) : null;
+  }
+
   summaryForMessage(messageId: number): TaskSummary | null {
     const row = this.store.db
-      .prepare('SELECT t.id, t.state, a.name AS assignee FROM tasks t JOIN participants a ON a.id = t.assignee_id WHERE t.message_id = ?')
-      .get(messageId) as TaskSummary | undefined;
-    return row ? { id: row.id, state: row.state, assignee: row.assignee } : null;
+      .prepare(
+        `SELECT t.id, t.state, a.name AS assignee, ap.state AS approval_state FROM tasks t
+         JOIN participants a ON a.id = t.assignee_id LEFT JOIN approvals ap ON ap.id = t.approval_id
+         WHERE t.message_id = ?`,
+      )
+      .get(messageId) as (TaskSummary & { approval_state: string | null }) | undefined;
+    return row ? { id: row.id, state: effectiveState(row), assignee: row.assignee } : null;
   }
 
   private parentFor(actor: Participant, parentId: number | undefined): TaskRow | null {

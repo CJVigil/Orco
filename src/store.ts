@@ -1,5 +1,7 @@
 import { EventEmitter } from 'node:events';
 import type { DatabaseSync } from 'node:sqlite';
+import { type ApprovalSummary, Approvals } from './approvals.js';
+import { Audit } from './audit.js';
 import { OrcoError } from './errors.js';
 import { Locks } from './locks.js';
 import { Tasks, type TaskSummary } from './tasks.js';
@@ -42,6 +44,17 @@ export interface Message {
   mentions: string[];
   replyCount: number;
   task: TaskSummary | null;
+  approval: ApprovalSummary | null;
+}
+
+export type TaskPolicy = 'open' | 'ask' | 'owner_only';
+const TASK_POLICIES: readonly TaskPolicy[] = ['open', 'ask', 'owner_only'];
+
+export interface AgentSettings {
+  name: string;
+  owner: string;
+  taskPolicy: TaskPolicy;
+  trusted: string[];
 }
 
 export interface Limits {
@@ -131,6 +144,8 @@ export class Store {
   readonly limits: Limits;
   readonly tasks: Tasks;
   readonly locks: Locks;
+  readonly approvals: Approvals;
+  readonly audit: Audit;
   private readonly recent = new Map<string, number[]>();
 
   constructor(
@@ -142,6 +157,8 @@ export class Store {
     this.limits = { ...DEFAULT_LIMITS, ...options.limits };
     this.tasks = new Tasks(this);
     this.locks = new Locks(this);
+    this.approvals = new Approvals(this);
+    this.audit = new Audit(this);
   }
 
   checkRate(actor: Participant, kind: 'post' | 'task'): void {
@@ -163,13 +180,17 @@ export class Store {
   }
 
   createUser(name: string): { participant: Participant; token: string } {
-    return this.createParticipant('user', name, null);
+    const created = this.createParticipant('user', name, null);
+    this.audit.record(null, 'user.create', { subject: `user:${name}` });
+    return created;
   }
 
   createAgent(ownerName: string, name: string): { participant: Participant; token: string } {
     const owner = this.participantByName(ownerName);
     if (!owner || owner.kind !== 'user') throw new OrcoError('not_found', `No user named ${ownerName}`);
-    return this.createParticipant('agent', name, owner.id);
+    const created = this.createParticipant('agent', name, owner.id);
+    this.audit.record(null, 'agent.create', { subject: `agent:${name}`, detail: { owner: ownerName } });
+    return created;
   }
 
   rotateToken(name: string): string {
@@ -177,7 +198,80 @@ export class Store {
     if (!participant) throw new OrcoError('not_found', `No user or agent named ${name}`);
     const token = newToken(participant.kind);
     this.db.prepare('UPDATE participants SET token_hash = ? WHERE id = ?').run(hashToken(token), participant.id);
+    this.audit.record(null, 'token.rotate', { subject: `${participant.kind}:${name}` });
     return token;
+  }
+
+  agentSettings(actor: Participant, agentName: string): AgentSettings {
+    const agent = this.ownedAgent(actor, agentName);
+    return this.settingsOf(agent);
+  }
+
+  setTaskPolicy(actor: Participant | null, agentName: string, policy: TaskPolicy): AgentSettings {
+    if (!TASK_POLICIES.includes(policy)) throw new OrcoError('invalid', `Task policy must be one of ${TASK_POLICIES.join(', ')}`);
+    const agent = actor ? this.ownedAgent(actor, agentName) : this.anyAgent(agentName);
+    this.db.prepare('UPDATE participants SET task_policy = ? WHERE id = ?').run(policy, agent.id);
+    this.audit.record(actor, 'agent.policy', { subject: `agent:${agent.name}`, detail: { taskPolicy: policy } });
+    this.events.emit('structure');
+    return this.settingsOf(agent);
+  }
+
+  setTrust(actor: Participant | null, agentName: string, userName: string, trusted: boolean): AgentSettings {
+    const agent = actor ? this.ownedAgent(actor, agentName) : this.anyAgent(agentName);
+    const user = this.participantByName(userName);
+    if (!user || user.kind !== 'user') throw new OrcoError('not_found', `No user named ${userName}`);
+    if (user.id === agent.ownerId) throw new OrcoError('invalid', `${userName} owns ${agent.name} already`);
+    this.db
+      .prepare(trusted ? 'INSERT OR IGNORE INTO agent_trust (agent_id, user_id) VALUES (?, ?)' : 'DELETE FROM agent_trust WHERE agent_id = ? AND user_id = ?')
+      .run(agent.id, user.id);
+    this.audit.record(actor, trusted ? 'agent.trust' : 'agent.untrust', { subject: `agent:${agent.name}`, detail: { user: userName } });
+    return this.settingsOf(agent);
+  }
+
+  taskPolicyFor(agent: Participant): TaskPolicy {
+    const row = this.db.prepare('SELECT task_policy FROM participants WHERE id = ?').get(agent.id) as { task_policy: TaskPolicy };
+    return row.task_policy;
+  }
+
+  trusts(agent: Participant, userId: number): boolean {
+    return this.db.prepare('SELECT 1 FROM agent_trust WHERE agent_id = ? AND user_id = ?').get(agent.id, userId) !== undefined;
+  }
+
+  myAgents(actor: Participant): AgentSettings[] {
+    if (actor.kind !== 'user') return [];
+    const rows = this.db.prepare("SELECT id, kind, name, owner_id FROM participants WHERE owner_id = ? ORDER BY name").all(actor.id) as unknown as ParticipantRow[];
+    return rows.map((row) => this.settingsOf(toParticipant(row)));
+  }
+
+  participantById(id: number): Participant | null {
+    const row = this.db.prepare('SELECT id, kind, name, owner_id FROM participants WHERE id = ?').get(id) as ParticipantRow | undefined;
+    return row ? toParticipant(row) : null;
+  }
+
+  private ownedAgent(actor: Participant, agentName: string): Participant {
+    const agent = this.participantByName(agentName);
+    if (!agent || agent.kind !== 'agent' || agent.ownerId !== actor.id) {
+      throw new OrcoError('not_found', `You have no agent named ${agentName}`);
+    }
+    return agent;
+  }
+
+  private anyAgent(agentName: string): Participant {
+    const agent = this.participantByName(agentName);
+    if (!agent || agent.kind !== 'agent') throw new OrcoError('not_found', `No agent named ${agentName}`);
+    return agent;
+  }
+
+  private settingsOf(agent: Participant): AgentSettings {
+    const trusted = this.db
+      .prepare('SELECT u.name FROM agent_trust t JOIN participants u ON u.id = t.user_id WHERE t.agent_id = ? ORDER BY u.name')
+      .all(agent.id) as unknown as { name: string }[];
+    return {
+      name: agent.name,
+      owner: this.participantById(agent.ownerId!)!.name,
+      taskPolicy: this.taskPolicyFor(agent),
+      trusted: trusted.map((t) => t.name),
+    };
   }
 
   authenticate(token: string): Participant | null {
@@ -233,6 +327,7 @@ export class Store {
         .prepare("INSERT INTO rooms (project_id, name, created_by) VALUES (?, 'general', ?)")
         .run(projectId, actor.id);
       this.db.exec('COMMIT');
+      this.audit.record(actor, 'project.create', { projectId, subject: `project:${name}` });
       this.events.emit('structure');
       return { id: projectId, name };
     } catch (err) {
@@ -263,6 +358,7 @@ export class Store {
     this.db
       .prepare('INSERT OR IGNORE INTO project_members (project_id, user_id) VALUES (?, ?)')
       .run(project.id, user.id);
+    this.audit.record(actor, 'project.add_member', { projectId: project.id, subject: `user:${userName}` });
     this.events.emit('structure');
   }
 
@@ -275,6 +371,7 @@ export class Store {
       if (isUniqueViolation(err)) throw new OrcoError('conflict', `Room ${projectName}/${name} already exists`);
       throw err;
     }
+    this.audit.record(actor, 'room.create', { projectId: project.id, subject: `room:${projectName}/${name}` });
     this.events.emit('structure');
     return this.room(actor, `${projectName}/${name}`);
   }
@@ -350,6 +447,11 @@ export class Store {
     }
 
     const message = this.message(messageId);
+    this.audit.record(actor, 'message.post', {
+      projectId: room.projectId,
+      subject: `message:${messageId}`,
+      detail: { room: room.ref, threadId: thread, text: trimmed, mentions: message.mentions },
+    });
     this.events.emit('message', message);
     for (const target of mentioned) this.events.emit(`mention:${target.id}`, message);
     return message;
@@ -497,6 +599,7 @@ export class Store {
       mentions: mentions.map((m) => m.name),
       replyCount: row.reply_count,
       task: this.tasks.summaryForMessage(row.id),
+      approval: this.approvals.summaryForMessage(row.id),
     };
   }
 }
