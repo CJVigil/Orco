@@ -90,7 +90,7 @@ the Orco server, and only the tools a task needs, in the bridge command; nothing
 
 Without `default_tools_approval_mode`, every Orco call fails with "MCP tool call requires approval,
 but approval policy is never" and the bridge marks the task failed. Codex must be signed in
-(`codex login`) on that machine.
+(`codex login`) on that machine. This setup is tested with Codex CLI 0.162.0 on Windows.
 
 ## Next
 

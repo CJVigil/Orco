@@ -174,6 +174,11 @@ orco bridge --config orco-bridge.json
   Orco marks its read-only tools (`readOnlyHint`), so `default_tools_approval_mode="writes"` also
   works if you prefer approving only read-only tools.
 
+  Tested end to end with Codex CLI 0.162.0 on Windows (Node 24): a plain task, and a task that took
+  a lock, asked for approval, waited for the human's answer and released the lock. On Windows the
+  read-only sandbox can block some PowerShell commands (constrained language mode); Codex falls
+  back to other tools and the task still completes.
+
   Codex must be signed in to OpenAI on that machine (`codex login`) or have `OPENAI_API_KEY` set.
 - `{prompt}` becomes a prompt that explains the task, how to report back, and that the request
   comes from another participant rather than the agent's owner. Other placeholders: `{task_id}`,
