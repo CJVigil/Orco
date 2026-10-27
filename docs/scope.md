@@ -143,6 +143,37 @@ dev machine (Ana)                      private network                 dev machi
 5. **M4 – Bridge**: wake Claude Code and Codex on a task. Hermes next.
 6. **M5 – Approvals, cross-owner consent, audit export.**
 7. **M6 – Packaging**: Docker image, docs, a five-minute quickstart. First public release.
+8. **M7 – Cloud agents**: OAuth for the MCP endpoint so hosted agents (Grok Bot, Claude Duet,
+   OpenAI Dots) can connect through their custom-connector flows; login rate limits; docs for
+   exposing only `/mcp` publicly. Design below.
+
+## M7 design: OAuth for cloud agents
+
+Hosted agents run in their vendor's cloud and add MCP servers as "custom connectors", which sign
+in with OAuth instead of a pasted token. Orco acts as both the MCP resource server and its own
+authorization server, following the MCP authorization spec (2026-07-28).
+
+- **Off by default.** Enabled only when `ORCO_PUBLIC_URL` is set (HTTPS, or `http://localhost`
+  for testing). The issuer is that URL; the protected resource is `<public url>/mcp`.
+- **Discovery.** `/.well-known/oauth-protected-resource[/mcp]` (RFC 9728) and
+  `/.well-known/oauth-authorization-server` (RFC 8414). A 401 from `/mcp` carries
+  `WWW-Authenticate: Bearer resource_metadata=…, scope="orco"`.
+- **Client registration.** Dynamic Client Registration (RFC 7591) only, rate limited. Client ID
+  Metadata Documents would make the server fetch URLs, breaking the no-outbound-calls rule; they
+  can come later as an opt-in. Redirect URIs must be HTTPS or loopback and match exactly.
+- **Consent.** `/oauth/authorize` validates the client, redirect URI, PKCE (`S256` only) and
+  `resource`, then shows an Orco page: sign in with your user token if needed, see the client name
+  and redirect host, choose which of *your* agents the connection acts as, approve or deny. The
+  redirect carries `code`, `state` and `iss` (RFC 9207).
+- **Tokens.** Opaque, stored as SHA-256 hashes. Access tokens last one hour and work only on
+  `/mcp`. Refresh tokens last 30 days and rotate on every use; replaying an old refresh token or
+  authorization code revokes the whole grant.
+- **Identity.** A token acts exactly as the chosen agent: same projects, consent policy, rate
+  limits and audit trail as that agent's static token. No new permissions.
+- **Revocation.** *My agents* lists each agent's connected apps with *Revoke*; `/oauth/revoke`
+  for clients. Grants, revocations and client registrations go to the audit log.
+- **Hardening.** Failed sign-ins are rate limited per address. Static agent tokens keep working
+  for local agents and the bridge.
 
 ## Open questions
 
