@@ -201,6 +201,92 @@ const MIGRATIONS = [
   CREATE INDEX attachments_message ON attachments (message_id);
   CREATE INDEX attachments_unattached ON attachments (message_id, created_at);
   `,
+  `
+  ALTER TABLE projects ADD COLUMN ticket_key TEXT;
+  ALTER TABLE projects ADD COLUMN next_ticket INTEGER NOT NULL DEFAULT 1;
+  CREATE UNIQUE INDEX projects_ticket_key ON projects (ticket_key);
+
+  CREATE TABLE ticket_statuses (
+    id INTEGER PRIMARY KEY,
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    name TEXT NOT NULL COLLATE NOCASE,
+    category TEXT NOT NULL CHECK (category IN ('backlog', 'unstarted', 'started', 'completed', 'canceled')),
+    position INTEGER NOT NULL,
+    UNIQUE (project_id, name)
+  );
+
+  CREATE TABLE labels (
+    id INTEGER PRIMARY KEY,
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    name TEXT NOT NULL COLLATE NOCASE,
+    color TEXT NOT NULL,
+    UNIQUE (project_id, name)
+  );
+
+  CREATE TABLE milestones (
+    id INTEGER PRIMARY KEY,
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    name TEXT NOT NULL COLLATE NOCASE,
+    description TEXT NOT NULL DEFAULT '',
+    target_date TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE (project_id, name)
+  );
+
+  CREATE TABLE cycles (
+    id INTEGER PRIMARY KEY,
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    number INTEGER NOT NULL,
+    starts_on TEXT NOT NULL,
+    ends_on TEXT NOT NULL,
+    completed_at TEXT,
+    UNIQUE (project_id, number)
+  );
+
+  CREATE TABLE tickets (
+    id INTEGER PRIMARY KEY,
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    number INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    status_id INTEGER NOT NULL REFERENCES ticket_statuses(id),
+    priority INTEGER NOT NULL DEFAULT 0 CHECK (priority BETWEEN 0 AND 4),
+    estimate INTEGER,
+    due_date TEXT,
+    assignee_id INTEGER REFERENCES participants(id),
+    creator_id INTEGER NOT NULL REFERENCES participants(id),
+    parent_id INTEGER REFERENCES tickets(id),
+    milestone_id INTEGER REFERENCES milestones(id),
+    cycle_id INTEGER REFERENCES cycles(id),
+    task_id INTEGER REFERENCES tasks(id),
+    sort REAL NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    started_at TEXT,
+    completed_at TEXT,
+    UNIQUE (project_id, number)
+  );
+  CREATE INDEX tickets_status ON tickets (status_id, sort);
+  CREATE INDEX tickets_task ON tickets (task_id);
+  CREATE INDEX tickets_parent ON tickets (parent_id);
+
+  CREATE TABLE ticket_labels (
+    ticket_id INTEGER NOT NULL REFERENCES tickets(id),
+    label_id INTEGER NOT NULL REFERENCES labels(id),
+    PRIMARY KEY (ticket_id, label_id)
+  );
+
+  CREATE TABLE ticket_activity (
+    id INTEGER PRIMARY KEY,
+    ticket_id INTEGER NOT NULL REFERENCES tickets(id),
+    actor_id INTEGER REFERENCES participants(id),
+    kind TEXT NOT NULL CHECK (kind IN ('created', 'change', 'comment', 'task')),
+    body TEXT,
+    detail TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+  CREATE INDEX ticket_activity_ticket ON ticket_activity (ticket_id, id);
+  `,
 ];
 
 export function openDatabase(path: string): DatabaseSync {

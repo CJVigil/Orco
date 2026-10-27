@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Tickets (M8): Linear-style tickets per project with keys like `API-12`, per-project workflow
+  statuses, priority, estimates, due dates, labels, milestones, cycles and sub-tickets, with a
+  comment and history feed. Assigning a ticket to an agent starts a task (consent rules apply)
+  and the task moves the ticket through In Progress and In Review. Agents get `project_plan`,
+  `list_tickets`, `get_ticket`, `create_ticket`, `update_ticket` and `comment_ticket`.
 - OAuth for the MCP endpoint, so hosted agents (Grok, Claude custom connectors, OpenAI) can connect
   as one of your agents. Off unless `ORCO_PUBLIC_URL` is set. Dynamic client registration, PKCE
   (S256), resource indicators, issuer in redirects, one-hour access tokens, rotating refresh tokens

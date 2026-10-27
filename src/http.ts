@@ -12,6 +12,7 @@ import { RateLimiter } from './ratelimit.js';
 import { type Message, OrcoError, type Participant, type Store } from './store.js';
 import type { Task, TaskState } from './tasks.js';
 import type { Approval } from './approvals.js';
+import type { Priority, StatusCategory, TicketFilter, TicketInput } from './tickets.js';
 
 declare module 'express-serve-static-core' {
   interface Request {
@@ -80,6 +81,43 @@ function rejectCrossSiteUpload(req: Request, res: Response, next: NextFunction) 
     return;
   }
   next();
+}
+
+function str(value: unknown, field: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') throw new OrcoError('invalid', `${field} must be a string`);
+  return value;
+}
+
+function nullableStr(value: unknown, field: string): string | null | undefined {
+  return value === null ? null : str(value, field);
+}
+
+function ticketInput(body: Record<string, unknown> | undefined): TicketInput {
+  const b = body ?? {};
+  const num = (value: unknown, field: string): number | null | undefined => {
+    if (value === undefined || value === null) return value;
+    if (typeof value !== 'number') throw new OrcoError('invalid', `${field} must be a number`);
+    return value;
+  };
+  if (b.labels !== undefined && (!Array.isArray(b.labels) || b.labels.some((l) => typeof l !== 'string'))) {
+    throw new OrcoError('invalid', 'labels must be a list of names');
+  }
+  const cycle = b.cycle === 'current' ? 'current' : num(b.cycle, 'cycle');
+  return {
+    title: str(b.title, 'title'),
+    description: str(b.description, 'description'),
+    status: str(b.status, 'status'),
+    priority: str(b.priority, 'priority') as Priority | undefined,
+    estimate: num(b.estimate, 'estimate'),
+    dueDate: nullableStr(b.dueDate, 'dueDate'),
+    assignee: nullableStr(b.assignee, 'assignee'),
+    labels: b.labels as string[] | undefined,
+    milestone: nullableStr(b.milestone, 'milestone'),
+    cycle,
+    parent: nullableStr(b.parent, 'parent'),
+    sort: num(b.sort, 'sort') ?? undefined,
+  };
 }
 
 function optionalInt(value: unknown): number | undefined {
@@ -233,6 +271,124 @@ export function createApp(store: Store, options: AppOptions = {}) {
       ETag: `"${image.sha256}"`,
     });
     res.send(image.data);
+  });
+
+  api.get('/tickets', (req, res) => {
+    const q = req.query;
+    const text = (value: unknown) => (typeof value === 'string' && value ? value : undefined);
+    const cycle = q.cycle === 'current' ? 'current' : optionalInt(q.cycle);
+    const filter: TicketFilter = {
+      project: text(q.project),
+      status: text(q.status),
+      categories: text(q.category)?.split(',') as StatusCategory[] | undefined,
+      open: q.open === '1',
+      assignee: text(q.assignee),
+      label: text(q.label),
+      milestone: text(q.milestone),
+      cycle,
+      priority: text(q.priority) as Priority | undefined,
+      parent: text(q.parent),
+      query: text(q.q),
+      limit: optionalInt(q.limit),
+    };
+    res.json(store.tickets.list(req.participant!, filter));
+  });
+  api.post('/projects/:project/tickets', (req, res) => {
+    const input = ticketInput(req.body);
+    res.status(201).json(store.tickets.create(req.participant!, String(req.params.project), { ...input, title: input.title ?? '' }));
+  });
+  api.get('/tickets/:ref', (req, res) => {
+    res.json(store.tickets.get(req.participant!, String(req.params.ref)));
+  });
+  api.post('/tickets/:ref', (req, res) => {
+    res.json(store.tickets.update(req.participant!, String(req.params.ref), ticketInput(req.body)));
+  });
+  api.post('/tickets/:ref/comments', (req, res) => {
+    res.status(201).json(store.tickets.comment(req.participant!, String(req.params.ref), str(req.body?.text, 'text') ?? ''));
+  });
+  api.post('/tickets/:ref/start', (req, res) => {
+    res.json(store.tickets.startTask(req.participant!, String(req.params.ref)));
+  });
+  api.get('/projects/:project/plan', (req, res) => {
+    res.json(store.tickets.plan(req.participant!, String(req.params.project)));
+  });
+  api.post('/projects/:project/statuses', (req, res) => {
+    const { name, category, position } = req.body ?? {};
+    res.status(201).json(
+      store.tickets.addStatus(req.participant!, String(req.params.project), {
+        name: str(name, 'name') ?? '',
+        category: str(category, 'category') as StatusCategory,
+        position: optionalInt(position),
+      }),
+    );
+  });
+  api.post('/projects/:project/statuses/:id', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a status id');
+    const { name, category, position } = req.body ?? {};
+    res.json(
+      store.tickets.updateStatus(req.participant!, String(req.params.project), id, {
+        name: str(name, 'name'),
+        category: str(category, 'category') as StatusCategory | undefined,
+        position: optionalInt(position),
+      }),
+    );
+  });
+  api.delete('/projects/:project/statuses/:id', (req, res) => {
+    const id = optionalInt(req.params.id);
+    const moveTo = optionalInt(req.query.move_to);
+    if (id === undefined || moveTo === undefined) throw new OrcoError('invalid', 'Expected a status id and move_to');
+    res.json(store.tickets.removeStatus(req.participant!, String(req.params.project), id, moveTo));
+  });
+  api.post('/projects/:project/labels', (req, res) => {
+    res.status(201).json(store.tickets.createLabel(req.participant!, String(req.params.project), str(req.body?.name, 'name') ?? '', str(req.body?.color, 'color')));
+  });
+  api.delete('/projects/:project/labels/:id', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a label id');
+    store.tickets.deleteLabel(req.participant!, String(req.params.project), id);
+    res.status(204).end();
+  });
+  api.post('/projects/:project/milestones', (req, res) => {
+    const { name, description, targetDate } = req.body ?? {};
+    res.status(201).json(
+      store.tickets.createMilestone(req.participant!, String(req.params.project), {
+        name: str(name, 'name') ?? '',
+        description: str(description, 'description'),
+        targetDate: nullableStr(targetDate, 'targetDate'),
+      }),
+    );
+  });
+  api.post('/projects/:project/milestones/:id', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a milestone id');
+    const { name, description, targetDate } = req.body ?? {};
+    res.json(
+      store.tickets.updateMilestone(req.participant!, String(req.params.project), id, {
+        name: str(name, 'name'),
+        description: str(description, 'description'),
+        targetDate: nullableStr(targetDate, 'targetDate'),
+      }),
+    );
+  });
+  api.delete('/projects/:project/milestones/:id', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a milestone id');
+    store.tickets.deleteMilestone(req.participant!, String(req.params.project), id);
+    res.status(204).end();
+  });
+  api.post('/projects/:project/cycles', (req, res) => {
+    res.status(201).json(
+      store.tickets.createCycle(req.participant!, String(req.params.project), {
+        startsOn: str(req.body?.startsOn, 'startsOn'),
+        endsOn: str(req.body?.endsOn, 'endsOn'),
+      }),
+    );
+  });
+  api.post('/projects/:project/cycles/:id/complete', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a cycle id');
+    res.json(store.tickets.completeCycle(req.participant!, String(req.params.project), id));
   });
 
   api.get('/tasks', (req, res) => {
@@ -395,7 +551,11 @@ export function createApp(store: Store, options: AppOptions = {}) {
     const onLock = ({ projectId }: { projectId: number }) => {
       if (store.canSee(me, projectId)) send('locks', { projectId });
     };
+    const onTicket = (event: { projectId: number; ref: string | null }) => {
+      if (store.canSee(me, event.projectId)) send('ticket', event);
+    };
     const onPresence = () => send('presence', {});
+    store.events.on('ticket', onTicket);
     store.events.on('message', onMessage);
     store.events.on('structure', onStructure);
     store.events.on('task', onTask);
@@ -407,6 +567,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
     send('ready', { name: me.name });
     req.on('close', () => {
       clearInterval(heartbeat);
+      store.events.off('ticket', onTicket);
       store.events.off('message', onMessage);
       store.events.off('structure', onStructure);
       store.events.off('task', onTask);

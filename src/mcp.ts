@@ -6,6 +6,7 @@ import { MAX_ATTACHMENTS_PER_MESSAGE } from './attachments.js';
 import { MAX_TTL_SECONDS, MIN_TTL_SECONDS } from './locks.js';
 import { type Message, OrcoError, type Participant, type Store } from './store.js';
 import type { Task } from './tasks.js';
+import { PRIORITIES, STATUS_CATEGORIES, type Ticket, type TicketInput, type TicketSummary } from './tickets.js';
 
 const MAX_WAIT_SECONDS = 300;
 
@@ -24,6 +25,9 @@ const READ_ONLY_TOOLS = new Set([
   'list_locks',
   'get_approval',
   'view_image',
+  'list_tickets',
+  'get_ticket',
+  'project_plan',
 ]);
 
 function annotate(tool: string): ToolAnnotations {
@@ -69,6 +73,68 @@ function formatTask(task: Task) {
   };
 }
 
+function formatTicketSummary(t: TicketSummary) {
+  return {
+    ref: t.ref,
+    title: t.title,
+    status: t.status.name,
+    priority: t.priority,
+    assignee: t.assignee?.name ?? null,
+    labels: t.labels.map((l) => l.name),
+    estimate: t.estimate,
+    due: t.dueDate,
+    milestone: t.milestone?.name ?? null,
+    cycle: t.cycle?.number ?? null,
+    parent: t.parent,
+    task: t.task,
+  };
+}
+
+function formatTicket(t: Ticket) {
+  return {
+    ...formatTicketSummary(t),
+    project: t.project,
+    description: t.description,
+    creator: t.creator,
+    created: t.createdAt,
+    updated: t.updatedAt,
+    children: t.children.map(formatTicketSummary),
+    activity: t.activity.map((a) => ({ at: a.createdAt, by: a.actor, kind: a.kind, text: a.body, detail: a.detail })),
+  };
+}
+
+const ticketFields = {
+  title: z.string().optional(),
+  description: z.string().optional().describe('Markdown'),
+  status: z.string().optional().describe('A status name from project_plan, such as "In Progress"'),
+  priority: z.enum(PRIORITIES).optional(),
+  estimate: z.number().int().min(0).max(100).nullable().optional().describe('Points'),
+  due_date: z.string().nullable().optional().describe('YYYY-MM-DD'),
+  assignee: z.string().nullable().optional().describe('A person or agent; assigning an agent starts a task for it'),
+  labels: z.array(z.string()).optional().describe('Replaces the label set; names from project_plan'),
+  milestone: z.string().nullable().optional(),
+  cycle: z.union([z.number().int(), z.literal('current')]).nullable().optional(),
+  parent: z.string().nullable().optional().describe('Parent ticket, like API-3'),
+};
+
+type TicketArgs = { [K in keyof typeof ticketFields]?: z.infer<(typeof ticketFields)[K]> };
+
+function ticketInput(args: TicketArgs): TicketInput {
+  return {
+    title: args.title,
+    description: args.description,
+    status: args.status,
+    priority: args.priority,
+    estimate: args.estimate,
+    dueDate: args.due_date,
+    assignee: args.assignee,
+    labels: args.labels,
+    milestone: args.milestone,
+    cycle: args.cycle,
+    parent: args.parent,
+  };
+}
+
 async function run(fn: () => unknown | Promise<unknown>): Promise<ToolResult> {
   try {
     return ok(await fn());
@@ -88,6 +154,8 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         'When a mention carries a task, accept it with update_task, do the work, then mark it done or failed with a note. ' +
         'Before touching a shared resource (a deploy, a branch, an account), take its lock with acquire_lock and release it after. ' +
         'Before a risky or irreversible step, ask your owner with request_approval and wait for the answer. ' +
+        'Projects also keep tickets (like API-12): see project_plan, list_tickets and get_ticket; keep tickets you work on current ' +
+        'with update_ticket and comment_ticket. ' +
         UNTRUSTED_NOTE,
     },
   );
@@ -408,6 +476,108 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
       inputSchema: z.object({ project: z.string().optional() }),
     },
     async ({ project }) => run(() => store.locks.list(me, project)),
+  );
+
+  server.registerTool(
+    'project_plan',
+    {
+      annotations: annotate('project_plan'),
+      description: "A project's ticket key, workflow statuses, labels, milestones (with progress), cycles and members.",
+      inputSchema: z.object({ project: z.string() }),
+    },
+    async ({ project }) => run(() => store.tickets.plan(me, project)),
+  );
+
+  server.registerTool(
+    'list_tickets',
+    {
+      annotations: annotate('list_tickets'),
+      description: 'List tickets. Defaults to open tickets in every project you can see, ordered by workflow status.',
+      inputSchema: z.object({
+        project: z.string().optional(),
+        assignee: z.string().optional().describe('A name, "me", or "none"'),
+        status: z.string().optional(),
+        category: z.enum(STATUS_CATEGORIES).optional(),
+        include_closed: z.boolean().optional(),
+        label: z.string().optional(),
+        milestone: z.string().optional(),
+        cycle: z.union([z.number().int(), z.literal('current')]).optional(),
+        query: z.string().optional().describe('Words in the title or description, or a ticket ref'),
+        limit: z.number().int().min(1).max(500).optional(),
+      }),
+    },
+    async (args) =>
+      run(() => ({
+        note: UNTRUSTED_NOTE,
+        tickets: store.tickets
+          .list(me, {
+            project: args.project,
+            assignee: args.assignee,
+            status: args.status,
+            categories: args.category ? [args.category] : undefined,
+            open: !args.include_closed && !args.status && !args.category,
+            label: args.label,
+            milestone: args.milestone,
+            cycle: args.cycle,
+            query: args.query,
+            limit: args.limit,
+          })
+          .map(formatTicketSummary),
+      })),
+  );
+
+  server.registerTool(
+    'get_ticket',
+    {
+      annotations: annotate('get_ticket'),
+      description: 'Show a ticket with its description, sub-tickets, comments and history.',
+      inputSchema: z.object({ ticket: z.string().describe('Like API-12') }),
+    },
+    async ({ ticket }) => run(() => ({ note: UNTRUSTED_NOTE, ticket: formatTicket(store.tickets.get(me, ticket)) })),
+  );
+
+  server.registerTool(
+    'create_ticket',
+    {
+      annotations: annotate('create_ticket'),
+      description: 'File a ticket in a project. It starts in the first backlog status unless you pass one.',
+      inputSchema: z.object({ project: z.string(), ...ticketFields, title: z.string() }),
+    },
+    async ({ project, ...args }) =>
+      run(() => {
+        const { ticket, warning } = store.tickets.create(me, project, { ...ticketInput(args), title: args.title });
+        return { ticket: formatTicket(ticket), ...(warning ? { warning } : {}) };
+      }),
+  );
+
+  server.registerTool(
+    'update_ticket',
+    {
+      annotations: annotate('update_ticket'),
+      description:
+        'Change a ticket: move its status, edit fields, reassign it. Only the fields you pass change. ' +
+        'If you are working a ticket through a task, finish the task with update_task as well.',
+      inputSchema: z.object({ ticket: z.string(), ...ticketFields }),
+    },
+    async ({ ticket, ...args }) =>
+      run(() => {
+        const result = store.tickets.update(me, ticket, ticketInput(args));
+        return { ticket: formatTicket(result.ticket), ...(result.warning ? { warning: result.warning } : {}) };
+      }),
+  );
+
+  server.registerTool(
+    'comment_ticket',
+    {
+      annotations: annotate('comment_ticket'),
+      description: 'Add a comment to a ticket: progress, findings, a link to a PR.',
+      inputSchema: z.object({ ticket: z.string(), text: z.string() }),
+    },
+    async ({ ticket, text }) =>
+      run(() => {
+        const t = store.tickets.comment(me, ticket, text);
+        return `Commented on ${t.ref}`;
+      }),
   );
 
   return server;

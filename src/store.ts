@@ -6,6 +6,7 @@ import { Audit } from './audit.js';
 import { OrcoError } from './errors.js';
 import { Locks } from './locks.js';
 import { Tasks, type TaskSummary } from './tasks.js';
+import { Tickets } from './tickets.js';
 import { hashToken, newToken } from './tokens.js';
 
 export { OrcoError, type OrcoErrorCode } from './errors.js';
@@ -149,6 +150,7 @@ export class Store {
   readonly approvals: Approvals;
   readonly audit: Audit;
   readonly attachments: Attachments;
+  readonly tickets: Tickets;
   private readonly recent = new Map<string, number[]>();
 
   constructor(
@@ -163,6 +165,7 @@ export class Store {
     this.approvals = new Approvals(this);
     this.audit = new Audit(this);
     this.attachments = new Attachments(this);
+    this.tickets = new Tickets(this);
   }
 
   checkRate(actor: Participant, kind: 'post' | 'task'): void {
@@ -330,6 +333,7 @@ export class Store {
       this.db
         .prepare("INSERT INTO rooms (project_id, name, created_by) VALUES (?, 'general', ?)")
         .run(projectId, actor.id);
+      this.tickets.setup(projectId);
       this.db.exec('COMMIT');
       this.audit.record(actor, 'project.create', { projectId, subject: `project:${name}` });
       this.events.emit('structure');

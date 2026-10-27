@@ -146,6 +146,9 @@ dev machine (Ana)                      private network                 dev machi
 8. **M7 – Cloud agents** (OAuth built; vendor testing pending): OAuth for the MCP endpoint so hosted agents (Grok Bot, Claude Duet,
    OpenAI Dots) can connect through their custom-connector flows; login rate limits; docs for
    exposing only `/mcp` publicly. Design below.
+9. **M8 – Tickets and planning**: Linear-style tickets per project with configurable statuses,
+   board and list views, milestones, cycles, labels, priority and estimates. Assigning a ticket
+   to an agent starts a task. Design below.
 
 ## M7 design: OAuth for cloud agents
 
@@ -174,6 +177,40 @@ authorization server, following the MCP authorization spec (2026-07-28).
   for clients. Grants, revocations and client registrations go to the audit log.
 - **Hardening.** Failed sign-ins are rate limited per address. Static agent tokens keep working
   for local agents and the bridge.
+
+## M8 design: tickets and planning
+
+Rooms are for talking; tickets are the durable record of what needs doing. Tasks stay the unit of
+agent execution, and a ticket assigned to an agent drives one.
+
+- **Tickets.** Each belongs to a project and has a key such as `API-12` (the project's key plus a
+  number). Fields: title, Markdown description, status, priority (none, urgent, high, medium,
+  low), estimate in points, due date, assignee (a person or an agent), labels, milestone, cycle,
+  and an optional parent ticket. Every change is written to the ticket's activity feed next to
+  its comments, and to the audit log.
+- **Workflow.** Each project has its own ordered statuses. Every status has a category:
+  `backlog`, `unstarted`, `started`, `completed` or `canceled`. New projects start with Backlog,
+  Todo, In Progress, In Review, Done and Canceled. People in the project can rename, add, reorder
+  and remove statuses (removing one moves its tickets elsewhere). A project always keeps at least
+  one `started` and one `completed` status, so the board and agents keep working.
+- **Agents.** Assigning a ticket to an agent creates a task in the project's `#general` room
+  through the normal path: consent policy, approvals, depth and rate limits all apply, and the
+  bridge wakes the agent. The task's state moves the ticket: accepted → the first `started`
+  status; done → the next `started` status (In Review) or, from the last one, the first
+  `completed` status; failed, declined or cancelled → noted in the activity feed, status kept. A
+  person can restart work with *Start task*.
+- **Who can change what.** Anyone in the project, and their agents, can create, edit, comment on
+  and move tickets. Statuses, labels, milestones and cycles are set up by people only; agents can
+  use them but not change them.
+- **Milestones** group tickets toward a goal with an optional target date; progress counts
+  completed tickets and points.
+- **Cycles** are numbered, dated iterations. The current cycle is the one whose dates include
+  today. Completing a cycle moves its unfinished tickets to the next cycle, or out of any cycle if
+  there is none yet.
+- **Interfaces.** REST under `/api`, a `ticket` event on the stream, and MCP tools
+  `list_tickets`, `get_ticket`, `create_ticket`, `update_ticket`, `comment_ticket` and
+  `project_plan`. Ticket text is untrusted like messages. The web app adds a board (drag between
+  columns), a list, a detail panel, and pages for milestones, cycles and workflow settings.
 
 ## Open questions
 
