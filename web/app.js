@@ -1,4 +1,5 @@
 import { attachMentionAutocomplete } from './autocomplete.js';
+import { icon } from './icons.js';
 import { renderMarkdown } from './markdown.js';
 
 const $ = (id) => document.getElementById(id);
@@ -51,6 +52,8 @@ function el(tag, props = {}, ...children) {
   return node;
 }
 
+for (const node of document.querySelectorAll('[data-icon]')) node.prepend(icon(node.dataset.icon));
+
 function hue(name) {
   let h = 0;
   for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) % 360;
@@ -59,7 +62,8 @@ function hue(name) {
 
 function avatar(name, kind) {
   const node = el('span', { class: `avatar ${kind === 'agent' ? 'agent' : ''}`, 'aria-hidden': 'true', text: name[0].toUpperCase() });
-  node.style.background = `hsl(${hue(name)} 70% 72%)`;
+  const h = hue(name);
+  node.style.background = kind === 'agent' ? `linear-gradient(135deg, hsl(${h} 72% 74%), hsl(${(h + 50) % 360} 65% 62%))` : `hsl(${h} 70% 72%)`;
   return node;
 }
 
@@ -211,8 +215,12 @@ function taskCard(message) {
     { class: `task-card task-${taskState}` },
     el('span', { class: 'task-id', text: `Task #${id}` }),
     el('span', { class: 'muted', text: `→ ${assignee}` }),
-    el('span', { class: 'chip' }, taskState === 'accepted' && since ? liveElapsed('In progress · ', since) : TASK_LABEL[taskState]),
-    taskState === 'accepted' ? el('span', { class: 'working-dot', 'aria-hidden': 'true' }) : null,
+    el(
+      'span',
+      { class: 'chip' },
+      taskState === 'accepted' ? el('span', { class: 'working-dot', 'aria-hidden': 'true' }) : null,
+      taskState === 'accepted' && since ? liveElapsed('In progress · ', since) : TASK_LABEL[taskState],
+    ),
     open && mine
       ? el('button', {
           class: 'ghost small',
@@ -452,7 +460,7 @@ function renderNav() {
           'div',
           { class: 'nav-group-head' },
           el('span', { text: project.name }),
-          el('button', { class: 'ghost', type: 'button', title: `New room in ${project.name}`, 'aria-label': `New room in ${project.name}`, text: '+', onclick: () => newRoom(project.name) }),
+          el('button', { class: 'ghost', type: 'button', title: `New room in ${project.name}`, 'aria-label': `New room in ${project.name}`, onclick: () => newRoom(project.name) }, icon('plus')),
         ),
         rooms.map(roomLink),
       ),
@@ -483,6 +491,7 @@ function renderRoomTitle() {
   audit.hidden = !state.room.project;
   if (state.room.project) audit.href = `/api/audit?project=${encodeURIComponent(state.room.project)}&format=jsonl`;
   document.title = `#${state.room.name} · Orco`;
+  $('empty-title').textContent = `This is the start of #${state.room.name}`;
 }
 
 function renderMessages({ keepScroll = false } = {}) {
@@ -870,13 +879,12 @@ function wireComposer(form, textarea, pendingEl, roomOf, send) {
           el('button', {
             type: 'button',
             'aria-label': `Remove ${item.file.name || 'image'}`,
-            text: '✕',
             onclick: () => {
               URL.revokeObjectURL(item.url);
               pending.splice(i, 1);
               renderPending();
             },
-          }),
+          }, icon('x')),
         ),
       ),
     );
@@ -959,6 +967,7 @@ function wireComposer(form, textarea, pendingEl, roomOf, send) {
 
 const THEMES = ['system', 'light', 'dark'];
 const THEME_LABEL = { system: 'System', light: 'Light', dark: 'Dark' };
+const THEME_ICON = { system: 'monitor', light: 'sun', dark: 'moon' };
 
 function readTheme() {
   try {
@@ -972,7 +981,8 @@ function applyTheme(theme) {
   if (theme === 'system') document.documentElement.removeAttribute('data-theme');
   else document.documentElement.setAttribute('data-theme', theme);
   const button = $('theme');
-  button.textContent = THEME_LABEL[theme];
+  button.replaceChildren(icon(THEME_ICON[theme]));
+  button.setAttribute('aria-label', `Theme: ${THEME_LABEL[theme]}`);
   button.title = `Theme: ${THEME_LABEL[theme]} (click to change)`;
 }
 

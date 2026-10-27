@@ -29,41 +29,50 @@
           <div class="brand"><span class="logo" aria-hidden="true"></span>Orco</div>
         </header>
         <form id="search-form" class="search" role="search">
+          <span class="search-icon" data-icon="search"></span>
           <input id="search-input" type="search" placeholder="Search messages" aria-label="Search messages" autocomplete="off" />
         </form>
-        <button id="inbox" class="inbox-link" type="button">
+        <button id="inbox" class="inbox-link" type="button" data-icon="inbox">
           <span>Inbox</span>
           <span id="inbox-badge" class="badge" hidden></span>
         </button>
         <nav id="nav" class="nav"></nav>
-        <button id="new-project" class="ghost wide" type="button">+ New project</button>
-        <button id="my-agents" class="ghost wide" type="button">My agents</button>
+        <button id="new-project" class="ghost wide" type="button" data-icon="folder-plus">New project</button>
+        <button id="my-agents" class="ghost wide" type="button" data-icon="bot">My agents</button>
         <footer class="me">
           <span id="me-avatar" class="avatar" aria-hidden="true"></span>
           <span id="me-name" class="me-name"></span>
-          <button id="theme" class="ghost small" type="button" title="Theme">System</button>
-          <button id="logout" class="ghost small" type="button">Sign out</button>
+          <button id="theme" class="ghost icon" type="button" title="Theme" aria-label="Theme"></button>
+          <button id="logout" class="ghost icon" type="button" title="Sign out" aria-label="Sign out" data-icon="log-out"></button>
         </footer>
       </aside>
 
       <main class="main">
         <header class="room-head">
-          <button id="toggle-sidebar" class="ghost icon only-narrow" type="button" aria-label="Show rooms">☰</button>
+          <button id="toggle-sidebar" class="ghost icon only-narrow" type="button" aria-label="Show rooms" data-icon="menu"></button>
           <h1 id="room-title" class="room-title"></h1>
           <span id="connection" class="connection" title="Live updates"></span>
-          <button id="show-locks" class="ghost small" type="button" hidden>Locks</button>
-          <button id="show-members" class="ghost small" type="button">Members</button>
-          <button id="add-member" class="ghost small" type="button" hidden>+ Add member</button>
-          <a id="audit-log" class="ghost small button-link" hidden>Audit log</a>
+          <button id="show-locks" class="ghost small" type="button" hidden data-icon="lock"><span class="label">Locks</span></button>
+          <button id="show-members" class="ghost small" type="button" data-icon="users"><span class="label">Members</span></button>
+          <button id="add-member" class="ghost small" type="button" hidden data-icon="user-plus"><span class="label">Add member</span></button>
+          <a id="audit-log" class="ghost small button-link" hidden data-icon="list"><span class="label">Audit log</span></a>
         </header>
         <div id="messages" class="messages" aria-live="polite">
           <button id="load-older" class="ghost small center" type="button" hidden>Load older messages</button>
           <ol id="message-list" class="message-list"></ol>
-          <p id="empty" class="empty muted" hidden>No messages yet. Say hello, or mention an agent with @name.</p>
+          <div id="empty" class="empty-state" hidden>
+            <span class="empty-icon" data-icon="message"></span>
+            <h2 id="empty-title">No messages yet</h2>
+            <ul class="empty-tips">
+              <li><span data-icon="at"></span><span>Mention someone with <code>@name</code>. Agents waiting for mentions pick it up right away.</span></li>
+              <li><span data-icon="task"></span><span>Hand an agent work with <code>/task @agent what you need</code>. You see its progress on the card.</span></li>
+              <li><span data-icon="paperclip"></span><span>Attach, paste or drop images for agents to look at.</span></li>
+            </ul>
+          </div>
         </div>
         <div id="composer-pending" class="pending" aria-label="Images to send"></div>
         <form id="composer" class="composer">
-          <button type="button" class="ghost icon attach" title="Attach images" aria-label="Attach images">📎</button>
+          <button type="button" class="ghost icon attach" title="Attach images" aria-label="Attach images" data-icon="paperclip"></button>
           <input type="file" class="attach-input" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden />
           <textarea id="composer-text" rows="1" placeholder="Message, or /task @agent what you need" aria-label="Message"></textarea>
           <button type="submit" class="primary">Send</button>
@@ -73,12 +82,12 @@
       <aside id="panel" class="panel" hidden>
         <header class="panel-head">
           <h2 id="panel-title"></h2>
-          <button id="close-panel" class="ghost icon" type="button" aria-label="Close">✕</button>
+          <button id="close-panel" class="ghost icon" type="button" aria-label="Close" data-icon="x"></button>
         </header>
         <div id="panel-body" class="panel-body"></div>
         <div id="thread-pending" class="pending" aria-label="Images to send"></div>
         <form id="thread-composer" class="composer" hidden>
-          <button type="button" class="ghost icon attach" title="Attach images" aria-label="Attach images">📎</button>
+          <button type="button" class="ghost icon attach" title="Attach images" aria-label="Attach images" data-icon="paperclip"></button>
           <input type="file" class="attach-input" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden />
           <textarea id="thread-text" rows="1" placeholder="Reply in thread" aria-label="Reply in thread"></textarea>
           <button type="submit" class="primary">Reply</button>

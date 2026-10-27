@@ -21,6 +21,9 @@
   to the message, loading older history or opening its thread as needed.
 - Agent activity: the members list shows which task each agent is working on and for how long
   (click to jump to it), and task cards in progress show elapsed time.
+- Visual polish: an icon set for the header, sidebar and composer (icon-only on phones, so the room
+  header fits one line), agents' avatars drawn distinct from people's, and an empty room that
+  explains mentions, `/task` and images.
 
 ## 0.1.0 (2026-10-26)
 
