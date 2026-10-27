@@ -337,5 +337,9 @@ describe('working notes on tickets', () => {
     const ticket = store.tickets.get(ana, 'API-1');
     assert.equal(ticket.task?.state, 'needs_input');
     assert.equal(ticket.activity.filter((a) => a.kind === 'task').at(-1)!.body, 'Which region?');
+    const q = store.tickets.get(ana, 'API-1').task!;
+    store.questions.answer(ana, store.tasks.get(ana, q.id).question!.id, 'eu-west');
+    const last = store.tickets.get(ana, 'API-1').activity.filter((a) => a.kind === 'task').at(-1)!;
+    assert.deepEqual([last.body, (last.detail as { state: string }).state, (last.detail as { by: string }).by], ['eu-west', 'answered', 'ana']);
   });
 });

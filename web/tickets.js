@@ -15,6 +15,7 @@ const TASK_TEXT = {
   awaiting_approval: 'Waiting for approval',
   requested: 'Queued',
   accepted: 'Working',
+  needs_input: 'Needs input',
   done: 'Task done',
   failed: 'Task failed',
   declined: 'Task declined',
@@ -24,12 +25,14 @@ const TASK_EVENT = {
   requested: (d) => `started task #${d.taskId} for ${d.agent}`,
   awaiting_approval: (d) => `asked to start task #${d.taskId} for ${d.agent}, waiting for its owner's approval`,
   accepted: (d) => `picked up task #${d.taskId}`,
+  needs_input: (d) => `asked a question on task #${d.taskId}`,
+  answered: (d) => `answered ${d.agent}'s question on task #${d.taskId}`,
   done: (d) => `finished task #${d.taskId}`,
   failed: (d) => `could not finish task #${d.taskId}`,
   declined: (d) => `task #${d.taskId} for ${d.agent} was declined`,
   cancelled: (d) => `task #${d.taskId} for ${d.agent} was cancelled`,
 };
-const OPEN_TASK = ['awaiting_approval', 'requested', 'accepted'];
+const OPEN_TASK = ['awaiting_approval', 'requested', 'accepted', 'needs_input'];
 const EMPTY_FILTERS = { q: '', assignee: '', label: '', priority: '', milestone: '', cycle: '' };
 
 export function createTickets(ctx) {
@@ -281,7 +284,11 @@ export function createTickets(ctx) {
         'div',
         { class: 'ticket-meta' },
         ticket.priority !== 'none' ? priorityIcon(ticket.priority) : null,
+        ticket.blockedBy.length ? el('span', { class: 'meta-pill blocked', title: `Waiting on ${ticket.blockedBy.join(', ')}`, text: 'Blocked' }) : null,
         taskBadge(ticket.task),
+        ticket.criteria.total
+          ? el('span', { class: `meta-pill${ticket.criteria.done === ticket.criteria.total ? ' met' : ''}`, title: 'Acceptance criteria met', text: `${ticket.criteria.done}/${ticket.criteria.total}` })
+          : null,
         ticket.labels.map(labelChip),
         ticket.estimate !== null ? el('span', { class: 'meta-pill', title: 'Estimate', text: `${ticket.estimate} pt` }) : null,
         ticket.dueDate ? el('span', { class: `meta-pill${ticket.dueDate < today() && !['completed', 'canceled'].includes(ticket.status.category) ? ' overdue' : ''}`, text: shortDate(ticket.dueDate) }) : null,
@@ -539,7 +546,10 @@ export function createTickets(ctx) {
         title,
         props,
         agentRow,
+        handoffBlock(ticket),
         descriptionBlock(ticket),
+        criteriaBlock(ticket),
+        linksBlock(ticket),
         childrenBlock(ticket),
         activityBlock(ticket, draft),
       ),
@@ -554,6 +564,121 @@ export function createTickets(ctx) {
       textarea.style.height = 'auto';
       textarea.style.height = `${textarea.scrollHeight}px`;
     });
+  }
+
+  function handoffBlock(ticket) {
+    const wrap = el('section', { class: 'detail-section' });
+    const view = () => {
+      t.editing = false;
+      const h = ticket.handoff;
+      wrap.replaceChildren(
+        el(
+          'div',
+          { class: 'section-head' },
+          el('h3', { text: 'Handoff' }),
+          h ? el('span', { class: 'muted small section-meta', text: `${h.by ?? 'Someone'} · ${ago(h.at)}` }) : null,
+          el('span', { class: 'spacer' }),
+          el('button', { class: 'ghost small', type: 'button', text: h ? 'Edit' : 'Add', onclick: edit }),
+        ),
+        h ? el('div', { class: 'md ticket-text handoff' }, richText(h.text)) : el('p', { class: 'muted small', text: 'Where the work stands, for whoever picks it up next. Agents keep this current.' }),
+      );
+    };
+    const edit = () => {
+      t.editing = true;
+      const area = el('textarea', { rows: '5', 'aria-label': 'Handoff note', placeholder: 'Done: … Next: … Branch or PR: … Watch out for: …' });
+      area.value = ticket.handoff?.text ?? '';
+      wrap.replaceChildren(
+        el('div', { class: 'section-head' }, el('h3', { text: 'Handoff' })),
+        area,
+        el(
+          'div',
+          { class: 'row-end' },
+          el('button', { class: 'ghost small', type: 'button', text: 'Cancel', onclick: view }),
+          el('button', {
+            class: 'primary small',
+            type: 'button',
+            text: 'Save',
+            onclick: () => {
+              t.editing = false;
+              void save(ticket, { handoff: area.value });
+            },
+          }),
+        ),
+      );
+      area.focus();
+    };
+    view();
+    return wrap;
+  }
+
+  function criteriaBlock(ticket) {
+    const items = ticket.criteriaItems;
+    const add = el('input', { placeholder: 'Add a criterion, like “Tests pass”', 'aria-label': 'New criterion', maxlength: '300' });
+    add.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && add.value.trim()) {
+        event.preventDefault();
+        void save(ticket, { criteriaAdd: [add.value] });
+      }
+    });
+    const done = items.filter((c) => c.done).length;
+    return el(
+      'section',
+      { class: 'detail-section' },
+      el('div', { class: 'section-head' }, el('h3', { text: `Acceptance criteria${items.length ? ` · ${done}/${items.length}` : ''}` })),
+      el(
+        'ul',
+        { class: 'criteria' },
+        items.map((c) => {
+          const box = el('input', { type: 'checkbox', checked: c.done ? true : null, 'aria-label': c.text });
+          box.addEventListener('change', () => void save(ticket, box.checked ? { criteriaDone: [c.id] } : { criteriaUndone: [c.id] }));
+          return el(
+            'li',
+            { class: c.done ? 'done' : null },
+            el('label', {}, box, el('span', { text: c.text })),
+            me().kind === 'user'
+              ? el('button', { class: 'ghost icon', type: 'button', 'aria-label': `Remove “${c.text}”`, onclick: () => void save(ticket, { criteriaRemove: [c.id] }) }, icon('x'))
+              : null,
+          );
+        }),
+      ),
+      add,
+    );
+  }
+
+  function linksBlock(ticket) {
+    const add = el('input', { placeholder: 'Blocked by… (a key like ORC-4)', 'aria-label': 'Add a blocker', maxlength: '24' });
+    add.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && add.value.trim()) {
+        event.preventDefault();
+        void save(ticket, { blockedByAdd: [add.value.trim().toUpperCase()] });
+      }
+    });
+    const row = (link, remove) =>
+      el(
+        'div',
+        { class: 'child-row link-row' },
+        statusIcon(link.category),
+        el('button', { class: 'ticket-ref link-ref', type: 'button', text: link.ref, onclick: () => void openTicket(link.ref) }),
+        el('span', { class: 'list-title', text: link.title }),
+        remove ? el('button', { class: 'ghost icon', type: 'button', 'aria-label': `Remove blocker ${link.ref}`, onclick: remove }, icon('x')) : null,
+      );
+    const open = ticket.blockedBy.length;
+    return el(
+      'section',
+      { class: 'detail-section' },
+      el(
+        'div',
+        { class: 'section-head' },
+        el('h3', { text: 'Dependencies' }),
+        open ? el('span', { class: 'meta-pill blocked', text: `Blocked by ${open}` }) : null,
+        el('span', { class: 'spacer' }),
+      ),
+      ticket.blockers.length ? el('p', { class: 'muted small link-label', text: 'Blocked by' }) : null,
+      ticket.blockers.map((b) => row(b, () => void save(ticket, { blockedByRemove: [b.ref] }))),
+      ticket.blocking.length ? el('p', { class: 'muted small link-label', text: 'Blocking' }) : null,
+      ticket.blocking.map((b) => row(b, null)),
+      add,
+    );
   }
 
   function descriptionBlock(ticket) {
@@ -641,6 +766,22 @@ export function createTickets(ctx) {
         return v(c.to) ? `moved it to Cycle ${c.to}` : 'took it out of its cycle';
       case 'parent':
         return v(c.to) ? `made it a sub-ticket of ${c.to}` : 'made it a top-level ticket';
+      case 'handoff':
+        return 'updated the handoff note';
+      case 'criteria': {
+        const parts = [];
+        if (c.to.added.length) parts.push(`added ${c.to.added.length === 1 ? `“${c.to.added[0]}”` : `${c.to.added.length} criteria`}`);
+        if (c.to.done.length) parts.push(`met ${c.to.done.map((x) => `“${x}”`).join(', ')}`);
+        if (c.to.undone.length) parts.push(`reopened ${c.to.undone.map((x) => `“${x}”`).join(', ')}`);
+        if (c.to.removed.length) parts.push(`removed ${c.to.removed.map((x) => `“${x}”`).join(', ')}`);
+        return parts.join(', ') || 'edited the criteria';
+      }
+      case 'blockedBy': {
+        const parts = [];
+        if (c.to.length) parts.push(`marked it blocked by ${c.to.join(', ')}`);
+        if (c.from.length) parts.push(`removed blocker ${c.from.join(', ')}`);
+        return parts.join(', ');
+      }
       default:
         return `changed ${c.field}`;
     }

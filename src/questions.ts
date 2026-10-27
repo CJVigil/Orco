@@ -10,6 +10,8 @@ export interface Question {
   room: string;
   projectId: number | null;
   messageId: number;
+  /** The task's message, which the question's thread hangs off. */
+  threadId: number;
   asker: string;
   target: string;
   question: string;
@@ -39,6 +41,7 @@ interface QuestionRow {
   project: string | null;
   room: string;
   message_id: number;
+  thread_id: number;
   asker_id: number;
   asker: string;
   target_id: number;
@@ -54,7 +57,7 @@ interface QuestionRow {
 }
 
 const QUESTION_SELECT = `
-  SELECT q.id, q.task_id, t.room_id, r.project_id, p.name AS project, r.name AS room, q.message_id,
+  SELECT q.id, q.task_id, t.room_id, r.project_id, p.name AS project, r.name AS room, q.message_id, t.message_id AS thread_id,
          q.asker_id, ak.name AS asker, q.target_id, tg.name AS target, tg.owner_id AS target_owner_id,
          ak.owner_id AS assignee_owner_id, q.question, q.answer, ab.name AS answered_by, q.state,
          q.created_at, q.answered_at
@@ -77,6 +80,7 @@ function toQuestion(row: QuestionRow): Question {
     room: row.project ? `${row.project}/${row.room}` : row.room,
     projectId: row.project_id,
     messageId: row.message_id,
+    threadId: row.thread_id,
     asker: row.asker,
     target: row.target,
     question: row.question,

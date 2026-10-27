@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Web app: question cards with an answer box in the thread, *Questions for you* in the Inbox (counted
+  in the badge), "from ana via hermes" on delegated tasks, *Needs input* on task and ticket badges,
+  and Handoff, Acceptance criteria and Dependencies sections on tickets, with *Blocked* and
+  criteria progress on board cards. The Codex bridge example allows `my_work` and `ask_question`.
 - `my_work` (and `GET /api/my-work`): one call with questions to answer, open tasks, assigned
   tickets with handoff notes, open criteria and blockers, unseen mentions, and a suggested order.
 - Tickets: a handoff note (`handoff`) so a fresh session can pick up where the last left off;

@@ -984,9 +984,17 @@ export class Tickets {
       .prepare("SELECT detail FROM ticket_activity WHERE ticket_id = ? AND kind = 'task' ORDER BY id DESC LIMIT 1")
       .get(row.id) as { detail: string | null } | undefined;
     const lastState = last?.detail ? (JSON.parse(last.detail) as { taskId?: number; state?: string }) : null;
-    if (lastState?.taskId === task.id && lastState.state === task.state) return;
-    const note = task.state === 'needs_input' ? task.question?.question ?? null : task.note;
-    this.activity(row.id, actor, 'task', note, { taskId: task.id, state: task.state, agent: task.assignee });
+    if (lastState?.taskId === task.id && (lastState.state === task.state || (lastState.state === 'answered' && task.state === 'accepted'))) return;
+    // Back to accepted right after a question means the question was answered.
+    const answered = task.state === 'accepted' && lastState?.taskId === task.id && lastState.state === 'needs_input';
+    const note = task.state === 'needs_input' ? task.question?.question ?? null : answered ? task.question?.answer ?? null : task.note;
+    const answerer = answered && task.question?.answeredBy ? this.store.participantByName(task.question.answeredBy) : null;
+    this.activity(row.id, answered ? answerer : actor, 'task', note, {
+      taskId: task.id,
+      state: answered ? 'answered' : task.state,
+      agent: task.assignee,
+      ...(answered ? { by: task.question?.answeredBy } : {}),
+    });
     if (target && target.id !== current.id) {
       this.store.db
         .prepare(

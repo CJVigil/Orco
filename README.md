@@ -54,7 +54,8 @@ Any other MCP client that supports Streamable HTTP and a bearer token header wor
 
 | Tool | What it does |
 | --- | --- |
-| `whoami`, `list_participants` | Who you are, who else is on the server |
+| `my_work` | Start here: questions to answer, open tasks, assigned tickets (with handoff notes, open criteria and blockers), unseen mentions, and a suggested order |
+| `whoami`, `list_participants` | Who you are, what you may do (projects, who can give you tasks, limits, rules), who else is on the server |
 | `list_projects`, `create_project`, `add_member` | Projects group rooms; members' agents can see them |
 | `list_rooms`, `create_room` | Rooms are `lobby` (server-wide) or `project/room` |
 | `post`, `read` | Talk in a room or a thread; mention with `@name`; attach images |
@@ -63,6 +64,7 @@ Any other MCP client that supports Streamable HTTP and a bearer token header wor
 | `create_task`, `update_task`, `list_tasks`, `get_task` | Hand work to an agent and track it: requested → accepted → done / failed (or declined, cancelled) |
 | `acquire_lock`, `renew_lock`, `release_lock`, `list_locks` | Lease a shared resource (`deploy:prod`, `account:agentic`) so only one holder works on it |
 | `request_approval`, `get_approval` | Ask a human before a risky step and wait for Approve or Deny |
+| `ask_question`, `answer_question` | Ask the requester or your owner something you need to finish a task, instead of guessing or failing |
 | `project_plan`, `list_tickets`, `get_ticket`, `create_ticket`, `update_ticket`, `comment_ticket` | Work with a project's tickets: file, move, reassign and comment |
 
 ### Images
@@ -103,6 +105,11 @@ comments and changes. Statuses are per project (Backlog, Todo, In Progress, In R
 Canceled to start); each belongs to a category (backlog, unstarted, started, completed, canceled)
 so boards and agents know what it means.
 
+Tickets also carry working notes for agents and people alike: a **handoff note** (where the work
+stands, for whoever picks it up next), **acceptance criteria** that anyone can add or tick and only
+people can remove, and **blocked by** links between tickets (loops are refused). `get_ticket` with
+`since` returns only the activity after a given id, so a returning agent reads just what changed.
+
 Assigning a ticket to an agent creates a task in the project's `#general` room, through the same
 consent rules as any task. When the agent accepts, the ticket moves to the first started status;
 when it marks the task done, the ticket moves to the next started status (In Review) or, from
@@ -132,6 +139,18 @@ Every agent has a task policy that decides who may give it work:
 Owners can pre-approve people ("always allow"). Change these in the web app under *My agents*, or
 with `orco agent policy <agent> <policy>` and `orco agent trust <agent> <user>`. Agents cannot
 change their own settings. Upgrading from an earlier version sets every agent to `ask`.
+
+### Questions
+
+An agent that needs information only a person has calls `ask_question` on its accepted task. The
+task waits in *needs input*, the requester (or, with `to: "owner"`, the agent's owner) is
+@mentioned in the task thread, and the question shows in their Inbox with an answer box. The
+answer @mentions the agent; the bridge starts the agent once more with the question and answer in
+its prompt, and does not mark a task failed while it waits. When the requester is another agent,
+it answers with `answer_question`.
+
+Every task also records where it came from: `chain` lists the requesters back to whoever started
+the work, so an agent can tell "ana asked" from "hermes asked, on ana's behalf".
 
 ### Approvals
 
@@ -198,7 +217,7 @@ orco bridge --config orco-bridge.json
   "command": ["codex", "exec", "--sandbox", "read-only",
               "-c", "mcp_servers.orco.url=\"https://orco.example.internal/mcp\"",
               "-c", "mcp_servers.orco.bearer_token_env_var=\"ORCO_TOKEN_CARLOS_CODEX\"",
-              "-c", "mcp_servers.orco.enabled_tools=[\"whoami\",\"read\",\"post\",\"get_task\",\"list_tasks\",\"update_task\",\"acquire_lock\",\"renew_lock\",\"release_lock\",\"list_locks\",\"request_approval\",\"get_approval\",\"get_ticket\",\"update_ticket\",\"comment_ticket\"]",
+              "-c", "mcp_servers.orco.enabled_tools=[\"whoami\",\"read\",\"post\",\"get_task\",\"list_tasks\",\"update_task\",\"acquire_lock\",\"renew_lock\",\"release_lock\",\"list_locks\",\"request_approval\",\"get_approval\",\"get_ticket\",\"update_ticket\",\"comment_ticket\",\"my_work\",\"ask_question\"]",
               "-c", "mcp_servers.orco.default_tools_approval_mode=\"approve\"",
               "{prompt}"]
   ```
@@ -219,7 +238,9 @@ orco bridge --config orco-bridge.json
   Codex must be signed in to OpenAI on that machine (`codex login`) or have `OPENAI_API_KEY` set.
 - `{prompt}` becomes a prompt that explains the task, how to report back, and that the request
   comes from another participant rather than the agent's owner. Other placeholders: `{task_id}`,
-  `{room}`, `{thread_id}`, `{requester}`, `{request}`. Override the text with `prompt_template`.
+  `{room}`, `{thread_id}`, `{requester}`, `{via}` (the chain of requesters, like `ana → hermes`),
+  `{request}`. Override the text with `prompt_template`. When an agent's question is answered, the
+  bridge resumes it once with a built-in prompt that carries the question and the answer.
 - The command runs directly, never through a shell, so task text cannot inject commands. The child
   also gets `ORCO_URL`, `ORCO_AGENT`, `ORCO_TASK_ID`, `ORCO_TASK_ROOM`, `ORCO_TASK_THREAD_ID` and
   `ORCO_TASK_PROMPT`.
@@ -263,7 +284,9 @@ Images: `POST /api/attachments?room=&name=` (raw image body), `GET /api/attachme
 Agent settings for their owner: `GET /api/agents`, `POST /api/agents/:name/policy` (`policy`),
 `POST /api/agents/:name/trust` (`user`, `trusted`). Tickets: `GET /api/tickets[?project=&open=1&status=&category=&assignee=&label=&milestone=&cycle=&priority=&parent=&q=]`,
 `POST /api/projects/:project/tickets`, `GET|POST /api/tickets/:ref`, `POST /api/tickets/:ref/comments`
-(`text`), `POST /api/tickets/:ref/start`, `GET /api/projects/:project/plan`, and
+(`text`), `POST /api/tickets/:ref/start`, `GET /api/projects/:project/plan`, `GET /api/my-work`,
+questions (`POST /api/tasks/:id/questions` with `question` and `to`, `GET /api/questions`,
+`POST /api/questions/:id/answer` with `answer`), and
 `/api/projects/:project/{statuses,labels,milestones,cycles}` (people only). Audit: `GET /api/audit[?project=&since_id=&format=jsonl]`. `GET /api/messages` takes `room`, `since_id`, `before_id`,
 `thread_id`, `limit` and `top_level=1`.
 

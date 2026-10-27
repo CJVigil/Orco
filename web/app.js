@@ -184,6 +184,7 @@ function renderMessage(message, previous, { inThread = false } = {}) {
       : null,
     message.task ? taskCard(message) : null,
     message.approval ? approvalCard(message) : null,
+    message.question ? questionCard(message) : null,
   );
   if (!inThread) {
     node.append(
@@ -207,6 +208,7 @@ const TASK_LABEL = {
   awaiting_approval: 'Waiting for owner',
   requested: 'Requested',
   accepted: 'In progress',
+  needs_input: 'Needs input',
   done: 'Done',
   failed: 'Failed',
   declined: 'Declined',
@@ -231,14 +233,15 @@ setInterval(() => {
 }, 30_000);
 
 function taskCard(message) {
-  const { id, state: taskState, assignee, since } = message.task;
-  const open = taskState === 'awaiting_approval' || taskState === 'requested' || taskState === 'accepted';
+  const { id, state: taskState, assignee, since, chain = [] } = message.task;
+  const open = ['awaiting_approval', 'requested', 'accepted', 'needs_input'].includes(taskState);
   const mine = message.author === state.me.name || message.owner === state.me.name;
   return el(
     'div',
     { class: `task-card task-${taskState}` },
     el('span', { class: 'task-id', text: `Task #${id}` }),
     el('span', { class: 'muted', text: `→ ${assignee}` }),
+    chain.length > 1 ? el('span', { class: 'muted small', title: chain.join(' → '), text: `from ${chain[0]} via ${chain.slice(1).join(', ')}` }) : null,
     el(
       'span',
       { class: 'chip' },
@@ -316,6 +319,62 @@ function approvalCard(message) {
     pending && approver && !canDecide(message) ? el('span', { class: 'muted', text: `for ${approver}` }) : null,
     buttons,
   );
+}
+
+const QUESTION_LABEL = { open: 'Waiting for an answer', answered: 'Answered', resumed: 'Answered', cancelled: 'Closed' };
+
+function answerBox(questionId, onDone) {
+  const input = el('input', { class: 'answer-input', placeholder: 'Your answer', 'aria-label': 'Answer', maxlength: '4000' });
+  const send = async () => {
+    if (!input.value.trim()) return;
+    try {
+      await api(`/questions/${questionId}/answer`, { method: 'POST', body: { answer: input.value } });
+      onDone?.();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      void send();
+    }
+  });
+  return el('div', { class: 'answer-box' }, input, el('button', { class: 'primary small', type: 'button', text: 'Answer', onclick: () => void send() }));
+}
+
+function questionCard(message) {
+  const q = message.question;
+  const canAnswer = q.state === 'open' && (q.target === state.me.name || message.owner === state.me.name);
+  return el(
+    'div',
+    { class: `question-card question-${q.state}` },
+    el(
+      'div',
+      { class: 'question-head' },
+      el('span', { class: 'task-id', text: `Question for ${q.target}` }),
+      el('span', { class: 'chip', text: QUESTION_LABEL[q.state] }),
+      q.answeredBy ? el('span', { class: 'muted small', text: `by ${q.answeredBy}` }) : null,
+    ),
+    q.answer ? el('div', { class: 'question-answer', text: q.answer }) : null,
+    canAnswer ? answerBox(q.id) : null,
+  );
+}
+
+function onQuestion(question) {
+  let touched = false;
+  for (const list of [state.messages, state.threadMessages]) {
+    for (const message of list) {
+      if (message.question && message.question.id === question.id) {
+        message.question = { ...message.question, state: question.state, answer: question.answer, answeredBy: question.answeredBy };
+        touched = true;
+      }
+    }
+  }
+  scheduleInbox();
+  if (!touched) return;
+  renderMessages({ keepScroll: true });
+  if (state.panel === 'thread') renderThread({ keepScroll: true });
 }
 
 function onApproval(approval) {
@@ -440,7 +499,7 @@ function onTask(task) {
   for (const list of [state.messages, state.threadMessages]) {
     for (const message of list) {
       if (message.task && message.task.id === task.id) {
-        message.task = { id: task.id, state: task.state, assignee: task.assignee, since: task.updatedAt };
+        message.task = { id: task.id, state: task.state, assignee: task.assignee, since: task.updatedAt, chain: task.chain };
         touched = true;
       }
     }
@@ -823,6 +882,7 @@ function connect() {
     tickets.onEvent(JSON.parse(event.data));
     if (state.panel === 'inbox') scheduleInbox();
   });
+  events.addEventListener('question', (event) => onQuestion(JSON.parse(event.data)));
   events.addEventListener('locks', () => {
     if (state.panel === 'locks') void showLocks();
   });
@@ -1099,7 +1159,7 @@ function scheduleInbox() {
 async function refreshInbox() {
   const inbox = await api('/inbox').catch(() => null);
   if (!inbox) return;
-  const count = inbox.counts.approvals + inbox.counts.unseenMentions;
+  const count = inbox.counts.approvals + inbox.counts.questions + inbox.counts.unseenMentions;
   const badge = $('inbox-badge');
   badge.hidden = count === 0;
   badge.textContent = String(count);
@@ -1161,6 +1221,24 @@ function renderInbox(inbox) {
       ),
     );
   }
+  if (inbox.questions.length) {
+    sections.push(
+      inboxHeading('Questions for you', inbox.questions.length),
+      ...inbox.questions.map((q) =>
+        el(
+          'div',
+          { class: 'inbox-card' },
+          el(
+            'button',
+            { class: 'inbox-row', type: 'button', onclick: () => void jumpTo({ id: q.messageId, room: q.room, threadId: q.threadId }) },
+            el('span', { class: 'inbox-meta' }, el('strong', { text: q.asker }), el('span', { class: 'muted', text: ` · task #${q.taskId} · ${q.room}` })),
+            el('span', { class: 'inbox-text', text: q.question }),
+          ),
+          el('div', { class: 'inbox-answer' }, answerBox(q.id, scheduleInbox)),
+        ),
+      ),
+    );
+  }
   if (inbox.tasks.length) {
     sections.push(
       inboxHeading(state.me.kind === 'user' ? "Your agents' open tasks" : 'Your open tasks', inbox.tasks.length),
@@ -1183,11 +1261,13 @@ function renderInbox(inbox) {
   if (inbox.tickets.length) {
     sections.push(inboxHeading('Assigned to you', inbox.tickets.length), ...inbox.tickets.map((t) => tickets.inboxRow(t)));
   }
+  // Open questions are listed above with an answer box; don't repeat them as mentions.
+  const mentions = inbox.mentions.filter((m) => m.question?.state !== 'open');
   sections.push(inboxHeading('Mentions'));
   sections.push(
-    ...(inbox.mentions.length ? inbox.mentions.map((m) => messageRow(m, { unseen: !m.seen })) : [el('p', { class: 'panel-intro muted small', text: 'No one has mentioned you yet.' })]),
+    ...(mentions.length ? mentions.map((m) => messageRow(m, { unseen: !m.seen })) : [el('p', { class: 'panel-intro muted small', text: 'No one has mentioned you yet.' })]),
   );
-  if (!inbox.approvals.length && !inbox.tasks.length) {
+  if (!inbox.approvals.length && !inbox.questions.length && !inbox.tasks.length) {
     sections.unshift(el('p', { class: 'panel-intro muted small', text: 'Nothing needs your decision right now.' }));
   }
   $('panel-body').replaceChildren(...sections);

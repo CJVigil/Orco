@@ -149,6 +149,9 @@ dev machine (Ana)                      private network                 dev machi
 9. **M8 – Tickets and planning** (built): Linear-style tickets per project with configurable statuses,
    board and list views, milestones, cycles, labels, priority and estimates. Assigning a ticket
    to an agent starts a task. Design below.
+10. **M9 – Agent ergonomics** (built): `my_work` briefing, questions with a *needs input* task
+   state and bridge resume, task provenance, capabilities in `whoami`, ticket handoff notes,
+   acceptance criteria, blocked-by links, and `get_ticket` since an activity id.
 
 ## M7 design: OAuth for cloud agents
 
