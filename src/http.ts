@@ -442,9 +442,21 @@ export function createApp(store: Store, options: AppOptions = {}) {
     const approvals = store.approvals.list(me, { pending: true, forMe: true });
     const tasks = me.kind === 'user' ? store.tasks.list(me, { forMyAgents: true, open: true }) : store.tasks.list(me, { assignedToMe: true, open: true });
     const mentions = store.recentMentions(me);
+    // Open tickets assigned to you: work in progress first, then by priority, then most recently touched.
+    const stage = { started: 0, unstarted: 1, backlog: 2 } as Record<string, number>;
+    const urgency = { urgent: 0, high: 1, medium: 2, low: 3, none: 4 } as Record<string, number>;
+    const tickets = store.tickets
+      .list(me, { assignee: me.name, open: true, limit: 100 })
+      .sort(
+        (a, b) =>
+          stage[a.status.category]! - stage[b.status.category]! ||
+          urgency[a.priority]! - urgency[b.priority]! ||
+          b.updatedAt.localeCompare(a.updatedAt),
+      );
     res.json({
       approvals,
       tasks,
+      tickets,
       mentions,
       counts: {
         approvals: approvals.length,

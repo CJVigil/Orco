@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Inbox: *Assigned to you* lists your open tickets, work in progress first and then by priority,
+  and opens a ticket in place. It updates live and does not add to the badge.
 - A calmer, more professional look: neutral palette in both themes, a 14px type scale, quieter
   controls (monochrome primary buttons, borderless pickers, underline tabs), solid avatar colors,
   no colored card edges, and less explanatory copy. The sign-in page names the right command

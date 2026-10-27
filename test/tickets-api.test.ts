@@ -76,6 +76,24 @@ describe('tickets over REST', () => {
   });
 });
 
+describe('tickets in the inbox', () => {
+  it('lists open tickets assigned to you, work in progress first, then by priority', async () => {
+    const make = async (title: string, extra: Record<string, unknown>) =>
+      (await api('ana', 'POST', '/projects/api/tickets', { title, assignee: 'ana', ...extra })).body.ticket.ref;
+    const low = await make('low todo', { priority: 'low', status: 'Todo' });
+    const urgent = await make('urgent todo', { priority: 'urgent', status: 'Todo' });
+    const started = await make('started', { priority: 'low', status: 'In Progress' });
+    await make('done', { status: 'Done' });
+    await api('ben', 'POST', '/projects/api/tickets', { title: 'not mine' }).catch(() => null);
+    const inbox = (await api('ana', 'GET', '/inbox')).body;
+    const refs = inbox.tickets.map((t: { ref: string }) => t.ref);
+    assert.deepEqual(refs.filter((r: string) => [low, urgent, started].includes(r)), [started, urgent, low]);
+    assert.ok(inbox.tickets.every((t: { assignee: { name: string } }) => t.assignee.name === 'ana'));
+    assert.ok(inbox.tickets.every((t: { status: { category: string } }) => !['completed', 'canceled'].includes(t.status.category)));
+    assert.equal(inbox.counts.approvals + inbox.counts.unseenMentions, 0);
+  });
+});
+
 describe('tickets over MCP', () => {
   it('lets an agent file, read, move and comment on tickets', async () => {
     const client = new Client({ name: 'test', version: '0.0.0' }, { versionNegotiation: { mode: 'legacy' } });

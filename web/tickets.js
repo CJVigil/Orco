@@ -1109,5 +1109,28 @@ export function createTickets(ctx) {
     }),
   );
 
-  return { show, onEvent, openTicket, openNewTicket, get project() { return t.project; } };
+  // A ticket as a row in the Inbox: status, key, title, priority and project, opening the ticket.
+  function inboxRow(ticket) {
+    return el(
+      'button',
+      { class: 'inbox-row inbox-ticket', type: 'button', onclick: () => void openTicket(ticket.ref) },
+      el(
+        'span',
+        { class: 'inbox-ticket-line' },
+        statusIcon(ticket.status.category),
+        el('span', { class: 'ticket-ref', text: ticket.ref }),
+        el('span', { class: 'list-title', text: ticket.title }),
+        ticket.priority !== 'none' ? priorityIcon(ticket.priority) : null,
+      ),
+      el(
+        'span',
+        { class: 'inbox-meta muted' },
+        `${ticket.status.name} · ${ticket.project}`,
+        ticket.dueDate ? ` · due ${shortDate(ticket.dueDate)}` : '',
+        ticket.task ? ` · ${TASK_TEXT[ticket.task.state].toLowerCase()}` : '',
+      ),
+    );
+  }
+
+  return { show, onEvent, inboxRow, openTicket, openNewTicket, get project() { return t.project; } };
 }

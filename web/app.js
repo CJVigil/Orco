@@ -819,7 +819,10 @@ function connect() {
     onApproval(JSON.parse(event.data));
     scheduleInbox();
   });
-  events.addEventListener('ticket', (event) => tickets.onEvent(JSON.parse(event.data)));
+  events.addEventListener('ticket', (event) => {
+    tickets.onEvent(JSON.parse(event.data));
+    if (state.panel === 'inbox') scheduleInbox();
+  });
   events.addEventListener('locks', () => {
     if (state.panel === 'locks') void showLocks();
   });
@@ -1129,11 +1132,15 @@ function messageRow(message, { unseen = false } = {}) {
   );
 }
 
+function inboxHeading(text, count) {
+  return el('h3', { class: 'inbox-heading' }, text, count ? el('span', { text: String(count) }) : null);
+}
+
 function renderInbox(inbox) {
   const sections = [];
   if (inbox.approvals.length) {
     sections.push(
-      el('h3', { class: 'inbox-heading', text: `Needs your decision — ${inbox.approvals.length}` }),
+      inboxHeading('Needs your decision', inbox.approvals.length),
       ...inbox.approvals.map((a) =>
         el(
           'div',
@@ -1156,7 +1163,7 @@ function renderInbox(inbox) {
   }
   if (inbox.tasks.length) {
     sections.push(
-      el('h3', { class: 'inbox-heading', text: state.me.kind === 'user' ? `Your agents' open tasks — ${inbox.tasks.length}` : `Your open tasks — ${inbox.tasks.length}` }),
+      inboxHeading(state.me.kind === 'user' ? "Your agents' open tasks" : 'Your open tasks', inbox.tasks.length),
       ...inbox.tasks.map((t) =>
         el(
           'button',
@@ -1173,9 +1180,12 @@ function renderInbox(inbox) {
       ),
     );
   }
-  sections.push(el('h3', { class: 'inbox-heading', text: 'Mentions' }));
+  if (inbox.tickets.length) {
+    sections.push(inboxHeading('Assigned to you', inbox.tickets.length), ...inbox.tickets.map((t) => tickets.inboxRow(t)));
+  }
+  sections.push(inboxHeading('Mentions'));
   sections.push(
-    ...(inbox.mentions.length ? inbox.mentions.map((m) => messageRow(m, { unseen: !m.seen })) : [el('p', { class: 'empty muted', text: 'No one has mentioned you yet.' })]),
+    ...(inbox.mentions.length ? inbox.mentions.map((m) => messageRow(m, { unseen: !m.seen })) : [el('p', { class: 'panel-intro muted small', text: 'No one has mentioned you yet.' })]),
   );
   if (!inbox.approvals.length && !inbox.tasks.length) {
     sections.unshift(el('p', { class: 'panel-intro muted small', text: 'Nothing needs your decision right now.' }));
