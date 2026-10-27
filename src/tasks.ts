@@ -1,15 +1,25 @@
 import { OrcoError } from './errors.js';
+import type { QuestionSummary } from './questions.js';
 import type { Participant, Store } from './store.js';
 
-export type TaskState = 'awaiting_approval' | 'requested' | 'accepted' | 'done' | 'failed' | 'declined' | 'cancelled';
+export type TaskState =
+  | 'awaiting_approval'
+  | 'requested'
+  | 'accepted'
+  | 'needs_input'
+  | 'done'
+  | 'failed'
+  | 'declined'
+  | 'cancelled';
 
-export const OPEN_STATES: readonly TaskState[] = ['awaiting_approval', 'requested', 'accepted'];
+export const OPEN_STATES: readonly TaskState[] = ['awaiting_approval', 'requested', 'accepted', 'needs_input'];
 
 export interface TaskSummary {
   id: number;
   state: TaskState;
   assignee: string;
   since: string;
+  chain: string[];
 }
 
 export interface AgentActivity {
@@ -35,6 +45,10 @@ export interface Task {
   note: string | null;
   createdAt: string;
   updatedAt: string;
+  /** Who the request came from, root first: ["ana", "hermes"] means ana asked hermes, which asked this agent. */
+  chain: string[];
+  /** The latest question the assignee asked on this task, if any. */
+  question: QuestionSummary | null;
 }
 
 interface TaskRow {
@@ -58,6 +72,7 @@ interface TaskRow {
   note: string | null;
   approval_id: number | null;
   approval_state: string | null;
+  open_question: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -67,6 +82,7 @@ const TASK_SELECT = `
          t.requester_id, rq.name AS requester, rq.owner_id AS requester_owner_id,
          t.assignee_id, a.name AS assignee, a.owner_id AS assignee_owner_id, ao.name AS assignee_owner,
          t.parent_id, t.depth, t.request, t.state, t.note, t.approval_id, ap.state AS approval_state,
+         (SELECT q.id FROM questions q WHERE q.task_id = t.id AND q.state = 'open') AS open_question,
          t.created_at, t.updated_at
   FROM tasks t
   LEFT JOIN approvals ap ON ap.id = t.approval_id
@@ -81,6 +97,7 @@ const ASSIGNEE_MOVES: Record<TaskState, TaskState[]> = {
   awaiting_approval: [],
   requested: ['accepted', 'declined', 'done', 'failed'],
   accepted: ['done', 'failed'],
+  needs_input: ['done', 'failed'],
   done: [],
   failed: [],
   declined: [],
@@ -89,11 +106,13 @@ const ASSIGNEE_MOVES: Record<TaskState, TaskState[]> = {
 
 const MAX_REQUEST = 4_000;
 
-function effectiveState(row: { state: TaskState; approval_state: string | null }): TaskState {
-  return row.state === 'requested' && row.approval_state === 'pending' ? 'awaiting_approval' : row.state;
+function effectiveState(row: { state: TaskState; approval_state: string | null; open_question: number | null }): TaskState {
+  if (row.state === 'requested' && row.approval_state === 'pending') return 'awaiting_approval';
+  if (row.state === 'accepted' && row.open_question !== null) return 'needs_input';
+  return row.state;
 }
 
-function toTask(row: TaskRow): Task {
+function baseTask(row: TaskRow): Omit<Task, 'chain' | 'question'> {
   return {
     id: row.id,
     room: row.project ? `${row.project}/${row.room}` : row.room,
@@ -171,7 +190,7 @@ export class Tasks {
   resolveApproval(actor: Participant, approvalId: number, decision: 'approved' | 'denied', note: string | null): void {
     const row = this.store.db.prepare(`${TASK_SELECT} WHERE t.approval_id = ?`).get(approvalId) as TaskRow | undefined;
     if (!row || row.state !== 'requested') return;
-    const room = toTask(row).room;
+    const room = this.toTask(row).room;
     if (decision === 'approved') {
       this.store.post(actor, room, `@${row.assignee} Task #${row.id} approved by ${actor.name}. Go ahead.${note ? `\n${note}` : ''}`, row.message_id, {
         skipRateLimit: true,
@@ -221,11 +240,12 @@ export class Tasks {
       }
     }
     if (state === 'cancelled' && row.approval_id !== null) this.store.approvals.withdraw(row.approval_id);
+    if (state !== 'accepted') this.store.questions.closeForTask(id);
 
     const notify = state === 'cancelled' ? row.assignee : row.requester;
     const ping = state === 'accepted' || notify === actor.name ? '' : `@${notify} `;
     const text = `${ping}Task #${id} ${state}.${trimmedNote ? `\n${trimmedNote}` : ''}`;
-    this.store.post(actor, toTask(row).room, text, row.message_id, {
+    this.store.post(actor, this.toTask(row).room, text, row.message_id, {
       skipRateLimit: true,
       onInsert: () => {
         this.store.db
@@ -244,7 +264,7 @@ export class Tasks {
   get(actor: Participant, id: number): Task {
     const row = this.row(id);
     if (!row || !this.store.canSeeRoomId(actor, row.room_id)) throw new OrcoError('not_found', `No task ${id}`);
-    return toTask(row);
+    return this.toTask(row);
   }
 
   list(
@@ -281,23 +301,31 @@ export class Tasks {
     const rows = this.store.db
       .prepare(`${TASK_SELECT} ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY t.id DESC LIMIT ?`)
       .all(...params, limit) as unknown as TaskRow[];
-    return rows.filter((row) => this.store.canSee(actor, row.project_id)).map(toTask);
+    return rows.filter((row) => this.store.canSee(actor, row.project_id)).map((row) => this.toTask(row));
   }
 
   forApproval(approvalId: number): Task | null {
     const row = this.store.db.prepare(`${TASK_SELECT} WHERE t.approval_id = ?`).get(approvalId) as TaskRow | undefined;
-    return row ? toTask(row) : null;
+    return row ? this.toTask(row) : null;
   }
 
   summaryForMessage(messageId: number): TaskSummary | null {
     const row = this.store.db
       .prepare(
-        `SELECT t.id, t.state, a.name AS assignee, ap.state AS approval_state, t.updated_at AS since FROM tasks t
-         JOIN participants a ON a.id = t.assignee_id LEFT JOIN approvals ap ON ap.id = t.approval_id
+        `SELECT t.id, t.state, a.name AS assignee, ap.state AS approval_state, t.updated_at AS since, t.parent_id,
+                rq.name AS requester,
+                (SELECT q.id FROM questions q WHERE q.task_id = t.id AND q.state = 'open') AS open_question
+         FROM tasks t
+         JOIN participants a ON a.id = t.assignee_id JOIN participants rq ON rq.id = t.requester_id
+         LEFT JOIN approvals ap ON ap.id = t.approval_id
          WHERE t.message_id = ?`,
       )
-      .get(messageId) as (TaskSummary & { approval_state: string | null }) | undefined;
-    return row ? { id: row.id, state: effectiveState(row), assignee: row.assignee, since: row.since } : null;
+      .get(messageId) as
+      | (Omit<TaskSummary, 'chain'> & { approval_state: string | null; open_question: number | null; parent_id: number | null; requester: string })
+      | undefined;
+    return row
+      ? { id: row.id, state: effectiveState(row), assignee: row.assignee, since: row.since, chain: this.chainFor(row) }
+      : null;
   }
 
   activity(viewer: Participant): Map<number, AgentActivity> {
@@ -309,10 +337,34 @@ export class Tasks {
     const byAgent = new Map<number, AgentActivity>();
     for (const row of rows) {
       if (!this.store.canSee(viewer, row.project_id)) continue;
-      const task = toTask(row);
+      const task = this.toTask(row);
       byAgent.set(row.assignee_id, { taskId: task.id, messageId: task.messageId, request: task.request, room: task.room, since: task.updatedAt });
     }
     return byAgent;
+  }
+
+  /** A task as callers see it, with where the request came from and its latest question. */
+  private toTask(row: TaskRow): Task {
+    return { ...baseTask(row), chain: this.chainFor(row), question: this.store.questions.latestForTask(row.id) };
+  }
+
+  private chainFor(row: { requester: string; parent_id: number | null }): string[] {
+    const chain = [row.requester];
+    const step = this.store.db.prepare(
+      'SELECT t.parent_id, rq.name AS requester FROM tasks t JOIN participants rq ON rq.id = t.requester_id WHERE t.id = ?',
+    );
+    for (let parent = row.parent_id; parent !== null && chain.length <= 20; ) {
+      const up = step.get(parent) as { parent_id: number | null; requester: string } | undefined;
+      if (!up) break;
+      chain.unshift(up.requester);
+      parent = up.parent_id;
+    }
+    return chain;
+  }
+
+  /** A task by id without a visibility check, for events. */
+  find(id: number): Task | null {
+    return this.byId(id);
   }
 
   private parentFor(actor: Participant, parentId: number | undefined): TaskRow | null {
@@ -339,6 +391,6 @@ export class Tasks {
 
   private byId(id: number): Task | null {
     const row = this.row(id);
-    return row ? toTask(row) : null;
+    return row ? this.toTask(row) : null;
   }
 }

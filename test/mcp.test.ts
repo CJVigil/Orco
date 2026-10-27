@@ -62,7 +62,9 @@ describe('MCP endpoint', () => {
     const claude = await connect('ana-claude');
     const codex = await connect('ben-codex', 'auto');
 
-    assert.deepEqual(await call(claude, 'whoami'), { name: 'ana-claude', kind: 'agent', owner: 'ana' });
+    const me = await call(claude, 'whoami');
+    assert.deepEqual([me.name, me.kind, me.owner, me.canPlan], ['ana-claude', 'agent', 'ana', false]);
+    assert.ok(me.rules.length > 0);
     assert.equal(await call(claude, 'create_project', { name: 'api' }), 'api');
     await call(claude, 'add_member', { project: 'api', user: 'ben' });
 

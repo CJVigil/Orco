@@ -69,6 +69,10 @@ function formatTask(task: Task) {
     note: task.note,
     parent_id: task.parentId,
     depth: task.depth,
+    requested_via: task.chain.join(' → '),
+    question: task.question
+      ? { id: task.question.id, state: task.question.state, to: task.question.target, question: task.question.question, answer: task.question.answer, answered_by: task.question.answeredBy }
+      : null,
     updated: task.updatedAt,
   };
 }
@@ -152,6 +156,7 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         'Orco is a team chat shared by humans and AI agents. Rooms are named "room" (server-wide, like "lobby") ' +
         'or "project/room" (like "api/general"). Mention someone with @name. Use wait_for_mentions to receive work. ' +
         'When a mention carries a task, accept it with update_task, do the work, then mark it done or failed with a note. ' +
+        'If you need information only a person has, ask with ask_question rather than guessing or failing the task. ' +
         'Before touching a shared resource (a deploy, a branch, an account), take its lock with acquire_lock and release it after. ' +
         'Before a risky or irreversible step, ask your owner with request_approval and wait for the answer. ' +
         'Projects also keep tickets (like API-12): see project_plan, list_tickets and get_ticket. When a task asks you to work on a ' +
@@ -164,8 +169,10 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
   server.registerTool(
     'whoami',
     {
-      annotations: annotate('whoami'), description: 'Show which Orco participant you are and who owns you.' },
-    async () => run(() => ({ name: me.name, kind: me.kind, owner: store.ownerName(me) })),
+      annotations: annotate('whoami'),
+      description: 'Who you are, who owns you, which projects you can see, who may give you tasks, your limits, and the rules you work under.',
+    },
+    async () => run(() => store.capabilities(me)),
   );
 
   server.registerTool(
@@ -333,6 +340,41 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
     },
     async ({ agent, room, request, parent_task_id }) =>
       run(() => formatTask(store.tasks.create(me, { agent, room, request, parentId: parent_task_id }))),
+  );
+
+  server.registerTool(
+    'ask_question',
+    {
+      annotations: annotate('ask_question'),
+      description:
+        'Ask a person a question you need answered to finish an accepted task, instead of guessing or failing it. ' +
+        'The task waits in needs_input; the answer arrives as a mention in the task thread (and the bridge wakes you with it). ' +
+        'Ask the requester (default) or your own owner.',
+      inputSchema: z.object({
+        task_id: z.number().int(),
+        question: z.string().describe('One clear question, with the options if there are any'),
+        to: z.enum(['requester', 'owner']).optional(),
+      }),
+    },
+    async ({ task_id, question, to }) =>
+      run(() => {
+        const q = store.questions.ask(me, task_id, question, to);
+        return { question_id: q.id, asked: q.target, task_id, state: 'needs_input' };
+      }),
+  );
+
+  server.registerTool(
+    'answer_question',
+    {
+      annotations: annotate('answer_question'),
+      description: 'Answer a question another agent asked you about a task you requested.',
+      inputSchema: z.object({ question_id: z.number().int(), answer: z.string() }),
+    },
+    async ({ question_id, answer }) =>
+      run(() => {
+        const q = store.questions.answer(me, question_id, answer);
+        return `Answered question ${q.id}; ${q.asker} has been told.`;
+      }),
   );
 
   server.registerTool(

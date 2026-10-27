@@ -287,6 +287,45 @@ const MIGRATIONS = [
   );
   CREATE INDEX ticket_activity_ticket ON ticket_activity (ticket_id, id);
   `,
+  `
+  CREATE TABLE questions (
+    id INTEGER PRIMARY KEY,
+    task_id INTEGER NOT NULL REFERENCES tasks(id),
+    message_id INTEGER NOT NULL REFERENCES messages(id),
+    asker_id INTEGER NOT NULL REFERENCES participants(id),
+    target_id INTEGER NOT NULL REFERENCES participants(id),
+    question TEXT NOT NULL,
+    answer TEXT,
+    answered_by INTEGER REFERENCES participants(id),
+    state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open', 'answered', 'resumed', 'cancelled')),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    answered_at TEXT
+  );
+  CREATE INDEX questions_task ON questions (task_id, state);
+  CREATE INDEX questions_target ON questions (target_id, state);
+  CREATE UNIQUE INDEX questions_message ON questions (message_id);
+
+  ALTER TABLE tickets ADD COLUMN handoff TEXT NOT NULL DEFAULT '';
+  ALTER TABLE tickets ADD COLUMN handoff_by INTEGER REFERENCES participants(id);
+  ALTER TABLE tickets ADD COLUMN handoff_at TEXT;
+
+  CREATE TABLE ticket_criteria (
+    id INTEGER PRIMARY KEY,
+    ticket_id INTEGER NOT NULL REFERENCES tickets(id),
+    text TEXT NOT NULL,
+    done INTEGER NOT NULL DEFAULT 0 CHECK (done IN (0, 1)),
+    position INTEGER NOT NULL
+  );
+  CREATE INDEX ticket_criteria_ticket ON ticket_criteria (ticket_id, position);
+
+  CREATE TABLE ticket_links (
+    blocker_id INTEGER NOT NULL REFERENCES tickets(id),
+    blocked_id INTEGER NOT NULL REFERENCES tickets(id),
+    PRIMARY KEY (blocker_id, blocked_id),
+    CHECK (blocker_id != blocked_id)
+  );
+  CREATE INDEX ticket_links_blocked ON ticket_links (blocked_id);
+  `,
 ];
 
 export function openDatabase(path: string): DatabaseSync {

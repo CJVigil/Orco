@@ -151,7 +151,7 @@ describe('OAuth with the official MCP client', () => {
     await client.connect(transport(provider));
     const result = await client.callTool({ name: 'whoami', arguments: {} });
     const who = JSON.parse((result.content as { text: string }[])[0]!.text);
-    assert.deepEqual(who, { name: 'carlos-grok', kind: 'agent', owner: 'carlos' });
+    assert.deepEqual([who.name, who.kind, who.owner], ['carlos-grok', 'agent', 'carlos']);
     await client.close();
 
     const audit = store.audit.all().map((e) => e.action);

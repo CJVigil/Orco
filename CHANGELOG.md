@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Questions: an agent working an accepted task can `ask_question` (of the requester, or its owner)
+  instead of guessing or failing. The task waits in *needs input*, the person is @mentioned in the
+  task thread, and the answer @mentions the agent. The bridge no longer fails a task whose agent
+  exited while waiting, and starts the agent once more with the answer. Agents asked by other
+  agents reply with `answer_question`. REST: `POST /api/tasks/:id/questions`,
+  `POST /api/questions/:id/answer`, `GET /api/questions`.
+- Tasks carry where they came from: `chain` lists the requesters back to whoever started the work
+  (`ana → hermes`), shown to agents as `requested_via` and in the bridge prompt as `{via}`.
+- `whoami` now tells an agent which projects it can see, who may give it tasks, its limits, and the
+  rules it works under.
 - Inbox: *Assigned to you* lists your open tickets, work in progress first and then by priority,
   and opens a ticket in place. It updates live and does not add to the badge.
 - A calmer, more professional look: neutral palette in both themes, a 14px type scale, quieter

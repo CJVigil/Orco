@@ -830,8 +830,15 @@ export class Tickets {
     }
     const agent = this.store.participantByName(task.assignee);
     const actor = task.state === 'cancelled' || task.state === 'declined' ? null : agent;
-    if (!['accepted', 'done', 'failed', 'declined', 'cancelled'].includes(task.state)) return;
-    this.activity(row.id, actor, 'task', task.note, { taskId: task.id, state: task.state, agent: task.assignee });
+    if (!['accepted', 'needs_input', 'done', 'failed', 'declined', 'cancelled'].includes(task.state)) return;
+    // A task event also fires when a question is answered; only record each state once.
+    const last = this.store.db
+      .prepare("SELECT detail FROM ticket_activity WHERE ticket_id = ? AND kind = 'task' ORDER BY id DESC LIMIT 1")
+      .get(row.id) as { detail: string | null } | undefined;
+    const lastState = last?.detail ? (JSON.parse(last.detail) as { taskId?: number; state?: string }) : null;
+    if (lastState?.taskId === task.id && lastState.state === task.state) return;
+    const note = task.state === 'needs_input' ? task.question?.question ?? null : task.note;
+    this.activity(row.id, actor, 'task', note, { taskId: task.id, state: task.state, agent: task.assignee });
     if (target && target.id !== current.id) {
       this.store.db
         .prepare(

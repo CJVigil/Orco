@@ -13,7 +13,17 @@ if (FAKE_MODE === 'crash') {
   console.error('fake agent crashing on purpose');
   process.exit(3);
 }
-if (FAKE_MODE === 'hang') {
+if (FAKE_MODE === 'ask') {
+  // First run: accept and ask. Second run (resumed): the prompt carries the answer; finish with it.
+  const prompt = process.argv[2] ?? '';
+  const answer = /Answer from \S+: (.*)/.exec(prompt)?.[1];
+  if (answer) {
+    await call(`/tasks/${ORCO_TASK_ID}`, { state: 'done', note: `resumed with: ${answer}` });
+  } else {
+    await call(`/tasks/${ORCO_TASK_ID}`, { state: 'accepted' });
+    await call(`/tasks/${ORCO_TASK_ID}/questions`, { question: 'staging or prod?' });
+  }
+} else if (FAKE_MODE === 'hang') {
   setInterval(() => {}, 1000);
 } else {
   await call(`/tasks/${ORCO_TASK_ID}`, { state: 'accepted' });

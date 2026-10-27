@@ -12,6 +12,7 @@ import { RateLimiter } from './ratelimit.js';
 import { type Message, OrcoError, type Participant, type Store } from './store.js';
 import type { Task, TaskState } from './tasks.js';
 import type { Approval } from './approvals.js';
+import type { Question, QuestionTarget } from './questions.js';
 import type { Priority, StatusCategory, TicketFilter, TicketInput } from './tickets.js';
 
 declare module 'express-serve-static-core' {
@@ -273,6 +274,31 @@ export function createApp(store: Store, options: AppOptions = {}) {
     res.send(image.data);
   });
 
+  api.post('/tasks/:id/questions', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a task id');
+    const to = str(req.body?.to, 'to') as QuestionTarget | undefined;
+    res.status(201).json(store.questions.ask(req.participant!, id, str(req.body?.question, 'question') ?? '', to));
+  });
+  api.get('/questions', (req, res) => {
+    res.json(store.questions.waitingOn(req.participant!));
+  });
+  api.get('/questions/:id', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a question id');
+    res.json(store.questions.get(req.participant!, id));
+  });
+  api.post('/questions/:id/answer', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a question id');
+    res.json(store.questions.answer(req.participant!, id, str(req.body?.answer, 'answer') ?? ''));
+  });
+  api.post('/questions/:id/resume', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a question id');
+    res.json({ resumed: store.questions.claimResume(req.participant!, id) });
+  });
+
   api.get('/tickets', (req, res) => {
     const q = req.query;
     const text = (value: unknown) => (typeof value === 'string' && value ? value : undefined);
@@ -442,6 +468,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
     const approvals = store.approvals.list(me, { pending: true, forMe: true });
     const tasks = me.kind === 'user' ? store.tasks.list(me, { forMyAgents: true, open: true }) : store.tasks.list(me, { assignedToMe: true, open: true });
     const mentions = store.recentMentions(me);
+    const questions = store.questions.waitingOn(me);
     // Open tickets assigned to you: work in progress first, then by priority, then most recently touched.
     const stage = { started: 0, unstarted: 1, backlog: 2 } as Record<string, number>;
     const urgency = { urgent: 0, high: 1, medium: 2, low: 3, none: 4 } as Record<string, number>;
@@ -457,10 +484,12 @@ export function createApp(store: Store, options: AppOptions = {}) {
       approvals,
       tasks,
       tickets,
+      questions,
       mentions,
       counts: {
         approvals: approvals.length,
-        unseenMentions: mentions.filter((m) => !m.seen && m.approval?.state !== 'pending').length,
+        questions: questions.length,
+        unseenMentions: mentions.filter((m) => !m.seen && m.approval?.state !== 'pending' && m.question?.state !== 'open').length,
       },
     });
   });
@@ -560,6 +589,9 @@ export function createApp(store: Store, options: AppOptions = {}) {
     const onApproval = (approval: Approval) => {
       if (store.canSee(me, approval.projectId)) send('approval', approval);
     };
+    const onQuestion = (question: Question) => {
+      if (store.canSee(me, question.projectId)) send('question', question);
+    };
     const onLock = ({ projectId }: { projectId: number }) => {
       if (store.canSee(me, projectId)) send('locks', { projectId });
     };
@@ -573,6 +605,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
     store.events.on('task', onTask);
     store.events.on('lock', onLock);
     store.events.on('approval', onApproval);
+    store.events.on('question', onQuestion);
     presence.events.on('change', onPresence);
     const release = presence.hold(me.id, req.query.bridge === '1' && me.kind === 'agent' ? 'bridges' : 'streams');
     const heartbeat = setInterval(() => res.write(': ping\n\n'), HEARTBEAT_MS);
@@ -585,6 +618,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
       store.events.off('task', onTask);
       store.events.off('lock', onLock);
       store.events.off('approval', onApproval);
+      store.events.off('question', onQuestion);
       presence.events.off('change', onPresence);
       release();
     });
