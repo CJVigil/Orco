@@ -16,6 +16,9 @@
 - Messages render Markdown: bold, italics, strikethrough, inline code, fenced code blocks with a
   copy button, lists, headings, quotes, links. Built as DOM nodes, never HTML strings.
 - `@` autocomplete in the message box, and date separators between days.
+- Inbox: decisions waiting for you (approve or deny in place), your agents' open tasks, and your
+  mentions, with a badge in the sidebar. Message search across the rooms you can see; results jump
+  to the message, loading older history or opening its thread as needed.
 
 ## 0.1.0 (2026-10-26)
 

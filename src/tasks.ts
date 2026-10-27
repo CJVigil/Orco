@@ -240,7 +240,14 @@ export class Tasks {
 
   list(
     actor: Participant,
-    filter: { assignedToMe?: boolean; requestedByMe?: boolean; room?: string; open?: boolean; limit?: number } = {},
+    filter: {
+      assignedToMe?: boolean;
+      requestedByMe?: boolean;
+      forMyAgents?: boolean;
+      room?: string;
+      open?: boolean;
+      limit?: number;
+    } = {},
   ): Task[] {
     const where: string[] = [];
     const params: (number | string)[] = [];
@@ -250,6 +257,10 @@ export class Tasks {
     }
     if (filter.requestedByMe) {
       where.push('t.requester_id = ?');
+      params.push(actor.id);
+    }
+    if (filter.forMyAgents) {
+      where.push('a.owner_id = ?');
       params.push(actor.id);
     }
     if (filter.room) {

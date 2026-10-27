@@ -28,6 +28,13 @@
         <header class="sidebar-head">
           <div class="brand"><span class="logo" aria-hidden="true"></span>Orco</div>
         </header>
+        <form id="search-form" class="search" role="search">
+          <input id="search-input" type="search" placeholder="Search messages" aria-label="Search messages" autocomplete="off" />
+        </form>
+        <button id="inbox" class="inbox-link" type="button">
+          <span>Inbox</span>
+          <span id="inbox-badge" class="badge" hidden></span>
+        </button>
         <nav id="nav" class="nav"></nav>
         <button id="new-project" class="ghost wide" type="button">+ New project</button>
         <button id="my-agents" class="ghost wide" type="button">My agents</button>

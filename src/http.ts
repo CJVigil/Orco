@@ -273,6 +273,31 @@ export function createApp(store: Store, options: AppOptions = {}) {
     res.status(204).end();
   });
 
+  api.get('/inbox', (req, res) => {
+    const me = req.participant!;
+    const approvals = store.approvals.list(me, { pending: true, forMe: true });
+    const tasks = me.kind === 'user' ? store.tasks.list(me, { forMyAgents: true, open: true }) : store.tasks.list(me, { assignedToMe: true, open: true });
+    const mentions = store.recentMentions(me);
+    res.json({
+      approvals,
+      tasks,
+      mentions,
+      counts: {
+        approvals: approvals.length,
+        unseenMentions: mentions.filter((m) => !m.seen && m.approval?.state !== 'pending').length,
+      },
+    });
+  });
+  api.post('/inbox/seen', (req, res) => {
+    const upTo = optionalInt(req.body?.up_to_id);
+    if (upTo === undefined) throw new OrcoError('invalid', 'Expected up_to_id');
+    store.markMentionsSeen(req.participant!, upTo);
+    res.status(204).end();
+  });
+  api.get('/search', (req, res) => {
+    res.json(store.search(req.participant!, String(req.query.q ?? ''), optionalInt(req.query.limit)));
+  });
+
   api.get('/approvals', (req, res) => {
     const room = typeof req.query.room === 'string' && req.query.room ? req.query.room : undefined;
     res.json(

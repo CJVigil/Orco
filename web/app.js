@@ -222,17 +222,21 @@ function canDecide(message) {
   return message.author !== state.me.name && message.owner !== state.me.name;
 }
 
-async function decide(message, decision, alwaysAllow = false) {
+async function decideApproval(id, decision, alwaysAllow = false) {
   let note;
   if (decision === 'denied') {
     note = prompt('Reason (optional, shared with the requester)');
     if (note === null) return;
   }
   try {
-    await api(`/approvals/${message.approval.id}`, { method: 'POST', body: { decision, note: note || undefined, always_allow: alwaysAllow } });
+    await api(`/approvals/${id}`, { method: 'POST', body: { decision, note: note || undefined, always_allow: alwaysAllow } });
   } catch (err) {
     alert(err.message);
   }
+}
+
+function decide(message, decision, alwaysAllow = false) {
+  return decideApproval(message.approval.id, decision, alwaysAllow);
 }
 
 function approvalCard(message) {
@@ -483,14 +487,19 @@ async function selectRoom() {
   renderNav();
   renderRoomTitle();
   if (changed) {
-    state.messages = await api(`/messages?room=${encodeURIComponent(room.ref)}&top_level=1&limit=${PAGE}`);
-    $('load-older').hidden = state.messages.length < PAGE;
-    renderMessages();
-    if (state.panel === 'members') showMembers();
-    else if (state.panel === 'locks' && state.room.project) showLocks();
-    else closePanel();
-    $('composer-text').focus();
+    state.roomLoad = (async () => {
+      const messages = await api(`/messages?room=${encodeURIComponent(room.ref)}&top_level=1&limit=${PAGE}`);
+      if (state.room.ref !== room.ref) return;
+      state.messages = messages;
+      $('load-older').hidden = state.messages.length < PAGE;
+      renderMessages();
+      if (state.panel === 'members') showMembers();
+      else if (state.panel === 'locks' && state.room.project) showLocks();
+      else if (state.panel === 'thread' || state.panel === 'locks') closePanel();
+      $('composer-text').focus();
+    })();
   }
+  await state.roomLoad;
 }
 
 async function loadOlder() {
@@ -646,6 +655,7 @@ const seen = new Set();
 function onMessage(message) {
   if (seen.has(message.id)) return;
   seen.add(message.id);
+  if (message.mentions.includes(state.me.name)) scheduleInbox();
   const here = state.room && message.room === state.room.ref;
   if (message.threadId === null) {
     if (here) {
@@ -691,8 +701,14 @@ function connect() {
     await loadStructure();
     await selectRoom();
   });
-  events.addEventListener('task', (event) => onTask(JSON.parse(event.data)));
-  events.addEventListener('approval', (event) => onApproval(JSON.parse(event.data)));
+  events.addEventListener('task', (event) => {
+    onTask(JSON.parse(event.data));
+    scheduleInbox();
+  });
+  events.addEventListener('approval', (event) => {
+    onApproval(JSON.parse(event.data));
+    scheduleInbox();
+  });
   events.addEventListener('locks', () => {
     if (state.panel === 'locks') void showLocks();
   });
@@ -956,6 +972,178 @@ async function roomPeople(room) {
 attachMentionAutocomplete($('composer-text'), () => roomPeople(state.room), el);
 attachMentionAutocomplete($('thread-text'), () => roomPeople(state.rooms.find((r) => r.ref === state.thread?.room)), el);
 
+/* Inbox and search */
+
+let inboxTimer = null;
+
+function scheduleInbox() {
+  clearTimeout(inboxTimer);
+  inboxTimer = setTimeout(() => void refreshInbox(), 250);
+}
+
+async function refreshInbox() {
+  const inbox = await api('/inbox').catch(() => null);
+  if (!inbox) return;
+  const count = inbox.counts.approvals + inbox.counts.unseenMentions;
+  const badge = $('inbox-badge');
+  badge.hidden = count === 0;
+  badge.textContent = String(count);
+  $('inbox').classList.toggle('has-items', count > 0);
+  if (state.panel === 'inbox') renderInbox(inbox);
+}
+
+function snippet(text, max = 160) {
+  const flat = text
+    .replace(/```[\w+#.-]*\n?/g, '')
+    .replace(/(\*\*|__|~~|`)/g, '')
+    .replace(/^\s{0,3}(#{1,3}|>|[-*+]|\d+[.)])\s+/gm, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
+function messageRow(message, { unseen = false } = {}) {
+  return el(
+    'button',
+    { class: `inbox-row${unseen ? ' unseen' : ''}`, type: 'button', onclick: () => void jumpTo(message) },
+    el(
+      'span',
+      { class: 'inbox-meta' },
+      el('strong', { text: message.author }),
+      el('span', { class: 'muted', text: ` in #${message.room}` }),
+      el('time', { class: 'muted', text: ` · ${formatTime(message.createdAt)}` }),
+    ),
+    el('span', { class: 'inbox-text', text: snippet(message.text) || '(image)' }),
+  );
+}
+
+function renderInbox(inbox) {
+  const sections = [];
+  if (inbox.approvals.length) {
+    sections.push(
+      el('h3', { class: 'inbox-heading', text: `Needs your decision — ${inbox.approvals.length}` }),
+      ...inbox.approvals.map((a) =>
+        el(
+          'div',
+          { class: 'inbox-card' },
+          el(
+            'button',
+            { class: 'inbox-row', type: 'button', onclick: () => void jumpTo({ id: a.messageId, room: a.room, threadId: null }) },
+            el('span', { class: 'inbox-meta' }, el('strong', { text: a.requester }), el('span', { class: 'muted', text: ` in #${a.room}` })),
+            el('span', { class: 'inbox-text', text: a.kind === 'task' ? `Task for your agent: ${a.summary}` : a.summary }),
+          ),
+          el(
+            'div',
+            { class: 'row-end' },
+            el('button', { class: 'ghost small danger', type: 'button', text: 'Deny', onclick: () => void decideApproval(a.id, 'denied') }),
+            el('button', { class: 'primary small', type: 'button', text: 'Approve', onclick: () => void decideApproval(a.id, 'approved') }),
+          ),
+        ),
+      ),
+    );
+  }
+  if (inbox.tasks.length) {
+    sections.push(
+      el('h3', { class: 'inbox-heading', text: state.me.kind === 'user' ? `Your agents' open tasks — ${inbox.tasks.length}` : `Your open tasks — ${inbox.tasks.length}` }),
+      ...inbox.tasks.map((t) =>
+        el(
+          'button',
+          { class: 'inbox-row', type: 'button', onclick: () => void jumpTo({ id: t.messageId, room: t.room, threadId: null }) },
+          el(
+            'span',
+            { class: 'inbox-meta' },
+            el('strong', { text: `Task #${t.id}` }),
+            el('span', { class: 'muted', text: ` → ${t.assignee} · ` }),
+            el('span', { class: `chip task-${t.state}`, text: TASK_LABEL[t.state] }),
+          ),
+          el('span', { class: 'inbox-text', text: snippet(t.request) }),
+        ),
+      ),
+    );
+  }
+  sections.push(el('h3', { class: 'inbox-heading', text: 'Mentions' }));
+  sections.push(
+    ...(inbox.mentions.length ? inbox.mentions.map((m) => messageRow(m, { unseen: !m.seen })) : [el('p', { class: 'empty muted', text: 'No one has mentioned you yet.' })]),
+  );
+  if (!inbox.approvals.length && !inbox.tasks.length) {
+    sections.unshift(el('p', { class: 'panel-intro muted small', text: 'Nothing needs your decision right now.' }));
+  }
+  $('panel-body').replaceChildren(...sections);
+}
+
+async function showInbox() {
+  openPanel('inbox', 'Inbox');
+  const inbox = await api('/inbox');
+  if (state.panel !== 'inbox') return;
+  renderInbox(inbox);
+  const newest = inbox.mentions.find((m) => !m.seen);
+  if (newest) {
+    await api('/inbox/seen', { method: 'POST', body: { up_to_id: newest.id } });
+    void refreshInbox();
+  }
+}
+
+async function runSearch(query) {
+  openPanel('search', `Search: ${query}`);
+  let results;
+  try {
+    results = await api(`/search?q=${encodeURIComponent(query)}`);
+  } catch (err) {
+    $('panel-body').replaceChildren(el('p', { class: 'empty muted', text: err.message }));
+    return;
+  }
+  if (state.panel !== 'search') return;
+  $('panel-body').replaceChildren(
+    el('p', {
+      class: 'panel-intro muted small',
+      text: results.length ? `${results.length}${results.length === 50 ? '+' : ''} ${results.length === 1 ? 'message' : 'messages'}` : 'No messages match.',
+    }),
+    ...results.map((m) => messageRow(m)),
+  );
+}
+
+async function jumpTo(target) {
+  $('sidebar').classList.remove('open');
+  if (target.threadId) {
+    if (location.hash.slice(1) !== target.room) location.hash = target.room;
+    await openThread({ id: target.threadId, room: target.room });
+    flash(`#panel-body [data-id="${target.id}"]`);
+    return;
+  }
+  if (state.room?.ref !== target.room) {
+    location.hash = target.room;
+    await selectRoom();
+  }
+  await state.roomLoad;
+  for (let page = 0; page < 10 && !state.messages.some((m) => m.id === target.id); page++) {
+    if ($('load-older').hidden) break;
+    await loadOlder();
+  }
+  if (window.matchMedia('(max-width: 900px)').matches) closePanel();
+  flash(`#message-list [data-id="${target.id}"]`);
+}
+
+function flash(selector) {
+  const node = document.querySelector(selector);
+  if (!node) return;
+  node.scrollIntoView({ block: 'center' });
+  node.classList.add('flash');
+  setTimeout(() => node.classList.remove('flash'), 2000);
+}
+
+$('inbox').addEventListener('click', () => {
+  $('sidebar').classList.remove('open');
+  return state.panel === 'inbox' ? closePanel() : void showInbox();
+});
+$('search-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  const query = $('search-input').value.trim();
+  if (query.length >= 2) {
+    $('sidebar').classList.remove('open');
+    void runSearch(query);
+  }
+});
+
 /* Boot */
 
 async function start() {
@@ -972,6 +1160,7 @@ async function start() {
   await loadStructure();
   await selectRoom();
   connect();
+  void refreshInbox();
 }
 
 function showLogin() {

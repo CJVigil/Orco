@@ -496,6 +496,38 @@ export class Store {
     return rows.reverse().map((row) => this.toMessage(row));
   }
 
+  recentMentions(actor: Participant, limit = 30): (Message & { seen: boolean })[] {
+    const seenUpTo = (this.db.prepare('SELECT seen_mention_id FROM participants WHERE id = ?').get(actor.id) as { seen_mention_id: number })
+      .seen_mention_id;
+    const rows = this.db
+      .prepare(
+        `${MESSAGE_SELECT}
+         JOIN mentions mn ON mn.message_id = m.id AND mn.participant_id = ?
+         ORDER BY m.id DESC LIMIT ?`,
+      )
+      .all(actor.id, Math.min(Math.max(limit, 1), 100)) as unknown as MessageRow[];
+    return rows
+      .filter((row) => this.canSeeRoomId(actor, row.room_id))
+      .map((row) => ({ ...this.toMessage(row), seen: row.id <= seenUpTo }));
+  }
+
+  search(actor: Participant, query: string, limit = 50): Message[] {
+    const q = query.trim();
+    if (q.length < 2) throw new OrcoError('invalid', 'Search for at least 2 characters');
+    if (q.length > 200) throw new OrcoError('invalid', 'That search is too long');
+    const pattern = `%${q.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
+    const userId = this.humanOf(actor);
+    const rows = this.db
+      .prepare(
+        `${MESSAGE_SELECT}
+         WHERE m.text LIKE ? ESCAPE '\\'
+           AND (r.project_id IS NULL OR r.project_id IN (SELECT project_id FROM project_members WHERE user_id = ?))
+         ORDER BY m.id DESC LIMIT ?`,
+      )
+      .all(pattern, userId, Math.min(Math.max(limit, 1), 100)) as unknown as MessageRow[];
+    return rows.map((row) => this.toMessage(row));
+  }
+
   unseenMentions(actor: Participant): Message[] {
     const rows = this.db
       .prepare(

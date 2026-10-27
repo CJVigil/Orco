@@ -854,6 +854,124 @@ a.button-link:hover {
   align-items: center;
 }
 
+/* Inbox and search */
+
+.search {
+  padding: 0.6rem 0.75rem 0.25rem;
+}
+
+.search input {
+  padding: 0.4rem 0.6rem;
+  font-size: 0.9rem;
+  background: var(--bg);
+}
+
+.inbox-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: calc(100% - 1rem);
+  margin: 0.25rem 0.5rem 0;
+  padding: 0.35rem 0.6rem;
+  border-radius: 6px;
+  color: var(--muted);
+  text-align: left;
+}
+
+.inbox-link:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.inbox-link.has-items {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.inbox-link .badge {
+  background: var(--danger);
+  color: #fff;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  padding: 0 0.45rem;
+  font-weight: 700;
+}
+
+.inbox-heading {
+  margin: 0.75rem 1rem 0.35rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.inbox-card {
+  margin: 0 0.5rem 0.5rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--listen);
+  border-radius: 8px;
+  background: var(--bg-raised);
+  padding-bottom: 0.4rem;
+}
+
+.inbox-card .row-end {
+  margin: 0 0.6rem;
+}
+
+.inbox-row {
+  display: grid;
+  gap: 0.15rem;
+  width: 100%;
+  padding: 0.5rem 1rem;
+  text-align: left;
+  border-radius: 0;
+}
+
+.inbox-card .inbox-row {
+  padding: 0.5rem 0.6rem 0.3rem;
+}
+
+.inbox-row:hover {
+  background: var(--bg-hover);
+}
+
+.inbox-row.unseen {
+  border-left: 3px solid var(--mention-me-edge);
+  background: var(--mention-me);
+}
+
+.inbox-meta {
+  font-size: 0.85rem;
+}
+
+.inbox-text {
+  font-size: 0.88rem;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.msg.flash {
+  animation: flash 2s ease-out;
+}
+
+@keyframes flash {
+  0%,
+  30% {
+    background: var(--mention-bg);
+  }
+  100% {
+    background: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .msg.flash {
+    animation: none;
+    outline: 2px solid var(--accent);
+  }
+}
+
 /* Locks */
 
 .panel-actions {
