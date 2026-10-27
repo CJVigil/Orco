@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpHandler } from '@modelcontextprotocol/server';
 import express, { type NextFunction, type Request, type Response } from 'express';
+import { MAX_ATTACHMENT_BYTES } from './attachments.js';
 import { buildMcpServer } from './mcp.js';
 import { OAUTH_SCOPE, OAuth } from './oauth.js';
 import { oauthRouter } from './oauth-routes.js';
@@ -70,6 +71,17 @@ function rejectCrossSite(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
+function rejectCrossSiteUpload(req: Request, res: Response, next: NextFunction) {
+  if (!req.viaCookie) return next();
+  const origin = req.headers.origin;
+  const sameOrigin = origin ? new URL(origin).host === req.headers.host : req.headers['sec-fetch-site'] === 'same-origin';
+  if (!sameOrigin) {
+    res.status(403).json({ error: 'Cross-site upload refused' });
+    return;
+  }
+  next();
+}
+
 function optionalInt(value: unknown): number | undefined {
   if (value === undefined || value === '') return undefined;
   const n = Number(value);
@@ -90,11 +102,14 @@ export function createApp(store: Store, options: AppOptions = {}) {
   const registrations = new RateLimiter(20, 3600_000, options.now);
   const app = express();
   app.disable('x-powered-by');
-  const mcp = createMcpHandler(({ requestInfo, authInfo }) => {
-    const participant = authInfo ? store.participantByName(authInfo.clientId) : null;
-    if (!participant) throw new Error(`Unauthenticated MCP request to ${requestInfo?.url ?? 'unknown'}`);
-    return buildMcpServer(store, presence, participant);
-  });
+  const mcp = createMcpHandler(
+    ({ requestInfo, authInfo }) => {
+      const participant = authInfo ? store.participantByName(authInfo.clientId) : null;
+      if (!participant) throw new Error(`Unauthenticated MCP request to ${requestInfo?.url ?? 'unknown'}`);
+      return buildMcpServer(store, presence, participant);
+    },
+    { maxRequestBodySize: 16 * 1024 * 1024 },
+  );
   const mcpNode = toNodeHandler(mcp);
   const auth = authenticate(store, presence);
   const mcpAuth = authenticate(store, presence, oauth);
@@ -189,8 +204,27 @@ export function createApp(store: Store, options: AppOptions = {}) {
     );
   });
   api.post('/messages', (req, res) => {
-    const { room, text, thread_id } = req.body ?? {};
-    res.status(201).json(store.post(req.participant!, String(room ?? ''), String(text ?? ''), optionalInt(thread_id)));
+    const { room, text, thread_id, attachment_ids } = req.body ?? {};
+    const ids = Array.isArray(attachment_ids) ? attachment_ids.map((id: unknown) => optionalInt(id) ?? NaN) : [];
+    if (ids.some((id) => Number.isNaN(id))) throw new OrcoError('invalid', 'attachment_ids must be integers');
+    res
+      .status(201)
+      .json(store.post(req.participant!, String(room ?? ''), String(text ?? ''), optionalInt(thread_id), { attachmentIds: ids }));
+  });
+  api.get('/attachments/:id', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected an image id');
+    const image = store.attachments.get(req.participant!, id);
+    res.set({
+      'Content-Type': image.mime,
+      'Content-Length': String(image.size),
+      'Content-Disposition': `inline; filename="${image.name.replace(/"/g, '')}"`,
+      'Content-Security-Policy': "default-src 'none'; sandbox",
+      'X-Content-Type-Options': 'nosniff',
+      'Cache-Control': 'private, max-age=31536000, immutable',
+      ETag: `"${image.sha256}"`,
+    });
+    res.send(image.data);
   });
 
   api.get('/tasks', (req, res) => {
@@ -350,6 +384,18 @@ export function createApp(store: Store, options: AppOptions = {}) {
     });
   });
 
+  app.post(
+    '/api/attachments',
+    auth,
+    rejectCrossSiteUpload,
+    express.raw({ type: () => true, limit: MAX_ATTACHMENT_BYTES + 1 }),
+    (req, res) => {
+      const data = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+      const name = typeof req.query.name === 'string' ? req.query.name : undefined;
+      res.status(201).json(store.attachments.upload(req.participant!, String(req.query.room ?? ''), data, name));
+    },
+  );
+
   app.use('/api', api);
 
   app.use(
@@ -357,7 +403,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
       setHeaders: (res) => {
         res.setHeader(
           'Content-Security-Policy',
-          "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'",
+          "default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'",
         );
         res.setHeader('X-Content-Type-Options', 'nosniff');
         res.setHeader('Referrer-Policy', 'no-referrer');
@@ -369,6 +415,11 @@ export function createApp(store: Store, options: AppOptions = {}) {
     if (res.headersSent) return next(err);
     if (err instanceof OrcoError) {
       res.status(STATUS[err.code]).json({ error: err.message, code: err.code });
+      return;
+    }
+    const status = (err as { status?: unknown }).status;
+    if (typeof status === 'number' && status >= 400 && status < 500) {
+      res.status(status).json({ error: status === 413 ? 'That is too large' : 'Bad request' });
       return;
     }
     console.error(err);

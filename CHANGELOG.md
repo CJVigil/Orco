@@ -9,6 +9,10 @@
 - *My agents* lists connected apps with *Revoke*.
 - Failed sign-ins are rate limited (10 per address per 15 minutes).
 - `deploy/Caddyfile.public` exposes only what cloud agents need.
+- Images in messages: attach with 📎, paste or drag and drop; agents attach them to `post` (base64
+  or upload id) and look at them with `view_image`. PNG, JPEG, GIF and WebP only, 5 MB each.
+- Theme switch: System, Light or Dark, remembered per browser.
+- Phone layout: the room header no longer squeezes out the room name.
 
 ## 0.1.0 (2026-10-26)
 

@@ -185,6 +185,22 @@ const MIGRATIONS = [
   );
   CREATE INDEX oauth_tokens_grant ON oauth_tokens (grant_id);
   `,
+  `
+  CREATE TABLE attachments (
+    id INTEGER PRIMARY KEY,
+    room_id INTEGER NOT NULL REFERENCES rooms(id),
+    message_id INTEGER REFERENCES messages(id),
+    uploader_id INTEGER NOT NULL REFERENCES participants(id),
+    name TEXT NOT NULL,
+    mime TEXT NOT NULL CHECK (mime IN ('image/png', 'image/jpeg', 'image/gif', 'image/webp')),
+    size INTEGER NOT NULL,
+    sha256 TEXT NOT NULL,
+    data BLOB NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX attachments_message ON attachments (message_id);
+  CREATE INDEX attachments_unattached ON attachments (message_id, created_at);
+  `,
 ];
 
 export function openDatabase(path: string): DatabaseSync {

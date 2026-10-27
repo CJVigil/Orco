@@ -109,6 +109,19 @@ function renderMessage(message, previous, { inThread = false } = {}) {
       el('time', { class: 'time', datetime: message.createdAt, title: new Date(message.createdAt).toLocaleString(), text: formatTime(message.createdAt) }),
     ),
     el('div', { class: 'msg-body' }, richText(message.text)),
+    message.attachments?.length
+      ? el(
+          'div',
+          { class: 'images' },
+          message.attachments.map((image) =>
+            el(
+              'a',
+              { href: `/api/attachments/${image.id}`, target: '_blank', rel: 'noopener', title: image.name },
+              el('img', { src: `/api/attachments/${image.id}`, alt: image.name, loading: 'lazy' }),
+            ),
+          ),
+        )
+      : null,
     message.task ? taskCard(message) : null,
     message.approval ? approvalCard(message) : null,
   );
@@ -465,6 +478,7 @@ function openPanel(kind, title) {
   $('panel').hidden = false;
   $('panel-title').textContent = title;
   $('thread-composer').hidden = kind !== 'thread';
+  $('thread-pending').hidden = kind !== 'thread';
 }
 
 function closePanel() {
@@ -744,7 +758,90 @@ function autosize(textarea) {
   textarea.style.height = `${textarea.scrollHeight}px`;
 }
 
-function wireComposer(form, textarea, send) {
+const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_IMAGES = 4;
+
+async function uploadImage(file, room) {
+  const res = await fetch(`/api/attachments?room=${encodeURIComponent(room)}&name=${encodeURIComponent(file.name || 'image')}`, {
+    method: 'POST',
+    headers: { 'Content-Type': file.type || 'application/octet-stream' },
+    body: file,
+    credentials: 'same-origin',
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data.id;
+}
+
+function wireComposer(form, textarea, pendingEl, roomOf, send) {
+  const pending = [];
+  const fileInput = form.querySelector('.attach-input');
+  const renderPending = () => {
+    pendingEl.replaceChildren(
+      ...pending.map((item, i) =>
+        el(
+          'div',
+          { class: 'pending-item' },
+          el('img', { src: item.url, alt: item.file.name || 'image' }),
+          el('button', {
+            type: 'button',
+            'aria-label': `Remove ${item.file.name || 'image'}`,
+            text: '✕',
+            onclick: () => {
+              URL.revokeObjectURL(item.url);
+              pending.splice(i, 1);
+              renderPending();
+            },
+          }),
+        ),
+      ),
+    );
+  };
+  const addFiles = (files) => {
+    for (const file of files) {
+      if (!IMAGE_TYPES.includes(file.type)) {
+        alert(`${file.name || 'That file'} is not a PNG, JPEG, GIF or WebP image.`);
+        continue;
+      }
+      if (file.size > MAX_IMAGE_BYTES) {
+        alert(`${file.name || 'That image'} is over 5 MB.`);
+        continue;
+      }
+      if (pending.length >= MAX_IMAGES) {
+        alert('You can attach up to 4 images.');
+        break;
+      }
+      pending.push({ file, url: URL.createObjectURL(file) });
+    }
+    renderPending();
+  };
+  form.querySelector('.attach').addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', () => {
+    addFiles([...fileInput.files]);
+    fileInput.value = '';
+  });
+  textarea.addEventListener('paste', (event) => {
+    const files = [...(event.clipboardData?.files || [])];
+    if (files.length) {
+      event.preventDefault();
+      addFiles(files);
+    }
+  });
+  form.addEventListener('dragover', (event) => {
+    if ([...(event.dataTransfer?.items || [])].some((i) => i.kind === 'file')) {
+      event.preventDefault();
+      form.classList.add('dragging');
+    }
+  });
+  form.addEventListener('dragleave', () => form.classList.remove('dragging'));
+  form.addEventListener('drop', (event) => {
+    form.classList.remove('dragging');
+    if (event.dataTransfer?.files?.length) {
+      event.preventDefault();
+      addFiles([...event.dataTransfer.files]);
+    }
+  });
   textarea.addEventListener('input', () => autosize(textarea));
   textarea.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
@@ -755,12 +852,18 @@ function wireComposer(form, textarea, send) {
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     const text = textarea.value.trim();
-    if (!text) return;
+    if (!text && pending.length === 0) return;
     textarea.disabled = true;
     try {
-      const message = await send(text);
+      const room = roomOf();
+      const ids = [];
+      for (const item of pending) ids.push(await uploadImage(item.file, room));
+      const message = await send(text, ids);
       textarea.value = '';
       autosize(textarea);
+      for (const item of pending) URL.revokeObjectURL(item.url);
+      pending.length = 0;
+      renderPending();
       if (message) onMessage(message);
     } catch (err) {
       alert(err.message);
@@ -770,6 +873,36 @@ function wireComposer(form, textarea, send) {
     }
   });
 }
+
+const THEMES = ['system', 'light', 'dark'];
+const THEME_LABEL = { system: 'System', light: 'Light', dark: 'Dark' };
+
+function readTheme() {
+  try {
+    return THEMES.includes(localStorage.getItem('orco-theme')) ? localStorage.getItem('orco-theme') : 'system';
+  } catch {
+    return 'system';
+  }
+}
+
+function applyTheme(theme) {
+  if (theme === 'system') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme', theme);
+  const button = $('theme');
+  button.textContent = THEME_LABEL[theme];
+  button.title = `Theme: ${THEME_LABEL[theme]} (click to change)`;
+}
+
+applyTheme(readTheme());
+$('theme').addEventListener('click', () => {
+  const next = THEMES[(THEMES.indexOf(readTheme()) + 1) % THEMES.length];
+  try {
+    localStorage.setItem('orco-theme', next);
+  } catch {
+    // Without storage the choice lasts until the page reloads.
+  }
+  applyTheme(next);
+});
 
 /* Boot */
 
@@ -836,17 +969,18 @@ document.addEventListener('visibilitychange', () => {
 
 const TASK_COMMAND = /^\/task\s+@?([a-z0-9][a-z0-9-]{0,31})\s+([\s\S]+)$/;
 
-wireComposer($('composer'), $('composer-text'), async (text) => {
+wireComposer($('composer'), $('composer-text'), $('composer-pending'), () => state.room.ref, async (text, ids) => {
   if (text.startsWith('/task')) {
+    if (ids.length) throw new Error('Tasks cannot carry images yet; post the image, then create the task.');
     const match = TASK_COMMAND.exec(text);
     if (!match) throw new Error('Use /task @agent what you need');
     await api('/tasks', { method: 'POST', body: { agent: match[1], room: state.room.ref, request: match[2] } });
     return null;
   }
-  return api('/messages', { method: 'POST', body: { room: state.room.ref, text } });
+  return api('/messages', { method: 'POST', body: { room: state.room.ref, text, attachment_ids: ids } });
 });
-wireComposer($('thread-composer'), $('thread-text'), (text) =>
-  api('/messages', { method: 'POST', body: { room: state.thread.room, text, thread_id: state.thread.id } }),
+wireComposer($('thread-composer'), $('thread-text'), $('thread-pending'), () => state.thread.room, (text, ids) =>
+  api('/messages', { method: 'POST', body: { room: state.thread.room, text, thread_id: state.thread.id, attachment_ids: ids } }),
 );
 
 start().catch((err) => {

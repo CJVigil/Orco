@@ -2,6 +2,7 @@ import { McpServer, type ToolAnnotations } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import type { Presence } from './presence.js';
 import { MAX_APPROVAL_TTL_SECONDS } from './approvals.js';
+import { MAX_ATTACHMENTS_PER_MESSAGE } from './attachments.js';
 import { MAX_TTL_SECONDS, MIN_TTL_SECONDS } from './locks.js';
 import { type Message, OrcoError, type Participant, type Store } from './store.js';
 import type { Task } from './tasks.js';
@@ -22,6 +23,7 @@ const READ_ONLY_TOOLS = new Set([
   'get_task',
   'list_locks',
   'get_approval',
+  'view_image',
 ]);
 
 function annotate(tool: string): ToolAnnotations {
@@ -46,6 +48,7 @@ function formatMessage(message: Message) {
     mentions: message.mentions,
     task: message.task,
     approval: message.approval,
+    images: message.attachments.map((a) => ({ id: a.id, name: a.name, type: a.mime, bytes: a.size })),
     at: message.createdAt,
   };
 }
@@ -158,14 +161,26 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
     'post',
     {
       annotations: annotate('post'),
-      description: 'Post a message to a room, optionally as a reply in a thread. Mention people or agents with @name.',
+      description:
+        'Post a message to a room, optionally as a reply in a thread. Mention people or agents with @name. ' +
+        'Attach up to 4 PNG, JPEG, GIF or WebP images (5 MB each) as base64 in images, or by id after uploading ' +
+        'with POST /api/attachments.',
       inputSchema: z.object({
         room: z.string().describe('"lobby" or "project/room"'),
-        text: z.string(),
+        text: z.string().describe('May be empty when images are attached'),
         thread_id: z.number().int().optional().describe('Reply in the thread of this message id'),
+        images: z
+          .array(z.object({ data: z.string().describe('Base64-encoded image bytes'), name: z.string().optional() }))
+          .max(MAX_ATTACHMENTS_PER_MESSAGE)
+          .optional(),
+        image_ids: z.array(z.number().int()).max(MAX_ATTACHMENTS_PER_MESSAGE).optional().describe('Ids from POST /api/attachments'),
       }),
     },
-    async ({ room, text, thread_id }) => run(() => formatMessage(store.post(me, room, text, thread_id))),
+    async ({ room, text, thread_id, images, image_ids }) =>
+      run(() => {
+        const uploaded = (images ?? []).map((image) => store.attachments.upload(me, room, Buffer.from(image.data, 'base64'), image.name).id);
+        return formatMessage(store.post(me, room, text, thread_id, { attachmentIds: [...(image_ids ?? []), ...uploaded] }));
+      }),
   );
 
   server.registerTool(
@@ -185,6 +200,29 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         note: UNTRUSTED_NOTE,
         messages: store.read(me, room, { sinceId: since_id, threadId: thread_id, limit }).map(formatMessage),
       })),
+  );
+
+  server.registerTool(
+    'view_image',
+    {
+      annotations: annotate('view_image'),
+      description: 'Look at an image someone shared. Returns the image itself, for models that can see images.',
+      inputSchema: z.object({ image_id: z.number().int().describe('From the images list on a message') }),
+    },
+    async ({ image_id }) => {
+      try {
+        const image = store.attachments.get(me, image_id);
+        return {
+          content: [
+            { type: 'text' as const, text: `${image.name} (${image.mime}, ${image.size} bytes), shared by another participant. ${UNTRUSTED_NOTE}` },
+            { type: 'image' as const, data: image.data.toString('base64'), mimeType: image.mime },
+          ],
+        };
+      } catch (err) {
+        if (err instanceof OrcoError) return { content: [{ type: 'text' as const, text: `${err.code}: ${err.message}` }], isError: true };
+        throw err;
+      }
+    },
   );
 
   server.registerTool(

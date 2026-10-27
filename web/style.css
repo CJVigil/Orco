@@ -22,7 +22,7 @@
 }
 
 @media (prefers-color-scheme: light) {
-  :root {
+  :root:not([data-theme='dark']) {
     --bg: #f7f8fc;
     --bg-side: #eceff8;
     --bg-raised: #ffffff;
@@ -41,6 +41,31 @@
     --idle: #9aa1bd;
     --listen: #c98500;
   }
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f7f8fc;
+  --bg-side: #eceff8;
+  --bg-raised: #ffffff;
+  --bg-hover: #e3e8f7;
+  --border: #d5dbee;
+  --text: #161b33;
+  --muted: #5c6589;
+  --accent: #3d5bd9;
+  --accent-strong: #2c47b8;
+  --accent-text: #ffffff;
+  --mention-bg: rgba(61, 91, 217, 0.1);
+  --mention-me: rgba(230, 160, 20, 0.14);
+  --mention-me-edge: #d08a00;
+  --danger: #c9283a;
+  --ok: #138a63;
+  --idle: #9aa1bd;
+  --listen: #c98500;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
 }
 
 * {
@@ -719,6 +744,79 @@ a.button-link:hover {
   overflow-wrap: anywhere;
 }
 
+/* Images */
+
+.images {
+  grid-column: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.35rem;
+}
+
+.images a {
+  display: block;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-raised);
+}
+
+.images img {
+  display: block;
+  max-width: 360px;
+  max-height: 280px;
+  width: auto;
+  height: auto;
+}
+
+@media (max-width: 480px) {
+  .images img {
+    max-width: calc(100vw - 6rem);
+  }
+}
+
+.pending {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0 1rem;
+}
+
+.pending:empty {
+  display: none;
+}
+
+.pending-item {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.pending-item img {
+  display: block;
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+}
+
+.pending-item button {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  padding: 0 0.35rem;
+  background: rgba(5, 8, 20, 0.7);
+  color: #fff;
+  border-radius: 6px;
+  font-size: 0.8rem;
+}
+
+.composer.dragging textarea {
+  outline: 2px dashed var(--accent);
+}
+
 /* Composer */
 
 .composer {
@@ -913,6 +1011,20 @@ a.button-link:hover {
   .msg {
     padding-left: 0.75rem;
     padding-right: 0.75rem;
+  }
+
+  .room-head {
+    flex-wrap: wrap;
+    row-gap: 0.25rem;
+  }
+
+  .room-title {
+    flex: 1 1 calc(100% - 3.5rem);
+  }
+
+  .room-head > button,
+  .room-head > a {
+    white-space: nowrap;
   }
 
   .composer {

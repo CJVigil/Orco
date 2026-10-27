@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import type { DatabaseSync } from 'node:sqlite';
 import { type ApprovalSummary, Approvals } from './approvals.js';
+import { type AttachmentInfo, Attachments } from './attachments.js';
 import { Audit } from './audit.js';
 import { OrcoError } from './errors.js';
 import { Locks } from './locks.js';
@@ -45,6 +46,7 @@ export interface Message {
   replyCount: number;
   task: TaskSummary | null;
   approval: ApprovalSummary | null;
+  attachments: AttachmentInfo[];
 }
 
 export type TaskPolicy = 'open' | 'ask' | 'owner_only';
@@ -146,6 +148,7 @@ export class Store {
   readonly locks: Locks;
   readonly approvals: Approvals;
   readonly audit: Audit;
+  readonly attachments: Attachments;
   private readonly recent = new Map<string, number[]>();
 
   constructor(
@@ -159,6 +162,7 @@ export class Store {
     this.locks = new Locks(this);
     this.approvals = new Approvals(this);
     this.audit = new Audit(this);
+    this.attachments = new Attachments(this);
   }
 
   checkRate(actor: Participant, kind: 'post' | 'task'): void {
@@ -413,12 +417,14 @@ export class Store {
     roomRef: string,
     text: string,
     threadId?: number,
-    options: { onInsert?: (messageId: number, room: Room) => void; skipRateLimit?: boolean } = {},
+    options: { onInsert?: (messageId: number, room: Room) => void; skipRateLimit?: boolean; attachmentIds?: number[] } = {},
   ): Message {
     const trimmed = text.trim();
-    if (!trimmed) throw new OrcoError('invalid', 'Message text is empty');
+    const attachmentIds = options.attachmentIds ?? [];
+    if (!trimmed && attachmentIds.length === 0) throw new OrcoError('invalid', 'Message text is empty');
     if (trimmed.length > MAX_TEXT) throw new OrcoError('invalid', `Message is over ${MAX_TEXT} characters`);
     const room = this.room(actor, roomRef);
+    this.attachments.checkAttachable(actor, room, attachmentIds);
     if (!options.skipRateLimit) this.checkRate(actor, 'post');
     let thread: number | null = null;
     if (threadId !== undefined) {
@@ -439,6 +445,7 @@ export class Store {
       messageId = Number(lastInsertRowid);
       const insertMention = this.db.prepare('INSERT INTO mentions (message_id, participant_id) VALUES (?, ?)');
       for (const target of mentioned) insertMention.run(messageId, target.id);
+      this.attachments.attach(messageId, attachmentIds);
       options.onInsert?.(messageId, room);
       this.db.exec('COMMIT');
     } catch (err) {
@@ -450,7 +457,13 @@ export class Store {
     this.audit.record(actor, 'message.post', {
       projectId: room.projectId,
       subject: `message:${messageId}`,
-      detail: { room: room.ref, threadId: thread, text: trimmed, mentions: message.mentions },
+      detail: {
+        room: room.ref,
+        threadId: thread,
+        text: trimmed,
+        mentions: message.mentions,
+        ...(attachmentIds.length ? { attachments: this.attachments.auditDetail(attachmentIds) } : {}),
+      },
     });
     this.events.emit('message', message);
     for (const target of mentioned) this.events.emit(`mention:${target.id}`, message);
@@ -600,6 +613,7 @@ export class Store {
       replyCount: row.reply_count,
       task: this.tasks.summaryForMessage(row.id),
       approval: this.approvals.summaryForMessage(row.id),
+      attachments: this.attachments.forMessage(row.id),
     };
   }
 }

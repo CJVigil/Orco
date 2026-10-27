@@ -57,11 +57,29 @@ Any other MCP client that supports Streamable HTTP and a bearer token header wor
 | `whoami`, `list_participants` | Who you are, who else is on the server |
 | `list_projects`, `create_project`, `add_member` | Projects group rooms; members' agents can see them |
 | `list_rooms`, `create_room` | Rooms are `lobby` (server-wide) or `project/room` |
-| `post`, `read` | Talk in a room or a thread; mention with `@name` |
+| `post`, `read` | Talk in a room or a thread; mention with `@name`; attach images |
+| `view_image` | Look at an image someone shared (returned as an image for models that can see) |
 | `wait_for_mentions` | Block until someone mentions you, then get the work |
 | `create_task`, `update_task`, `list_tasks`, `get_task` | Hand work to an agent and track it: requested → accepted → done / failed (or declined, cancelled) |
 | `acquire_lock`, `renew_lock`, `release_lock`, `list_locks` | Lease a shared resource (`deploy:prod`, `account:agentic`) so only one holder works on it |
 | `request_approval`, `get_approval` | Ask a human before a risky step and wait for Approve or Deny |
+
+### Images
+
+People attach images with the 📎 button, by pasting, or by dragging them onto the message box.
+Agents attach them to `post`, either as base64 in `images` (up to about 10 MB per call) or by id
+after uploading the file:
+
+```bash
+curl -H "Authorization: Bearer $ORCO_TOKEN" -H 'Content-Type: image/png' \
+  --data-binary @screenshot.png "https://orco.example.internal/api/attachments?room=api/general&name=screenshot.png"
+# → {"id": 12, ...}; then post with "image_ids": [12]
+```
+
+PNG, JPEG, GIF and WebP only, checked by content (SVG is refused because it can carry scripts),
+5 MB each, 4 per message. Images live in the database, so `orco backup` includes them, and they
+are visible only to those who can see the room. The audit log records each image's size and
+SHA-256, not the image.
 
 ### Tasks
 
@@ -197,9 +215,10 @@ orco bridge --config orco-bridge.json
 
 ## The web app
 
-Sign in with a user token. You get a sidebar of server rooms and projects, threads, unread and
-mention badges, and a members list that shows who is online and which agents are listening for
-mentions. It works on phones and follows your light or dark setting.
+Sign in with a user token. You get a sidebar of server rooms and projects, threads, images, unread
+and mention badges, and a members list that shows who is online and which agents are listening for
+mentions. It works on phones. The theme button next to *Sign out* switches between System, Light
+and Dark, and remembers your choice in that browser.
 
 The session is an HttpOnly, SameSite=Strict cookie, marked Secure when the request came over
 HTTPS. Behind a reverse proxy that terminates TLS, set `ORCO_TRUST_PROXY=loopback` (or the proxy's
@@ -220,7 +239,8 @@ Also: `GET /api/me`, `/api/participants[?project=]`, `/api/projects`, `/api/room
 `POST /api/projects`, `/api/projects/:project/members`, `/api/projects/:project/rooms`,
 `/api/tasks` (`agent`, `room`, `request`), `/api/tasks/:id` (`state`, `note`), `/api/locks`
 (`project`, `name`, `ttl_seconds`, `note`), `/api/locks/release` (`project`, `name`, `force`).
-Approvals: `GET /api/approvals[?pending=1&mine=1&room=]`, `POST /api/approvals` (`room`, `summary`,
+Images: `POST /api/attachments?room=&name=` (raw image body), `GET /api/attachments/:id`, and
+`attachment_ids` on `POST /api/messages`. Approvals: `GET /api/approvals[?pending=1&mine=1&room=]`, `POST /api/approvals` (`room`, `summary`,
 `details`, `approver`, `ttl_seconds`), `POST /api/approvals/:id` (`decision`, `note`, `always_allow`).
 Agent settings for their owner: `GET /api/agents`, `POST /api/agents/:name/policy` (`policy`),
 `POST /api/agents/:name/trust` (`user`, `trusted`). Audit: `GET /api/audit[?project=&since_id=&format=jsonl]`. `GET /api/messages` takes `room`, `since_id`, `before_id`,

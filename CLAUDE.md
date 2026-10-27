@@ -17,6 +17,8 @@ and milestones before changing behaviour.
   routes and server-rendered sign-in and consent pages (escape every value). Off unless
   `ORCO_PUBLIC_URL` is set. OAuth access tokens are accepted on `/mcp` only.
 - `src/ratelimit.ts` in-memory rate limits for sign-ins and client registration.
+- `src/attachments.ts` images in messages (`store.attachments`). Accept only formats recognised by
+  their bytes (never SVG) and serve them with `nosniff` and a sandboxing CSP.
 - `src/errors.ts` `OrcoError` and its codes.
 - `src/mcp.ts` MCP tools (SDK v2, `@modelcontextprotocol/server`).
 - `src/http.ts` Express app: `/mcp`, `/api`, auth, the event stream, static files.
