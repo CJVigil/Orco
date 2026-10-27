@@ -9,6 +9,7 @@ const INLINE = [
   { type: 'strike', re: /~~([^~\n]+?)~~/ },
   { type: 'italic', re: /(?<![\w*])\*([^*\s][^*\n]*?)\*(?![\w*])|(?<![\w_])_([^_\s][^_\n]*?)_(?![\w_])/ },
   { type: 'mention', re: /(?<![\w@])@([a-z0-9][a-z0-9-]{0,31})\b/ },
+  { type: 'ticket', re: /(?<![\w/@.-])([A-Z][A-Z0-9]{0,9})-(\d{1,9})(?![\w-])/ },
 ];
 
 export function renderInline(text, opts) {
@@ -49,6 +50,9 @@ export function renderInline(text, opts) {
         break;
       case 'mention':
         out.push(opts.mention ? opts.mention(m[1]) : `@${m[1]}`);
+        break;
+      case 'ticket':
+        out.push(opts.ticket?.(m[1], Number(m[2])) ?? m[0]);
         break;
     }
     rest = rest.slice(m.index + m[0].length);

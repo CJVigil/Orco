@@ -345,18 +345,23 @@ export class Store {
     }
   }
 
-  listProjects(actor: Participant): (Project & { members: string[] })[] {
+  listProjects(actor: Participant): (Project & { members: string[]; ticketKey: string })[] {
     const rows = this.db
       .prepare(
-        `SELECT p.id, p.name, group_concat(u.name, ',') AS members
+        `SELECT p.id, p.name, p.ticket_key, group_concat(u.name, ',') AS members
          FROM projects p
          JOIN project_members pm ON pm.project_id = p.id
          JOIN participants u ON u.id = pm.user_id
          WHERE p.id IN (SELECT project_id FROM project_members WHERE user_id = ?)
          GROUP BY p.id ORDER BY p.name`,
       )
-      .all(this.humanOf(actor)) as unknown as { id: number; name: string; members: string }[];
-    return rows.map((row) => ({ id: row.id, name: row.name, members: row.members.split(',').sort() }));
+      .all(this.humanOf(actor)) as unknown as { id: number; name: string; ticket_key: string | null; members: string }[];
+    return rows.map((row) => {
+      if (row.ticket_key === null) this.tickets.setup(row.id);
+      const ticketKey =
+        row.ticket_key ?? (this.db.prepare('SELECT ticket_key FROM projects WHERE id = ?').get(row.id) as { ticket_key: string }).ticket_key;
+      return { id: row.id, name: row.name, members: row.members.split(',').sort(), ticketKey };
+    });
   }
 
   addMember(actor: Participant, projectName: string, userName: string): void {

@@ -7,7 +7,11 @@ type Node = string | { tag: string; props: Record<string, string>; children: Nod
 const h = (tag: string, props: Record<string, string>, children: Node[]): Node => ({ tag, props, children });
 
 function render(text: string): Node[] {
-  return renderMarkdown(text, { h, mention: (name: string) => ({ tag: 'mention', props: {}, children: [name] }) });
+  return renderMarkdown(text, {
+    h,
+    mention: (name: string) => ({ tag: 'mention', props: {}, children: [name] }),
+    ticket: (key: string, n: number) => (key === 'API' || key === 'ORC2' ? { tag: 'ticket', props: {}, children: [`${key}-${n}`] } : null),
+  });
 }
 
 function html(nodes: Node[]): string {
@@ -54,5 +58,16 @@ describe('markdown', () => {
 
   it('marks mentions but not emails or snake_case', () => {
     assert.equal(html(render('ask @ana-claude, mail ana@x.dev, call get_task_id')), '<p>ask <mention>ana-claude</mention>, mail ana@x.dev, call get_task_id</p>');
+  });
+
+  it('links ticket keys the app knows, and nothing that only looks like one', () => {
+    assert.equal(
+      html(render('Fixed API-12 and ORC2-3 (see **API-7**); UTF-8 and api-12 stay text')),
+      '<p>Fixed <ticket>API-12</ticket> and <ticket>ORC2-3</ticket> (see <strong><ticket>API-7</ticket></strong>); UTF-8 and api-12 stay text</p>',
+    );
+    assert.equal(
+      html(render('`API-12` https://x.dev/API-12 /tmp/API-12 API-12-b x.API-12')),
+      '<p><code class="md-code">API-12</code> <a href="https://x.dev/API-12" target="_blank" rel="noopener noreferrer">https://x.dev/API-12</a> /tmp/API-12 API-12-b x.API-12</p>',
+    );
   });
 });

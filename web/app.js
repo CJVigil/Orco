@@ -101,6 +101,25 @@ function richText(text) {
     h: (tag, props, children) => el(tag, props, children),
     codeBlock,
     mention: (name) => el('span', { class: `mention${name === state.me.name ? ' mention-self' : ''}`, text: `@${name}`, title: name === state.me.name ? 'You' : name }),
+    ticket: ticketLink,
+  });
+}
+
+function ticketLink(key, number) {
+  const project = state.projects.find((p) => p.ticketKey === key);
+  if (!project) return null;
+  const ref = `${key}-${number}`;
+  return el('a', {
+    class: 'ticket-link',
+    href: `#~${project.name}/list`,
+    title: `Open ${ref}`,
+    text: ref,
+    onclick: (event) => {
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
+      event.preventDefault();
+      $('sidebar').classList.remove('open');
+      void tickets.openTicket(ref);
+    },
   });
 }
 

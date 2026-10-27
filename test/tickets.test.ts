@@ -45,6 +45,11 @@ describe('tickets', () => {
     assert.equal(store.tickets.plan(ana, 'apis').key, 'API2');
   });
 
+  it('lists each project with its ticket key', () => {
+    store.createProject(ana, 'apis');
+    assert.deepEqual(store.listProjects(ana).map((p) => [p.name, p.ticketKey]), [['api', 'API'], ['apis', 'API2']]);
+  });
+
   it('hides tickets from people outside the project', () => {
     store.tickets.create(ana, 'api', { title: 'secret' });
     assert.throws(() => store.tickets.get(cara, 'API-1'), (e: OrcoError) => e.code === 'not_found');

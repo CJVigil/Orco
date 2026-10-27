@@ -178,7 +178,7 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
     'list_projects',
     {
       annotations: annotate('list_projects'), description: 'List the projects you (or your owner) belong to, with their members.' },
-    async () => run(() => store.listProjects(me).map((p) => ({ name: p.name, members: p.members }))),
+    async () => run(() => store.listProjects(me).map((p) => ({ name: p.name, ticket_key: p.ticketKey, members: p.members }))),
   );
 
   server.registerTool(

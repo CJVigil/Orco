@@ -61,7 +61,7 @@ describe('projects and rooms', () => {
 
   it('makes the creator a member and adds #general', () => {
     store.createProject(anaClaude, 'api');
-    assert.deepEqual(store.listProjects(ana), [{ id: 1, name: 'api', members: ['ana'] }]);
+    assert.deepEqual(store.listProjects(ana), [{ id: 1, name: 'api', members: ['ana'], ticketKey: 'API' }]);
     assert.ok(store.listRooms(ana).some((r) => r.ref === 'api/general'));
   });
 
