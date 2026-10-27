@@ -1,8 +1,10 @@
 import { OrcoError } from './errors.js';
-import type { Participant, Store } from './store.js';
+import { MENTION_ALL, type Participant, type Store } from './store.js';
 
 export type QuestionState = 'open' | 'answered' | 'resumed' | 'cancelled';
-export type QuestionTarget = 'requester' | 'owner';
+export type QuestionTarget = 'requester' | 'owner' | 'project';
+/** `one`: asked of one participant. `project`: asked of every person who can see the task's room. */
+export type QuestionAudience = 'one' | 'project';
 
 export interface Question {
   id: number;
@@ -14,6 +16,7 @@ export interface Question {
   threadId: number;
   asker: string;
   target: string;
+  audience: QuestionAudience;
   question: string;
   answer: string | null;
   answeredBy: string | null;
@@ -28,6 +31,7 @@ export interface QuestionSummary {
   state: QuestionState;
   asker: string;
   target: string;
+  audience: QuestionAudience;
   question: string;
   answer: string | null;
   answeredBy: string | null;
@@ -48,6 +52,7 @@ interface QuestionRow {
   target: string;
   target_owner_id: number | null;
   assignee_owner_id: number | null;
+  audience: QuestionAudience;
   question: string;
   answer: string | null;
   answered_by: string | null;
@@ -59,7 +64,7 @@ interface QuestionRow {
 const QUESTION_SELECT = `
   SELECT q.id, q.task_id, t.room_id, r.project_id, p.name AS project, r.name AS room, q.message_id, t.message_id AS thread_id,
          q.asker_id, ak.name AS asker, q.target_id, tg.name AS target, tg.owner_id AS target_owner_id,
-         ak.owner_id AS assignee_owner_id, q.question, q.answer, ab.name AS answered_by, q.state,
+         ak.owner_id AS assignee_owner_id, q.audience, q.question, q.answer, ab.name AS answered_by, q.state,
          q.created_at, q.answered_at
   FROM questions q
   JOIN tasks t ON t.id = q.task_id
@@ -83,6 +88,7 @@ function toQuestion(row: QuestionRow): Question {
     threadId: row.thread_id,
     asker: row.asker,
     target: row.target,
+    audience: row.audience,
     question: row.question,
     answer: row.answer,
     answeredBy: row.answered_by,
@@ -99,6 +105,7 @@ function toSummary(q: Question): QuestionSummary {
     state: q.state,
     asker: q.asker,
     target: q.target,
+    audience: q.audience,
     question: q.question,
     answer: q.answer,
     answeredBy: q.answeredBy,
@@ -121,19 +128,24 @@ export class Questions {
     const question = text.trim();
     if (!question) throw new OrcoError('invalid', 'The question is empty');
     if (question.length > MAX_QUESTION) throw new OrcoError('invalid', `Questions can be at most ${MAX_QUESTION} characters`);
-    if (to !== 'requester' && to !== 'owner') throw new OrcoError('invalid', 'Ask the "requester" or your "owner"');
+    if (to !== 'requester' && to !== 'owner' && to !== 'project') {
+      throw new OrcoError('invalid', 'Ask the "requester", your "owner", or the whole "project"');
+    }
+    const audience: QuestionAudience = to === 'project' ? 'project' : 'one';
+    // A project-wide question still names the requester, who can always answer it.
     const target =
       to === 'owner' ? this.store.participantById(assignee.ownerId!)! : this.store.participantByName(task.requester)!;
-    if (target.id === actor.id) throw new OrcoError('invalid', 'You cannot ask yourself');
+    if (audience === 'one' && target.id === actor.id) throw new OrcoError('invalid', 'You cannot ask yourself');
     this.store.checkRate(actor, 'post');
 
+    const addressee = audience === 'project' ? `@${MENTION_ALL}` : `@${target.name}`;
     let id = 0;
-    this.store.post(actor, task.room, `@${target.name} Question on task #${taskId}: ${question}`, task.messageId, {
+    this.store.post(actor, task.room, `${addressee} Question on task #${taskId}: ${question}`, task.messageId, {
       skipRateLimit: true,
       onInsert: (messageId) => {
         const { lastInsertRowid } = this.store.db
-          .prepare('INSERT INTO questions (task_id, message_id, asker_id, target_id, question) VALUES (?, ?, ?, ?, ?)')
-          .run(taskId, messageId, actor.id, target.id, question);
+          .prepare('INSERT INTO questions (task_id, message_id, asker_id, target_id, audience, question) VALUES (?, ?, ?, ?, ?, ?)')
+          .run(taskId, messageId, actor.id, target.id, audience, question);
         id = Number(lastInsertRowid);
       },
     });
@@ -141,7 +153,7 @@ export class Questions {
     this.store.audit.record(actor, 'question.ask', {
       projectId: asked.projectId,
       subject: `question:${id}`,
-      detail: { taskId, target: target.name, question },
+      detail: { taskId, target: audience === 'project' ? 'everyone' : target.name, question },
     });
     this.changed(asked);
     return asked;
@@ -151,8 +163,14 @@ export class Questions {
     const row = this.row(id);
     if (!row || !this.store.canSeeRoomId(actor, row.room_id)) throw new OrcoError('not_found', `No question ${id}`);
     if (row.state !== 'open') throw new OrcoError('conflict', `Question ${id} is already ${row.state === 'cancelled' ? 'closed' : 'answered'}`);
-    if (![row.target_id, row.target_owner_id, row.assignee_owner_id].includes(actor.id)) {
-      throw new OrcoError('forbidden', `Only ${row.target} or the people responsible for it can answer question ${id}`);
+    const anyPerson = row.audience === 'project' && actor.kind === 'user';
+    if (!anyPerson && ![row.target_id, row.target_owner_id, row.assignee_owner_id].includes(actor.id)) {
+      throw new OrcoError(
+        'forbidden',
+        row.audience === 'project'
+          ? `Question ${id} is for the people in the project`
+          : `Only ${row.target} or the people responsible for it can answer question ${id}`,
+      );
     }
     const answer = text.trim();
     if (!answer) throw new OrcoError('invalid', 'The answer is empty');
@@ -197,11 +215,14 @@ export class Questions {
     return toQuestion(row);
   }
 
-  /** Open questions this participant can answer: asked of them, or of an agent they own. */
+  /** Open questions this participant can answer: asked of them, of an agent they own, or of their whole project. */
   waitingOn(actor: Participant): Question[] {
     const rows = this.store.db
-      .prepare(`${QUESTION_SELECT} WHERE q.state = 'open' AND (q.target_id = ? OR tg.owner_id = ?) ORDER BY q.id`)
-      .all(actor.id, actor.id) as unknown as QuestionRow[];
+      .prepare(
+        `${QUESTION_SELECT} WHERE q.state = 'open' AND (q.target_id = ? OR tg.owner_id = ? OR (q.audience = 'project' AND ? = 'user'))
+         ORDER BY q.id`,
+      )
+      .all(actor.id, actor.id, actor.kind) as unknown as QuestionRow[];
     return rows.filter((row) => this.store.canSeeRoomId(actor, row.room_id)).map(toQuestion);
   }
 

@@ -326,6 +326,9 @@ const MIGRATIONS = [
   );
   CREATE INDEX ticket_links_blocked ON ticket_links (blocked_id);
   `,
+  `
+  ALTER TABLE questions ADD COLUMN audience TEXT NOT NULL DEFAULT 'one' CHECK (audience IN ('one', 'project'));
+  `,
 ];
 
 export function openDatabase(path: string): DatabaseSync {

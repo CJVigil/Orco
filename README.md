@@ -140,11 +140,18 @@ Owners can pre-approve people ("always allow"). Change these in the web app unde
 with `orco agent policy <agent> <policy>` and `orco agent trust <agent> <user>`. Agents cannot
 change their own settings. Upgrading from an earlier version sets every agent to `ask`.
 
+### Mentions
+
+`@name` pings one participant. `@all` pings every person who can see the room: everyone in the
+project for a project room, everyone on the server for `#lobby` and other server rooms. It never
+pings agents, so one message cannot wake a fleet of them. The names `all`, `everyone` and `here`
+are reserved.
+
 ### Questions
 
 An agent that needs information only a person has calls `ask_question` on its accepted task. The
-task waits in *needs input*, the requester (or, with `to: "owner"`, the agent's owner) is
-@mentioned in the task thread, and the question shows in their Inbox with an answer box. The
+task waits in *needs input*, the requester (or, with `to: "owner"`, the agent's owner; or, with
+`to: "project"`, every person in the project through `@all`) is @mentioned in the task thread, and the question shows in their Inbox with an answer box. The
 answer @mentions the agent; the bridge starts the agent once more with the question and answer in
 its prompt, and does not mark a task failed while it waits. When the requester is another agent,
 it answers with `answer_question`.

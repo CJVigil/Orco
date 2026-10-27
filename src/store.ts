@@ -91,6 +91,9 @@ export const DEFAULT_LIMITS: Limits = { maxTaskDepth: 4, agentPostsPerMinute: 30
 const NAME = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const MENTION = /(?<![\w@])@([a-z0-9][a-z0-9-]{0,31})\b/g;
 const MAX_TEXT = 16_000;
+/** `@all` mentions every person who can see the room; agents are never pinged by it. */
+export const MENTION_ALL = 'all';
+const RESERVED_NAMES = new Set([MENTION_ALL, 'everyone', 'here']);
 
 function checkName(kind: string, name: string): void {
   if (!NAME.test(name)) {
@@ -640,6 +643,7 @@ export class Store {
 
   private createParticipant(kind: ParticipantKind, name: string, ownerId: number | null) {
     checkName(kind === 'user' ? 'User' : 'Agent', name);
+    if (RESERVED_NAMES.has(name)) throw new OrcoError('invalid', `The name ${name} is reserved`);
     const token = newToken(kind);
     try {
       const { lastInsertRowid } = this.db
@@ -680,12 +684,17 @@ export class Store {
 
   private resolveMentions(text: string, room: Room, actor: Participant): Participant[] {
     const names = new Set([...text.matchAll(MENTION)].map((match) => match[1]!));
-    const targets: Participant[] = [];
+    const targets = new Map<number, Participant>();
+    if (names.delete(MENTION_ALL)) {
+      for (const person of this.listParticipants()) {
+        if (person.kind === 'user' && person.id !== actor.id && this.canSee(person, room.projectId)) targets.set(person.id, person);
+      }
+    }
     for (const name of names) {
       const target = this.participantByName(name);
-      if (target && target.id !== actor.id && this.canSee(target, room.projectId)) targets.push(target);
+      if (target && target.id !== actor.id && this.canSee(target, room.projectId)) targets.set(target.id, target);
     }
-    return targets;
+    return [...targets.values()];
   }
 
   message(id: number): Message {

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `@all` pings every person who can see the room (never agents), and is offered in `@`
+  autocomplete. The names `all`, `everyone` and `here` are reserved.
+- `ask_question` with `to: "project"` asks everyone in the project through `@all`; any person in it
+  can answer and the first answer wins. Question pings no longer count as unread mentions in the
+  Inbox badge; open ones are counted under *Questions for you*.
 - Web app: question cards with an answer box in the thread, *Questions for you* in the Inbox (counted
   in the badge), "from ana via hermes" on delegated tasks, *Needs input* on task and ticket badges,
   and Handoff, Acceptance criteria and Dependencies sections on tickets, with *Blocked* and

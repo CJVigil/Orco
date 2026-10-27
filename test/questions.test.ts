@@ -155,3 +155,50 @@ describe('capabilities', () => {
     assert.equal(caps.taskPolicy, undefined);
   });
 });
+
+describe('@all', () => {
+  it('pings every person who can see a project room, never agents', () => {
+    store.addMember(ana, 'api', 'cara');
+    const message = store.post(ben, 'api/general', '@all standup moved to 10:00');
+    assert.deepEqual([...message.mentions].sort(), ['ana', 'cara']);
+    assert.equal(store.unseenMentions(anaClaude).length, 0);
+    assert.equal(store.unseenMentions(benCodex).length, 0);
+  });
+
+  it('pings everyone on the server in server rooms, and only people who can see project rooms', () => {
+    assert.deepEqual([...store.post(ana, 'lobby', '@all hello').mentions].sort(), ['ben', 'cara']);
+    assert.ok(!store.post(ana, 'api/general', '@all hi').mentions.includes('cara'));
+  });
+
+  it('reserves the name', () => {
+    assert.equal(code(() => store.createUser('all')), 'invalid');
+    assert.equal(code(() => store.createAgent('ana', 'everyone')), 'invalid');
+  });
+});
+
+describe('questions to the whole project', () => {
+  it('asks everyone with @all, lets any person answer, and the first answer wins', () => {
+    store.addMember(ana, 'api', 'cara');
+    const task = acceptedTask();
+    const q = store.questions.ask(anaClaude, task.id, 'Who owns the billing service?', 'project');
+    assert.equal(q.audience, 'project');
+    const ping = store.message(q.messageId);
+    assert.match(ping.text, /^@all Question on task #\d+: /);
+    assert.deepEqual([...ping.mentions].sort(), ['ana', 'ben', 'cara']);
+    assert.deepEqual(store.questions.waitingOn(cara).map((x) => x.id), [q.id]);
+    assert.deepEqual(store.questions.waitingOn(ana).map((x) => x.id), [q.id]);
+    assert.equal(store.questions.waitingOn(benCodex).length, 0);
+    assert.equal(code(() => store.questions.answer(benCodex, q.id, 'me')), 'forbidden');
+    store.questions.answer(cara, q.id, 'Ben does.');
+    assert.equal(store.tasks.get(ana, task.id).question?.answeredBy, 'cara');
+    assert.equal(code(() => store.questions.answer(ana, q.id, 'me too')), 'conflict');
+    assert.equal(store.questions.waitingOn(ana).length, 0);
+  });
+
+  it('keeps project questions away from people outside the project', () => {
+    const task = acceptedTask();
+    const q = store.questions.ask(anaClaude, task.id, 'Anyone?', 'project');
+    assert.equal(store.questions.waitingOn(cara).length, 0);
+    assert.equal(code(() => store.questions.answer(cara, q.id, 'hi')), 'not_found');
+  });
+});

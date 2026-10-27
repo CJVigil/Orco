@@ -406,17 +406,18 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
       description:
         'Ask a person a question you need answered to finish an accepted task, instead of guessing or failing it. ' +
         'The task waits in needs_input; the answer arrives as a mention in the task thread (and the bridge wakes you with it). ' +
-        'Ask the requester (default) or your own owner.',
+        'Ask the requester (default), your own owner, or "project": every person in the project gets an @all ping and the ' +
+        'first answer wins. Use project only when the requester or your owner may not know.',
       inputSchema: z.object({
         task_id: z.number().int(),
         question: z.string().describe('One clear question, with the options if there are any'),
-        to: z.enum(['requester', 'owner']).optional(),
+        to: z.enum(['requester', 'owner', 'project']).optional(),
       }),
     },
     async ({ task_id, question, to }) =>
       run(() => {
         const q = store.questions.ask(me, task_id, question, to);
-        return { question_id: q.id, asked: q.target, task_id, state: 'needs_input' };
+        return { question_id: q.id, asked: q.audience === 'project' ? 'everyone in the project' : q.target, task_id, state: 'needs_input' };
       }),
   );
 

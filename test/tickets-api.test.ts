@@ -122,6 +122,10 @@ describe('my_work', () => {
     const people = (await api('ana', 'GET', '/my-work')).body;
     assert.ok(people.next.some((n: string) => n.startsWith(`Answer question ${asked.json.question_id}`)));
     await api('ana', 'POST', `/questions/${asked.json.question_id}/answer`, { answer: 'staging' });
+    const after = (await api('ana', 'GET', '/inbox')).body;
+    assert.equal(after.counts.questions, 0);
+    assert.equal(after.mentions.filter((m: { seen: boolean; question: unknown }) => !m.seen && m.question).length > 0, true);
+    assert.equal(after.counts.unseenMentions, after.mentions.filter((m: { seen: boolean; question: unknown; approval: { state: string } | null }) => !m.seen && !m.question && m.approval?.state !== 'pending').length);
     work = (await call(agent, 'my_work', {})).json;
     assert.ok(work.next.some((n: string) => n === `Continue task #${taskId}: ana answered your question.`));
     assert.equal(work.tasks.find((t: { id: number }) => t.id === taskId).question.answer, 'staging');

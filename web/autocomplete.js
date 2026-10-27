@@ -1,4 +1,5 @@
-// @name suggestions for a textarea. `candidates()` returns [{ name, kind, owner }] for the current room.
+// @name suggestions for a textarea. `candidates()` returns [{ name, kind, owner }] for the current room;
+// kind "all" is the @all entry.
 
 const TOKEN = /(?:^|\s)@([a-z0-9-]{0,32})$/;
 const LIMIT = 8;
@@ -32,7 +33,7 @@ export function attachMentionAutocomplete(textarea, candidates, el) {
             },
           },
           el('span', { class: 'mention-name', text: `@${p.name}` }),
-          el('span', { class: 'muted small', text: p.kind === 'agent' ? `agent · ${p.owner}` : 'person' }),
+          el('span', { class: 'muted small', text: p.kind === 'all' ? 'everyone here (people only)' : p.kind === 'agent' ? `agent · ${p.owner}` : 'person' }),
         ),
       ),
     );

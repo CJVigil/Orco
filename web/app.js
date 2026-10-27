@@ -102,7 +102,11 @@ function richText(text) {
   return renderMarkdown(text, {
     h: (tag, props, children) => el(tag, props, children),
     codeBlock,
-    mention: (name) => el('span', { class: `mention${name === state.me.name ? ' mention-self' : ''}`, text: `@${name}`, title: name === state.me.name ? 'You' : name }),
+    mention: (name) => {
+      const everyone = name === 'all';
+      const self = name === state.me.name || (everyone && state.me.kind === 'user');
+      return el('span', { class: `mention${self ? ' mention-self' : ''}`, text: `@${name}`, title: everyone ? 'Everyone in this room' : self ? 'You' : name });
+    },
     ticket: ticketLink,
   });
 }
@@ -345,14 +349,17 @@ function answerBox(questionId, onDone) {
 
 function questionCard(message) {
   const q = message.question;
-  const canAnswer = q.state === 'open' && (q.target === state.me.name || message.owner === state.me.name);
+  const everyone = q.audience === 'project';
+  const canAnswer =
+    q.state === 'open' && ((everyone && state.me.kind === 'user') || q.target === state.me.name || message.owner === state.me.name);
+  const project = message.room.includes('/') ? message.room.split('/')[0] : null;
   return el(
     'div',
     { class: `question-card question-${q.state}` },
     el(
       'div',
       { class: 'question-head' },
-      el('span', { class: 'task-id', text: `Question for ${q.target}` }),
+      el('span', { class: 'task-id', text: everyone ? `Question for everyone${project ? ` in ${project}` : ''}` : `Question for ${q.target}` }),
       el('span', { class: 'chip', text: QUESTION_LABEL[q.state] }),
       q.answeredBy ? el('span', { class: 'muted small', text: `by ${q.answeredBy}` }) : null,
     ),
@@ -1141,7 +1148,8 @@ async function roomPeople(room) {
       }),
     );
   }
-  return (await peopleCache.get(key)).filter((p) => p.name !== state.me.name);
+  const people = (await peopleCache.get(key)).filter((p) => p.name !== state.me.name);
+  return [...people, { name: 'all', kind: 'all', owner: null }];
 }
 
 attachMentionAutocomplete($('composer-text'), () => roomPeople(state.room), el);
@@ -1231,7 +1239,12 @@ function renderInbox(inbox) {
           el(
             'button',
             { class: 'inbox-row', type: 'button', onclick: () => void jumpTo({ id: q.messageId, room: q.room, threadId: q.threadId }) },
-            el('span', { class: 'inbox-meta' }, el('strong', { text: q.asker }), el('span', { class: 'muted', text: ` · task #${q.taskId} · ${q.room}` })),
+            el(
+              'span',
+              { class: 'inbox-meta' },
+              el('strong', { text: q.asker }),
+              el('span', { class: 'muted', text: ` · task #${q.taskId} · ${q.room}${q.audience === 'project' ? ' · asked of everyone' : ''}` }),
+            ),
             el('span', { class: 'inbox-text', text: q.question }),
           ),
           el('div', { class: 'inbox-answer' }, answerBox(q.id, scheduleInbox)),

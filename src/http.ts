@@ -497,7 +497,8 @@ export function createApp(store: Store, options: AppOptions = {}) {
       counts: {
         approvals: approvals.length,
         questions: questions.length,
-        unseenMentions: mentions.filter((m) => !m.seen && m.approval?.state !== 'pending' && m.question?.state !== 'open').length,
+        // Question pings live in `questions` while open and need nothing once answered, so they never count here.
+        unseenMentions: mentions.filter((m) => !m.seen && m.approval?.state !== 'pending' && !m.question).length,
       },
     });
   });
