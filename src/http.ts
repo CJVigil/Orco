@@ -114,8 +114,16 @@ export function createApp(store: Store, options: AppOptions = {}) {
   const auth = authenticate(store, presence);
   const mcpAuth = authenticate(store, presence, oauth);
 
-  const withStatus = (people: (Participant & { owner: string | null })[]) =>
-    people.map((p) => ({ name: p.name, kind: p.kind, owner: p.owner, status: presence.status(p.id) }));
+  const withStatus = (viewer: Participant, people: (Participant & { owner: string | null })[]) => {
+    const activity = store.tasks.activity(viewer);
+    return people.map((p) => ({
+      name: p.name,
+      kind: p.kind,
+      owner: p.owner,
+      status: presence.status(p.id),
+      working: activity.get(p.id) ?? null,
+    }));
+  };
 
   app.get('/healthz', (_req, res) => {
     res.json({ ok: true });
@@ -173,7 +181,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
   });
   api.get('/participants', (req, res) => {
     const project = typeof req.query.project === 'string' && req.query.project ? req.query.project : undefined;
-    res.json(withStatus(store.members(req.participant!, project)));
+    res.json(withStatus(req.participant!, store.members(req.participant!, project)));
   });
   api.get('/projects', (req, res) => {
     res.json(store.listProjects(req.participant!));

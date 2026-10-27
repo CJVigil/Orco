@@ -1199,6 +1199,53 @@ a.button-link:hover {
   opacity: 0.6;
 }
 
+.member-working {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--accent);
+  cursor: pointer;
+  text-align: left;
+}
+
+.member-working:hover {
+  text-decoration: underline;
+}
+
+.working-dot {
+  display: inline-block;
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: working-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes working-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.7);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .working-dot {
+    animation: none;
+  }
+}
+
 /* Dialog */
 
 .ask {
@@ -1297,4 +1344,8 @@ a.button-link:hover {
   .sidebar {
     transition: none;
   }
+}
+
+.task-card .working-dot {
+  background: var(--task-edge, var(--accent));
 }

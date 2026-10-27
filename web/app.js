@@ -185,8 +185,25 @@ const TASK_LABEL = {
   cancelled: 'Cancelled',
 };
 
+function elapsed(iso) {
+  const seconds = Math.max(0, Math.round((Date.now() - new Date(iso)) / 1000));
+  if (seconds < 45) return 'just now';
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  return hours < 24 ? `${hours}h ${minutes % 60}m` : `${Math.floor(hours / 24)}d`;
+}
+
+function liveElapsed(prefix, iso) {
+  return el('span', { 'data-since': iso, 'data-prefix': prefix, text: `${prefix}${elapsed(iso)}` });
+}
+
+setInterval(() => {
+  for (const node of document.querySelectorAll('[data-since]')) node.textContent = `${node.dataset.prefix}${elapsed(node.dataset.since)}`;
+}, 30_000);
+
 function taskCard(message) {
-  const { id, state: taskState, assignee } = message.task;
+  const { id, state: taskState, assignee, since } = message.task;
   const open = taskState === 'awaiting_approval' || taskState === 'requested' || taskState === 'accepted';
   const mine = message.author === state.me.name || message.owner === state.me.name;
   return el(
@@ -194,7 +211,8 @@ function taskCard(message) {
     { class: `task-card task-${taskState}` },
     el('span', { class: 'task-id', text: `Task #${id}` }),
     el('span', { class: 'muted', text: `→ ${assignee}` }),
-    el('span', { class: 'chip', text: TASK_LABEL[taskState] }),
+    el('span', { class: 'chip' }, taskState === 'accepted' && since ? liveElapsed('In progress · ', since) : TASK_LABEL[taskState]),
+    taskState === 'accepted' ? el('span', { class: 'working-dot', 'aria-hidden': 'true' }) : null,
     open && mine
       ? el('button', {
           class: 'ghost small',
@@ -390,7 +408,7 @@ function onTask(task) {
   for (const list of [state.messages, state.threadMessages]) {
     for (const message of list) {
       if (message.task && message.task.id === task.id) {
-        message.task = { id: task.id, state: task.state, assignee: task.assignee };
+        message.task = { id: task.id, state: task.state, assignee: task.assignee, since: task.updatedAt };
         touched = true;
       }
     }
@@ -627,15 +645,27 @@ async function showMembers() {
   const people = await api(`/participants${state.room.project ? `?project=${encodeURIComponent(state.room.project)}` : ''}`);
   if (state.panel !== 'members') return;
   const order = { listening: 0, online: 1, standby: 2, offline: 3 };
-  const sorted = (kind) => people.filter((p) => p.kind === kind).sort((a, b) => order[a.status] - order[b.status] || a.name.localeCompare(b.name));
+  const sorted = (kind) =>
+    people
+      .filter((p) => p.kind === kind)
+      .sort((a, b) => Number(!a.working) - Number(!b.working) || order[a.status] - order[b.status] || a.name.localeCompare(b.name));
   const row = (p) => {
     const face = avatar(p.name, p.kind);
     face.append(el('span', { class: `dot ${p.status}` }));
+    const sub = p.owner ? `${STATUS_TEXT[p.status]} · ${p.owner}'s agent` : STATUS_TEXT[p.status];
+    const working = p.working
+      ? el(
+          'button',
+          { class: 'member-working', type: 'button', title: p.working.request, onclick: () => void jumpTo({ id: p.working.messageId, room: p.working.room, threadId: null }) },
+          el('span', { class: 'working-dot', 'aria-hidden': 'true' }),
+          liveElapsed(`Working on #${p.working.taskId} · `, p.working.since),
+        )
+      : null;
     return el(
       'div',
-      { class: `member ${p.status}` },
+      { class: `member ${p.status}${p.working ? ' working' : ''}` },
       face,
-      el('div', { class: 'member-info' }, el('span', { text: p.name }), el('span', { class: 'sub', text: p.owner ? `${STATUS_TEXT[p.status]} · ${p.owner}'s agent` : STATUS_TEXT[p.status] })),
+      el('div', { class: 'member-info' }, el('span', { text: p.name }), el('span', { class: 'sub', text: sub }), working),
     );
   };
   const humans = sorted('user');
@@ -704,6 +734,10 @@ function connect() {
   events.addEventListener('task', (event) => {
     onTask(JSON.parse(event.data));
     scheduleInbox();
+    if (state.panel === 'members') {
+      clearTimeout(presenceTimer);
+      presenceTimer = setTimeout(() => void showMembers(), 300);
+    }
   });
   events.addEventListener('approval', (event) => {
     onApproval(JSON.parse(event.data));

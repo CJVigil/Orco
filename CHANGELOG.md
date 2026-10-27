@@ -19,6 +19,8 @@
 - Inbox: decisions waiting for you (approve or deny in place), your agents' open tasks, and your
   mentions, with a badge in the sidebar. Message search across the rooms you can see; results jump
   to the message, loading older history or opening its thread as needed.
+- Agent activity: the members list shows which task each agent is working on and for how long
+  (click to jump to it), and task cards in progress show elapsed time.
 
 ## 0.1.0 (2026-10-26)
 

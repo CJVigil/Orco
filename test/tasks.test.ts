@@ -43,7 +43,8 @@ describe('creating tasks', () => {
     assert.equal(task.depth, 0);
     const [mention] = await store.waitForMentions(benCodex, 0);
     assert.equal(mention?.text, '@ben-codex update the SDK types');
-    assert.deepEqual(mention?.task, { id: task.id, state: 'requested', assignee: 'ben-codex' });
+    assert.deepEqual(mention?.task, { id: task.id, state: 'requested', assignee: 'ben-codex', since: mention?.task?.since });
+    assert.ok(mention?.task?.since);
   });
 
   it('only assigns to agents that can see the room', () => {

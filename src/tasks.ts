@@ -9,6 +9,15 @@ export interface TaskSummary {
   id: number;
   state: TaskState;
   assignee: string;
+  since: string;
+}
+
+export interface AgentActivity {
+  taskId: number;
+  messageId: number;
+  request: string;
+  room: string;
+  since: string;
 }
 
 export interface Task {
@@ -283,12 +292,27 @@ export class Tasks {
   summaryForMessage(messageId: number): TaskSummary | null {
     const row = this.store.db
       .prepare(
-        `SELECT t.id, t.state, a.name AS assignee, ap.state AS approval_state FROM tasks t
+        `SELECT t.id, t.state, a.name AS assignee, ap.state AS approval_state, t.updated_at AS since FROM tasks t
          JOIN participants a ON a.id = t.assignee_id LEFT JOIN approvals ap ON ap.id = t.approval_id
          WHERE t.message_id = ?`,
       )
       .get(messageId) as (TaskSummary & { approval_state: string | null }) | undefined;
-    return row ? { id: row.id, state: effectiveState(row), assignee: row.assignee } : null;
+    return row ? { id: row.id, state: effectiveState(row), assignee: row.assignee, since: row.since } : null;
+  }
+
+  activity(viewer: Participant): Map<number, AgentActivity> {
+    const rows = this.store.db
+      .prepare(
+        `${TASK_SELECT} WHERE t.state = 'accepted' ORDER BY t.updated_at ASC`,
+      )
+      .all() as unknown as TaskRow[];
+    const byAgent = new Map<number, AgentActivity>();
+    for (const row of rows) {
+      if (!this.store.canSee(viewer, row.project_id)) continue;
+      const task = toTask(row);
+      byAgent.set(row.assignee_id, { taskId: task.id, messageId: task.messageId, request: task.request, room: task.room, since: task.updatedAt });
+    }
+    return byAgent;
   }
 
   private parentFor(actor: Participant, parentId: number | undefined): TaskRow | null {

@@ -94,3 +94,19 @@ describe('search', () => {
     assert.throws(() => store.search(ana, 'a'), OrcoError);
   });
 });
+
+describe('agent activity', () => {
+  it('shows what each agent is working on, to people who can see the room', () => {
+    store.setTaskPolicy(ana, 'ana-claude', 'open');
+    const task = store.tasks.create(ben, { agent: 'ana-claude', room: 'api/general', request: 'review the PR' });
+    assert.equal(store.tasks.activity(ana).size, 0);
+    store.tasks.update(anaClaude, task.id, 'accepted');
+    const working = store.tasks.activity(ben).get(anaClaude.id);
+    assert.equal(working?.taskId, task.id);
+    assert.equal(working?.messageId, task.messageId);
+    assert.equal(working?.room, 'api/general');
+    assert.equal(store.tasks.activity(cara).size, 0);
+    store.tasks.update(anaClaude, task.id, 'done');
+    assert.equal(store.tasks.activity(ana).size, 0);
+  });
+});
