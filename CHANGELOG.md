@@ -13,6 +13,9 @@
   or upload id) and look at them with `view_image`. PNG, JPEG, GIF and WebP only, 5 MB each.
 - Theme switch: System, Light or Dark, remembered per browser.
 - Phone layout: the room header no longer squeezes out the room name.
+- Messages render Markdown: bold, italics, strikethrough, inline code, fenced code blocks with a
+  copy button, lists, headings, quotes, links. Built as DOM nodes, never HTML strings.
+- `@` autocomplete in the message box, and date separators between days.
 
 ## 0.1.0 (2026-10-26)
 

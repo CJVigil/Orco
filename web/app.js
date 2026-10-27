@@ -1,5 +1,7 @@
+import { attachMentionAutocomplete } from './autocomplete.js';
+import { renderMarkdown } from './markdown.js';
+
 const $ = (id) => document.getElementById(id);
-const MENTION = /(@[a-z0-9][a-z0-9-]{0,31})\b|(https?:\/\/[^\s<>"]+)/g;
 const GROUP_MS = 5 * 60 * 1000;
 const PAGE = 50;
 
@@ -69,21 +71,51 @@ function formatTime(iso) {
   return `${date.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
 }
 
+function codeBlock(code, lang) {
+  const copy = el('button', {
+    class: 'ghost small code-copy',
+    type: 'button',
+    text: 'Copy',
+    onclick: async () => {
+      try {
+        await navigator.clipboard.writeText(code);
+        copy.textContent = 'Copied';
+        setTimeout(() => (copy.textContent = 'Copy'), 1500);
+      } catch {
+        copy.textContent = 'Copy failed';
+      }
+    },
+  });
+  return el('div', { class: 'code-block' }, el('div', { class: 'code-head' }, el('span', { text: lang || 'text' }), copy), el('pre', {}, el('code', { text: code })));
+}
+
 function richText(text) {
-  const nodes = [];
-  let last = 0;
-  for (const match of text.matchAll(MENTION)) {
-    if (match.index > last) nodes.push(text.slice(last, match.index));
-    if (match[1]) {
-      const name = match[1].slice(1);
-      nodes.push(el('span', { class: 'mention', text: match[1], title: name === state.me.name ? 'You' : name }));
-    } else {
-      nodes.push(el('a', { href: match[2], target: '_blank', rel: 'noopener noreferrer', text: match[2] }));
-    }
-    last = match.index + match[0].length;
-  }
-  if (last < text.length) nodes.push(text.slice(last));
-  return nodes;
+  return renderMarkdown(text, {
+    h: (tag, props, children) => el(tag, props, children),
+    codeBlock,
+    mention: (name) => el('span', { class: `mention${name === state.me.name ? ' mention-self' : ''}`, text: `@${name}`, title: name === state.me.name ? 'You' : name }),
+  });
+}
+
+function dayLabel(iso) {
+  const date = new Date(iso);
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  if (date.toDateString() === today.toDateString()) return 'Today';
+  if (date.toDateString() === yesterday.toDateString()) return 'Yesterday';
+  return date.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric', year: date.getFullYear() === today.getFullYear() ? undefined : 'numeric' });
+}
+
+function withDays(messages, render) {
+  const out = [];
+  messages.forEach((m, i) => {
+    const prev = messages[i - 1];
+    const newDay = !prev || new Date(prev.createdAt).toDateString() !== new Date(m.createdAt).toDateString();
+    if (newDay) out.push(el('li', { class: 'day-divider', role: 'separator' }, el('span', { text: dayLabel(m.createdAt) })));
+    out.push(render(m, newDay ? null : prev));
+  });
+  return out;
 }
 
 function renderMessage(message, previous, { inThread = false } = {}) {
@@ -108,7 +140,7 @@ function renderMessage(message, previous, { inThread = false } = {}) {
       message.owner ? el('span', { class: 'owner', text: `owned by ${message.owner}` }) : null,
       el('time', { class: 'time', datetime: message.createdAt, title: new Date(message.createdAt).toLocaleString(), text: formatTime(message.createdAt) }),
     ),
-    el('div', { class: 'msg-body' }, richText(message.text)),
+    el('div', { class: 'msg-body md' }, richText(message.text)),
     message.attachments?.length
       ? el(
           'div',
@@ -435,7 +467,7 @@ function renderMessages({ keepScroll = false } = {}) {
   const box = $('messages');
   const fromBottom = box.scrollHeight - box.scrollTop;
   const list = $('message-list');
-  list.replaceChildren(...state.messages.map((m, i) => renderMessage(m, state.messages[i - 1])));
+  list.replaceChildren(...withDays(state.messages, (m, prev) => renderMessage(m, prev)));
   $('empty').hidden = state.messages.length > 0;
   if (keepScroll) box.scrollTop = box.scrollHeight - fromBottom;
   else box.scrollTop = box.scrollHeight;
@@ -564,7 +596,7 @@ function renderThread({ keepScroll = false } = {}) {
   const list = el('ol', { class: 'message-list' });
   if (root) list.append(renderMessage(root, null, { inThread: true }));
   list.append(el('li', { class: 'thread-divider', text: `${replies.length} ${replies.length === 1 ? 'reply' : 'replies'}` }));
-  replies.forEach((m, i) => list.append(renderMessage(m, replies[i - 1], { inThread: true })));
+  list.append(...withDays(replies, (m, prev) => renderMessage(m, prev, { inThread: true })));
   const body = $('panel-body');
   const top = body.scrollTop;
   body.replaceChildren(list);
@@ -655,6 +687,7 @@ function connect() {
   });
   events.addEventListener('message', (event) => onMessage(JSON.parse(event.data)));
   events.addEventListener('structure', async () => {
+    peopleCache.clear();
     await loadStructure();
     await selectRoom();
   });
@@ -903,6 +936,25 @@ $('theme').addEventListener('click', () => {
   }
   applyTheme(next);
 });
+
+const peopleCache = new Map();
+
+async function roomPeople(room) {
+  const key = room?.project ?? '';
+  if (!peopleCache.has(key)) {
+    peopleCache.set(
+      key,
+      api(`/participants${key ? `?project=${encodeURIComponent(key)}` : ''}`).catch(() => {
+        peopleCache.delete(key);
+        return [];
+      }),
+    );
+  }
+  return (await peopleCache.get(key)).filter((p) => p.name !== state.me.name);
+}
+
+attachMentionAutocomplete($('composer-text'), () => roomPeople(state.room), el);
+attachMentionAutocomplete($('thread-text'), () => roomPeople(state.rooms.find((r) => r.ref === state.thread?.room)), el);
 
 /* Boot */
 
