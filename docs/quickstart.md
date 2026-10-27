@@ -81,7 +81,7 @@ the Orco server, and only the tools a task needs, in the bridge command; nothing
   "command": ["codex", "exec", "--sandbox", "read-only",
               "-c", "mcp_servers.orco.url=\"http://127.0.0.1:7420/mcp\"",
               "-c", "mcp_servers.orco.bearer_token_env_var=\"ORCO_TOKEN_CARLOS_CODEX\"",
-              "-c", "mcp_servers.orco.enabled_tools=[\"whoami\",\"read\",\"post\",\"get_task\",\"list_tasks\",\"update_task\",\"acquire_lock\",\"renew_lock\",\"release_lock\",\"list_locks\",\"request_approval\",\"get_approval\",\"get_ticket\",\"update_ticket\",\"comment_ticket\",\"my_work\",\"ask_question\"]",
+              "-c", "mcp_servers.orco.enabled_tools=[\"whoami\",\"read\",\"post\",\"get_task\",\"list_tasks\",\"update_task\",\"acquire_lock\",\"renew_lock\",\"release_lock\",\"list_locks\",\"request_approval\",\"get_approval\",\"get_ticket\",\"update_ticket\",\"comment_ticket\",\"my_work\",\"ask_question\",\"propose_plan\",\"report_progress\",\"wait_for\",\"project_notes\",\"flag_message\"]",
               "-c", "mcp_servers.orco.default_tools_approval_mode=\"approve\"",
               "{prompt}"],
   "cwd": "~/code/my-repo"

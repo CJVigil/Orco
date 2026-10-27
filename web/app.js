@@ -237,7 +237,7 @@ setInterval(() => {
 }, 30_000);
 
 function taskCard(message) {
-  const { id, state: taskState, assignee, since, chain = [] } = message.task;
+  const { id, state: taskState, assignee, since, chain = [], progress = null, stalled = false } = message.task;
   const open = ['awaiting_approval', 'requested', 'accepted', 'needs_input'].includes(taskState);
   const mine = message.author === state.me.name || message.owner === state.me.name;
   return el(
@@ -246,12 +246,20 @@ function taskCard(message) {
     el('span', { class: 'task-id', text: `Task #${id}` }),
     el('span', { class: 'muted', text: `→ ${assignee}` }),
     chain.length > 1 ? el('span', { class: 'muted small', title: chain.join(' → '), text: `from ${chain[0]} via ${chain.slice(1).join(', ')}` }) : null,
-    el(
-      'span',
-      { class: 'chip' },
-      taskState === 'accepted' ? el('span', { class: 'working-dot', 'aria-hidden': 'true' }) : null,
-      taskState === 'accepted' && since ? liveElapsed('In progress · ', since) : TASK_LABEL[taskState],
-    ),
+    stalled
+      ? el('span', { class: 'chip stalled', title: `No sign of life from ${assignee} for a while; it may have crashed`, text: 'Stalled' })
+      : el(
+          'span',
+          { class: 'chip' },
+          taskState === 'accepted' ? el('span', { class: 'working-dot', 'aria-hidden': 'true' }) : null,
+          taskState === 'accepted' && since ? liveElapsed('In progress · ', since) : TASK_LABEL[taskState],
+        ),
+    progress && open
+      ? el('span', { class: 'task-progress', title: `Updated ${formatTime(progress.at)}` }, progress.percent !== null ? progressMeter(progress.percent) : null, progress.text)
+      : null,
+    state.me.kind === 'user'
+      ? el('button', { class: 'ghost small', type: 'button', text: 'Trail', title: 'What the agent did on this task', onclick: () => void showTrail(id) })
+      : null,
     open && mine
       ? el('button', {
           class: 'ghost small',
@@ -347,8 +355,65 @@ function answerBox(questionId, onDone) {
   return el('div', { class: 'answer-box' }, input, el('button', { class: 'primary small', type: 'button', text: 'Answer', onclick: () => void send() }));
 }
 
+function progressMeter(percent) {
+  const fill = el('span', { class: 'meter-fill' });
+  fill.style.width = `${percent}%`;
+  return el('span', { class: 'meter', title: `${percent}%`, 'aria-label': `${percent}%` }, fill);
+}
+
+function planBox(questionId, plan, onDone) {
+  const area = el('textarea', { rows: String(Math.min(12, plan.split('\n').length + 1)), 'aria-label': 'Plan', class: 'plan-edit-area' });
+  area.value = plan;
+  const note = el('input', { placeholder: 'Note or reason (optional)', 'aria-label': 'Note', maxlength: '500' });
+  const decide = async (approve) => {
+    if (!approve && !note.value.trim() && !confirm('Reject without a reason?')) return;
+    try {
+      await api(`/questions/${questionId}/decide`, { method: 'POST', body: { approve, plan: approve ? area.value : undefined, note: note.value || undefined } });
+      onDone?.();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+  return el(
+    'div',
+    { class: 'plan-box' },
+    area,
+    note,
+    el(
+      'div',
+      { class: 'row-end' },
+      el('button', { class: 'ghost small danger', type: 'button', text: 'Reject', onclick: () => void decide(false) }),
+      el('button', { class: 'primary small', type: 'button', text: 'Approve', onclick: () => void decide(true) }),
+    ),
+  );
+}
+
+const PLAN_LABEL = { open: 'Waiting for approval', cancelled: 'Closed' };
+
+function planCard(message) {
+  const q = message.question;
+  const canDecidePlan = q.state === 'open' && state.me.kind === 'user' && (q.target === state.me.name || message.owner === state.me.name);
+  const label = q.verdict === 'approved' ? 'Approved' : q.verdict === 'rejected' ? 'Rejected' : PLAN_LABEL[q.state] ?? 'Answered';
+  const final = q.verdict === 'approved' ? (q.answer ?? '').split('Final plan:\n')[1] ?? '' : '';
+  return el(
+    'div',
+    { class: `question-card plan-card-msg question-${q.state} verdict-${q.verdict ?? 'none'}` },
+    el(
+      'div',
+      { class: 'question-head' },
+      el('span', { class: 'task-id', text: `Plan for ${q.target}` }),
+      el('span', { class: 'chip', text: label }),
+      q.answeredBy ? el('span', { class: 'muted small', text: `by ${q.answeredBy}` }) : null,
+    ),
+    canDecidePlan ? planBox(q.id, q.question) : null,
+    final && final !== q.question ? el('div', { class: 'md question-answer' }, el('p', { class: 'muted small', text: 'Final plan, as approved:' }), richText(final)) : null,
+    q.verdict === 'rejected' ? el('div', { class: 'question-answer', text: q.answer }) : null,
+  );
+}
+
 function questionCard(message) {
   const q = message.question;
+  if (q.kind === 'plan') return planCard(message);
   const everyone = q.audience === 'project';
   const canAnswer =
     q.state === 'open' && ((everyone && state.me.kind === 'user') || q.target === state.me.name || message.owner === state.me.name);
@@ -373,7 +438,7 @@ function onQuestion(question) {
   for (const list of [state.messages, state.threadMessages]) {
     for (const message of list) {
       if (message.question && message.question.id === question.id) {
-        message.question = { ...message.question, state: question.state, answer: question.answer, answeredBy: question.answeredBy };
+        message.question = { ...message.question, state: question.state, answer: question.answer, answeredBy: question.answeredBy, verdict: question.verdict };
         touched = true;
       }
     }
@@ -506,7 +571,15 @@ function onTask(task) {
   for (const list of [state.messages, state.threadMessages]) {
     for (const message of list) {
       if (message.task && message.task.id === task.id) {
-        message.task = { id: task.id, state: task.state, assignee: task.assignee, since: task.updatedAt, chain: task.chain };
+        message.task = {
+          id: task.id,
+          state: task.state,
+          assignee: task.assignee,
+          since: task.updatedAt,
+          chain: task.chain,
+          progress: task.progress,
+          stalled: task.stalled,
+        };
         touched = true;
       }
     }
@@ -759,6 +832,61 @@ async function showLocks() {
   );
 }
 
+function summaryBox() {
+  const summary = state.threadSummary;
+  const wrap = el('section', { class: 'thread-summary' });
+  const view = () => {
+    wrap.replaceChildren(
+      el(
+        'div',
+        { class: 'section-head' },
+        el('h3', { text: 'Summary' }),
+        summary ? el('span', { class: 'muted small section-meta', text: `${summary.updatedBy} · ${formatTime(summary.updatedAt)}` }) : null,
+        el('span', { class: 'spacer' }),
+        el('button', { class: 'ghost small', type: 'button', text: summary ? 'Edit' : 'Add', onclick: edit }),
+      ),
+      summary ? el('div', { class: 'md ticket-text' }, richText(summary.text)) : el('p', { class: 'muted small', text: 'No summary yet. Decisions, open questions and where things stand.' }),
+    );
+  };
+  const edit = () => {
+    const area = el('textarea', { rows: '4', 'aria-label': 'Thread summary' });
+    area.value = summary?.text ?? '';
+    wrap.replaceChildren(
+      area,
+      el(
+        'div',
+        { class: 'row-end' },
+        el('button', { class: 'ghost small', type: 'button', text: 'Cancel', onclick: view }),
+        el('button', {
+          class: 'primary small',
+          type: 'button',
+          text: 'Save',
+          onclick: async () => {
+            try {
+              state.threadSummary = await api(`/threads/${state.thread.id}/summary`, { method: 'POST', body: { room: state.thread.room, summary: area.value } });
+              renderThread({ keepScroll: true });
+            } catch (err) {
+              alert(err.message);
+            }
+          },
+        }),
+      ),
+    );
+    area.focus();
+  };
+  view();
+  return wrap;
+}
+
+async function loadThreadSummary() {
+  const thread = state.thread;
+  if (!thread) return;
+  const summary = await api(`/threads/${thread.id}/summary?room=${encodeURIComponent(thread.room)}`).catch(() => null);
+  if (state.thread !== thread) return;
+  state.threadSummary = summary;
+  if (state.panel === 'thread') renderThread({ keepScroll: true });
+}
+
 function renderThread({ keepScroll = false } = {}) {
   const items = state.threadMessages;
   const [root, ...replies] = items;
@@ -768,15 +896,91 @@ function renderThread({ keepScroll = false } = {}) {
   list.append(...withDays(replies, (m, prev) => renderMessage(m, prev, { inThread: true })));
   const body = $('panel-body');
   const top = body.scrollTop;
-  body.replaceChildren(list);
+  body.replaceChildren(summaryBox(), list);
   body.scrollTop = keepScroll ? top : body.scrollHeight;
+}
+
+function trailLine(entry) {
+  const d = entry.detail ?? {};
+  switch (entry.action) {
+    case 'message.post':
+      return `posted in ${d.room}: ${snippet(d.text ?? '', 140)}`;
+    case 'task.update':
+      return `${entry.subject.replace('task:', 'task #')} → ${d.state}${d.note ? `: ${snippet(d.note, 120)}` : ''}`;
+    case 'task.progress':
+      return `progress: ${d.text}${d.percent !== null && d.percent !== undefined ? ` (${d.percent}%)` : ''}`;
+    case 'task.create':
+      return `${entry.subject.replace('task:', 'task #')} created for ${d.assignee}: ${snippet(d.request ?? '', 120)}`;
+    case 'ticket.update':
+      return `${entry.subject.replace('ticket:', '')}: changed ${(d.changes ?? []).map((c) => c.field).join(', ')}`;
+    case 'question.ask':
+    case 'plan.propose':
+      return `${entry.action === 'plan.propose' ? 'proposed a plan' : 'asked'}: ${snippet(d.question ?? '', 140)}`;
+    case 'ticket.comment':
+      return `commented on ${entry.subject.replace('ticket:', '')}: ${snippet(d.text ?? '', 120)}`;
+    case 'ticket.create':
+      return `filed ${entry.subject.replace('ticket:', '')}: ${d.title}`;
+    case 'note.create':
+    case 'note.update':
+      return `saved the project note “${d.title}”`;
+    case 'note.delete':
+      return `deleted the project note “${d.title}”`;
+    case 'lock.acquire':
+      return `took the lock ${entry.subject?.replace(/^lock:/, '') ?? ''}`;
+    case 'lock.release':
+      return `released the lock ${entry.subject?.replace(/^lock:/, '') ?? ''}`;
+    case 'agent.profile':
+      return 'updated its profile';
+    case 'thread.summary':
+      return 'updated a thread summary';
+    case 'flag.create':
+      return `flagged something to its owner: ${snippet(d.reason ?? '', 120)}`;
+    case 'question.answer':
+    case 'plan.approve':
+    case 'plan.reject':
+      return `${entry.action === 'question.answer' ? 'answered' : entry.action === 'plan.approve' ? 'approved the plan' : 'rejected the plan'}: ${snippet(d.answer ?? '', 120)}`;
+    case 'approval.request':
+      return `asked for approval: ${snippet(d.summary ?? '', 120)}`;
+    default:
+      return `${entry.action}${entry.subject ? ` ${entry.subject}` : ''}`;
+  }
+}
+
+async function showTrail(taskId) {
+  openPanel('trail', `Task #${taskId} trail`);
+  $('panel-body').replaceChildren(el('p', { class: 'panel-intro muted small', text: 'Loading…' }));
+  let entries;
+  try {
+    entries = await api(`/tasks/${taskId}/trail`);
+  } catch (err) {
+    $('panel-body').replaceChildren(el('p', { class: 'panel-intro error', text: err.message }));
+    return;
+  }
+  if (state.panel !== 'trail') return;
+  $('panel-body').replaceChildren(
+    el('p', { class: 'panel-intro muted small', text: 'Everything recorded about this task, and what its agent did while it was open. Work for other tasks in the same window shows too.' }),
+    el(
+      'ol',
+      { class: 'trail' },
+      entries.map((e) =>
+        el(
+          'li',
+          {},
+          el('span', { class: 'trail-time muted small', text: formatTime(e.at) }),
+          el('span', {}, el('strong', { text: e.actor ?? 'Orco' }), ` ${trailLine(e)}`),
+        ),
+      ),
+    ),
+  );
 }
 
 async function openThread(message) {
   state.thread = message;
   openPanel('thread', 'Thread');
+  state.threadSummary = null;
   state.threadMessages = await api(`/messages?room=${encodeURIComponent(message.room)}&thread_id=${message.id}&limit=200`);
   renderThread();
+  void loadThreadSummary();
   $('thread-text').focus();
 }
 
@@ -807,7 +1011,14 @@ async function showMembers() {
       'div',
       { class: `member ${p.status}${p.working ? ' working' : ''}` },
       face,
-      el('div', { class: 'member-info' }, el('span', { text: p.name }), el('span', { class: 'sub', text: sub }), working),
+      el(
+        'div',
+        { class: 'member-info' },
+        el('span', { text: p.name }),
+        el('span', { class: 'sub', text: sub }),
+        p.profile?.skills.length ? el('span', { class: 'sub skills', title: p.profile.environment || null, text: p.profile.skills.join(' · ') }) : null,
+        working,
+      ),
     );
   };
   const humans = sorted('user');
@@ -890,6 +1101,12 @@ function connect() {
     if (state.panel === 'inbox') scheduleInbox();
   });
   events.addEventListener('question', (event) => onQuestion(JSON.parse(event.data)));
+  events.addEventListener('flag', () => scheduleInbox());
+  events.addEventListener('notes', (event) => tickets.onNotes(JSON.parse(event.data)));
+  events.addEventListener('summary', (event) => {
+    const { threadId } = JSON.parse(event.data);
+    if (state.panel === 'thread' && state.thread?.id === threadId) void loadThreadSummary();
+  });
   events.addEventListener('locks', () => {
     if (state.panel === 'locks') void showLocks();
   });
@@ -1167,7 +1384,7 @@ function scheduleInbox() {
 async function refreshInbox() {
   const inbox = await api('/inbox').catch(() => null);
   if (!inbox) return;
-  const count = inbox.counts.approvals + inbox.counts.questions + inbox.counts.unseenMentions;
+  const count = inbox.counts.approvals + inbox.counts.questions + inbox.counts.flags + inbox.counts.stalled + inbox.counts.unseenMentions;
   const badge = $('inbox-badge');
   badge.hidden = count === 0;
   badge.textContent = String(count);
@@ -1245,9 +1462,63 @@ function renderInbox(inbox) {
               el('strong', { text: q.asker }),
               el('span', { class: 'muted', text: ` · task #${q.taskId} · ${q.room}${q.audience === 'project' ? ' · asked of everyone' : ''}` }),
             ),
-            el('span', { class: 'inbox-text', text: q.question }),
+            q.kind === 'plan' ? el('span', { class: 'inbox-text', text: 'Proposed a plan; edit it if needed, then approve or reject.' }) : el('span', { class: 'inbox-text', text: q.question }),
           ),
-          el('div', { class: 'inbox-answer' }, answerBox(q.id, scheduleInbox)),
+          el('div', { class: 'inbox-answer' }, q.kind === 'plan' ? planBox(q.id, q.question, scheduleInbox) : answerBox(q.id, scheduleInbox)),
+        ),
+      ),
+    );
+  }
+  if (inbox.flags.length) {
+    sections.push(
+      inboxHeading('Flagged by your agents', inbox.flags.length),
+      ...inbox.flags.map((f) =>
+        el(
+          'div',
+          { class: 'inbox-card' },
+          el(
+            'button',
+            {
+              class: 'inbox-row',
+              type: 'button',
+              onclick: () =>
+                f.message ? void jumpTo({ id: f.message.id, room: f.message.room, threadId: f.message.threadId }) : void tickets.openTicket(f.ticket.ref),
+            },
+            el(
+              'span',
+              { class: 'inbox-meta' },
+              el('strong', { text: f.flagger }),
+              el('span', { class: 'muted', text: f.message ? ` flagged a message from ${f.message.author} in ${f.message.room}` : ` flagged ${f.ticket.ref}` }),
+            ),
+            el('span', { class: 'inbox-text', text: f.reason }),
+            el('span', { class: 'flag-quote', text: f.message ? snippet(f.message.text, 240) : f.ticket.title }),
+          ),
+          el(
+            'div',
+            { class: 'row-end' },
+            el('button', {
+              class: 'ghost small',
+              type: 'button',
+              text: 'Dismiss',
+              onclick: async () => {
+                await api(`/flags/${f.id}/dismiss`, { method: 'POST' });
+                scheduleInbox();
+              },
+            }),
+          ),
+        ),
+      ),
+    );
+  }
+  if (inbox.stalled.length) {
+    sections.push(
+      inboxHeading('Stalled', inbox.stalled.length),
+      ...inbox.stalled.map((t) =>
+        el(
+          'button',
+          { class: 'inbox-row', type: 'button', onclick: () => void jumpTo({ id: t.messageId, room: t.room, threadId: null }) },
+          el('span', { class: 'inbox-meta' }, el('strong', { text: `Task #${t.id}` }), el('span', { class: 'muted', text: ` → ${t.assignee} · no sign of life` })),
+          el('span', { class: 'inbox-text', text: snippet(t.request) }),
         ),
       ),
     );
@@ -1264,7 +1535,7 @@ function renderInbox(inbox) {
             { class: 'inbox-meta' },
             el('strong', { text: `Task #${t.id}` }),
             el('span', { class: 'muted', text: ` → ${t.assignee} · ` }),
-            el('span', { class: `chip task-${t.state}`, text: TASK_LABEL[t.state] }),
+            t.stalled ? el('span', { class: 'chip stalled', text: 'Stalled' }) : el('span', { class: `chip task-${t.state}`, text: TASK_LABEL[t.state] }),
           ),
           el('span', { class: 'inbox-text', text: snippet(t.request) }),
         ),
@@ -1280,7 +1551,7 @@ function renderInbox(inbox) {
   sections.push(
     ...(mentions.length ? mentions.map((m) => messageRow(m, { unseen: !m.seen })) : [el('p', { class: 'panel-intro muted small', text: 'No one has mentioned you yet.' })]),
   );
-  if (!inbox.approvals.length && !inbox.questions.length && !inbox.tasks.length) {
+  if (!inbox.approvals.length && !inbox.questions.length && !inbox.flags.length && !inbox.stalled.length && !inbox.tasks.length) {
     sections.unshift(el('p', { class: 'panel-intro muted small', text: 'Nothing needs your decision right now.' }));
   }
   $('panel-body').replaceChildren(...sections);

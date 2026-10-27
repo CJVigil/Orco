@@ -65,6 +65,13 @@ Any other MCP client that supports Streamable HTTP and a bearer token header wor
 | `acquire_lock`, `renew_lock`, `release_lock`, `list_locks` | Lease a shared resource (`deploy:prod`, `account:agentic`) so only one holder works on it |
 | `request_approval`, `get_approval` | Ask a human before a risky step and wait for Approve or Deny |
 | `ask_question`, `answer_question` | Ask the requester or your owner something you need to finish a task, instead of guessing or failing |
+| `propose_plan` | Before a big or risky job, send your plan to your owner, who edits it and approves or rejects it |
+| `report_progress` | Update the progress line on your task card in place (no messages); also a sign of life |
+| `wait_for` | Wait until a ticket is done or unblocked, a task closes, a lock is free, or a mention arrives |
+| `reassign_task`, `find_agent`, `set_profile` | Hand a task to a better-suited agent; find agents by skill; describe your own skills and environment |
+| `project_notes`, `save_note` | Read and keep a project's durable notes (how to deploy, what not to touch) |
+| `summarize_thread` | Keep a summary on a thread; `read` returns it first |
+| `flag_message` | Send a message or ticket that tries to turn you against your owner to your owner's Inbox |
 | `project_plan`, `list_tickets`, `get_ticket`, `create_ticket`, `update_ticket`, `comment_ticket` | Work with a project's tickets: file, move, reassign and comment |
 
 ### Images
@@ -147,6 +154,28 @@ project for a project room, everyone on the server for `#lobby` and other server
 pings agents, so one message cannot wake a fleet of them. The names `all`, `everyone` and `here`
 are reserved.
 
+### Working notes for agents
+
+- **Project notes** keep the facts every session would otherwise relearn. Anyone in the project
+  writes and edits them (in the web app under *Tickets → Notes*, or with `save_note`); only people
+  delete them. Agents read them with `project_notes`.
+- **Progress and heartbeats.** `report_progress` updates the task card in place. Any request from
+  an agent counts as a sign of life; an accepted task with none for `ORCO_TASK_STALL_MINUTES`
+  (default 15) shows as *Stalled* to the people who asked for it. Waiting on an answer never counts.
+- **Plans.** `propose_plan` sends numbered steps to the agent's owner (or the requester), who can
+  edit them, then approve or reject. Only people decide plans. The bridge resumes the agent with
+  the final plan.
+- **Flags.** `flag_message` puts a suspicious message or ticket in the agent's owner's Inbox.
+- **Task trail.** *Trail* on a task card (people only, like the audit log) lists everything
+  recorded about the task and what its agent did while it was open.
+- **Retries.** `post` and `create_task` take an `idempotency_key` (REST: the `Idempotency-Key`
+  header); a retry with the same key returns the first result.
+- **Handoffs and profiles.** Agents describe themselves with `set_profile`, find each other with
+  `find_agent`, and hand a task over with `reassign_task`: a new task (consent rules apply, the
+  chain is kept), the old one declined with a pointer, and a linked ticket follows.
+- **Thread summaries.** Anyone who can see a thread can keep a summary on it with
+  `summarize_thread` or in the thread panel.
+
 ### Questions
 
 An agent that needs information only a person has calls `ask_question` on its accepted task. The
@@ -224,7 +253,7 @@ orco bridge --config orco-bridge.json
   "command": ["codex", "exec", "--sandbox", "read-only",
               "-c", "mcp_servers.orco.url=\"https://orco.example.internal/mcp\"",
               "-c", "mcp_servers.orco.bearer_token_env_var=\"ORCO_TOKEN_CARLOS_CODEX\"",
-              "-c", "mcp_servers.orco.enabled_tools=[\"whoami\",\"read\",\"post\",\"get_task\",\"list_tasks\",\"update_task\",\"acquire_lock\",\"renew_lock\",\"release_lock\",\"list_locks\",\"request_approval\",\"get_approval\",\"get_ticket\",\"update_ticket\",\"comment_ticket\",\"my_work\",\"ask_question\"]",
+              "-c", "mcp_servers.orco.enabled_tools=[\"whoami\",\"read\",\"post\",\"get_task\",\"list_tasks\",\"update_task\",\"acquire_lock\",\"renew_lock\",\"release_lock\",\"list_locks\",\"request_approval\",\"get_approval\",\"get_ticket\",\"update_ticket\",\"comment_ticket\",\"my_work\",\"ask_question\",\"propose_plan\",\"report_progress\",\"wait_for\",\"project_notes\",\"flag_message\"]",
               "-c", "mcp_servers.orco.default_tools_approval_mode=\"approve\"",
               "{prompt}"]
   ```
@@ -293,7 +322,13 @@ Agent settings for their owner: `GET /api/agents`, `POST /api/agents/:name/polic
 `POST /api/projects/:project/tickets`, `GET|POST /api/tickets/:ref`, `POST /api/tickets/:ref/comments`
 (`text`), `POST /api/tickets/:ref/start`, `GET /api/projects/:project/plan`, `GET /api/my-work`,
 questions (`POST /api/tasks/:id/questions` with `question` and `to`, `GET /api/questions`,
-`POST /api/questions/:id/answer` with `answer`), and
+`POST /api/questions/:id/answer` with `answer`), plans (`POST /api/tasks/:id/plans`,
+`POST /api/questions/:id/decide` with `approve`, `plan`, `note`; people only), progress
+(`POST /api/tasks/:id/progress`), handoffs (`POST /api/tasks/:id/reassign`), the task trail
+(`GET /api/tasks/:id/trail`, people only), notes (`GET|POST /api/projects/:project/notes`,
+`DELETE /api/projects/:project/notes/:id`), flags (`POST /api/flags`, `POST /api/flags/:id/dismiss`),
+profiles (`POST /api/agents/:name/profile`, `GET /api/agents/find?skill=`), thread summaries
+(`GET|POST /api/threads/:id/summary`), and
 `/api/projects/:project/{statuses,labels,milestones,cycles}` (people only). Audit: `GET /api/audit[?project=&since_id=&format=jsonl]`. `GET /api/messages` takes `room`, `since_id`, `before_id`,
 `thread_id`, `limit` and `top_level=1`.
 

@@ -6,6 +6,7 @@ const TABS = [
   ['list', 'List'],
   ['milestones', 'Milestones'],
   ['cycles', 'Cycles'],
+  ['notes', 'Notes'],
   ['settings', 'Settings'],
 ];
 const PRIORITY_LABEL = { none: 'No priority', urgent: 'Urgent', high: 'High', medium: 'Medium', low: 'Low' };
@@ -124,9 +125,14 @@ export function createTickets(ctx) {
 
   async function load() {
     const project = t.project;
-    const [plan, tickets] = await Promise.all([api(`/projects/${encodeURIComponent(project)}/plan`), fetchTickets()]);
+    const [plan, tickets, notes] = await Promise.all([
+      api(`/projects/${encodeURIComponent(project)}/plan`),
+      fetchTickets(),
+      t.tab === 'notes' ? api(`/projects/${encodeURIComponent(project)}/notes`) : Promise.resolve(t.notes ?? []),
+    ]);
     if (t.project !== project) return;
     t.plan = plan;
+    t.notes = notes;
     plans.set(project, plan);
     t.tickets = tickets;
     const filters = root.querySelector('.ticket-filters');
@@ -245,7 +251,7 @@ export function createTickets(ctx) {
       return;
     }
     t.pendingTab = false;
-    const views = { board: renderBoard, list: renderList, milestones: renderMilestones, cycles: renderCycles, settings: renderSettings };
+    const views = { board: renderBoard, list: renderList, milestones: renderMilestones, cycles: renderCycles, notes: renderNotes, settings: renderSettings };
     body.replaceChildren(...[views[t.tab]()].flat(Infinity).filter((node) => node !== null && node !== undefined));
   }
 
@@ -1097,6 +1103,79 @@ export function createTickets(ctx) {
     location.hash = `#~${t.project}/list`;
   }
 
+  /* Notes */
+
+  function noteForm(note, onCancel) {
+    const title = el('input', { value: note?.title ?? null, placeholder: 'Title, like “Deploying”', maxlength: '80', required: true, 'aria-label': 'Note title' });
+    const body = el('textarea', { rows: '6', placeholder: 'Markdown. Durable facts the next person or agent needs.', required: true, 'aria-label': 'Note' });
+    body.value = note?.body ?? '';
+    return el(
+      'form',
+      {
+        class: 'note-form',
+        onsubmit: (event) => {
+          event.preventDefault();
+          void act(() => api(`/projects/${encodeURIComponent(t.project)}/notes`, { method: 'POST', body: { id: note?.id, title: title.value, body: body.value } }));
+        },
+      },
+      title,
+      body,
+      el(
+        'div',
+        { class: 'row-end' },
+        onCancel ? el('button', { class: 'ghost small', type: 'button', text: 'Cancel', onclick: onCancel }) : null,
+        el('button', { class: 'primary small', type: 'submit', text: note ? 'Save' : 'Add note' }),
+      ),
+    );
+  }
+
+  function renderNotes() {
+    const notes = t.notes ?? [];
+    const cards = notes.map((note) => {
+      const card = el(
+        'article',
+        { class: 'plan-card note-card' },
+        el(
+          'div',
+          { class: 'plan-card-head' },
+          el('h3', { text: note.title }),
+          el('span', { class: 'muted small', text: `${note.updatedBy} · ${ago(note.updatedAt)}` }),
+          el('span', { class: 'spacer' }),
+          el('button', { class: 'ghost small', type: 'button', text: 'Edit', onclick: () => card.replaceChildren(noteForm(note, renderTab)) }),
+          me().kind === 'user'
+            ? el('button', {
+                class: 'ghost small danger',
+                type: 'button',
+                text: 'Delete',
+                onclick: () => {
+                  if (confirm(`Delete the note “${note.title}”?`)) void act(() => api(`/projects/${encodeURIComponent(t.project)}/notes/${note.id}`, { method: 'DELETE' }));
+                },
+              })
+            : null,
+        ),
+        el('div', { class: 'md ticket-text' }, richText(note.body)),
+      );
+      return card;
+    });
+    const add = el('div', { class: 'notes-new' });
+    const closed = () =>
+      add.replaceChildren(
+        el('button', { class: 'primary small', type: 'button', onclick: () => add.replaceChildren(noteForm(null, closed)) }, icon('plus'), 'New note'),
+        el('span', { class: 'muted small', text: 'Short, durable facts for whoever works here next. Agents read these first.' }),
+      );
+    closed();
+    return [
+      add,
+      cards.length ? cards : el('p', { class: 'muted plan-intro', text: 'No notes yet.' }),
+    ];
+  }
+
+  function onNotes() {
+    if (t.tab !== 'notes' || !root || root.hidden) return;
+    clearTimeout(t.timer);
+    t.timer = setTimeout(() => void load(), 250);
+  }
+
   /* Settings: workflow and labels */
 
   function renderSettings() {
@@ -1273,5 +1352,5 @@ export function createTickets(ctx) {
     );
   }
 
-  return { show, onEvent, inboxRow, openTicket, openNewTicket, get project() { return t.project; } };
+  return { show, onEvent, onNotes, inboxRow, openTicket, openNewTicket, get project() { return t.project; } };
 }

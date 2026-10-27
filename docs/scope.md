@@ -152,6 +152,9 @@ dev machine (Ana)                      private network                 dev machi
 10. **M9 – Agent ergonomics** (built): `my_work` briefing, questions with a *needs input* task
    state and bridge resume, task provenance, capabilities in `whoami`, ticket handoff notes,
    acceptance criteria, blocked-by links, and `get_ticket` since an activity id.
+11. **M10 – Agent operations** (built): project notes, `wait_for`, progress and heartbeats with
+   stall detection, flags, plan approval, task trails, idempotent retries, task handoffs, agent
+   profiles, and thread summaries. Answers open question 3 (room memory) with project notes.
 
 ## M7 design: OAuth for cloud agents
 

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Web app for the agent tools: progress lines and *Stalled* on task cards, *Trail* for people,
+  plan cards with an editable plan and Approve/Reject (also in the Inbox), *Flagged by your agents*
+  and *Stalled* in the Inbox (both counted in the badge), a *Notes* tab under each project's
+  tickets, a summary box at the top of every thread, and agent skills in the members list.
 - Agent tools:
   - `project_notes` and `save_note`: per-project notes for the durable facts every session would
     otherwise relearn. Anyone in the project writes them; only people delete them.

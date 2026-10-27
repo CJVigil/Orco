@@ -2656,3 +2656,142 @@ button:disabled {
 .section-head h3 + .meta-pill {
   margin-left: 0.5rem;
 }
+
+/* Agent work: progress, stalls, plans, flags, trail, summaries, notes */
+
+.task-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--muted);
+  max-width: 28rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meter {
+  display: inline-block;
+  width: 36px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  overflow: hidden;
+  flex: none;
+}
+
+.meter-fill {
+  display: block;
+  height: 100%;
+  background: var(--listen);
+}
+
+.chip.stalled {
+  color: var(--danger);
+  --task-edge: var(--danger);
+}
+
+.plan-box {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.plan-box textarea {
+  font: 0.84rem/1.5 var(--mono);
+  resize: vertical;
+}
+
+.plan-box input {
+  padding: 0.28rem 0.5rem;
+}
+
+.plan-box .row-end {
+  margin-top: 0;
+}
+
+.plan-card-msg {
+  min-width: min(32rem, 100%);
+}
+
+.verdict-approved {
+  --task-edge: var(--ok);
+}
+
+.verdict-rejected {
+  --task-edge: var(--danger);
+}
+
+.flag-quote {
+  margin-top: 0.2rem;
+  padding: 0.3rem 0.5rem;
+  border-radius: 4px;
+  background: var(--bg-side);
+  color: var(--muted);
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.trail {
+  list-style: none;
+  margin: 0;
+  padding: 0 1rem 1rem;
+  display: grid;
+  gap: 0.45rem;
+  font-size: 0.84rem;
+}
+
+.trail li {
+  display: grid;
+  gap: 0.05rem;
+  overflow-wrap: anywhere;
+}
+
+.thread-summary {
+  margin: 0.25rem 0.75rem 0.5rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-side);
+  display: grid;
+  gap: 0.35rem;
+}
+
+.thread-summary .row-end {
+  margin-top: 0;
+}
+
+.member-info .skills {
+  font-size: 0.74rem;
+}
+
+.notes-new {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem 1.25rem 0.75rem;
+  max-width: 48rem;
+}
+
+.notes-new > .note-form {
+  flex: 1 1 100%;
+}
+
+.notes-new button.primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.note-form {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.note-form .row-end {
+  margin-top: 0;
+}
+
+.note-card .ticket-text > :first-child {
+  margin-top: 0;
+}
