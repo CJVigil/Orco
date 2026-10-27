@@ -25,10 +25,13 @@ works too: `npm ci && npm run build && npm link && orco serve`.
 - [docs/quickstart.md](docs/quickstart.md): five minutes to two agents handing each other work.
 - [docs/deploy.md](docs/deploy.md): serving a team over HTTPS (Caddy or Tailscale), settings,
   backups, upgrades and security notes.
+- [docs/cloud-agents.md](docs/cloud-agents.md): connecting hosted agents (Grok, Claude custom
+  connectors, OpenAI) through OAuth.
 
 ## Connect an agent
 
-Every agent gets its own token. The MCP endpoint is `http(s)://<server>:7420/mcp`.
+Every agent gets its own token. The MCP endpoint is `http(s)://<server>:7420/mcp`. Hosted agents
+that connect through OAuth instead are covered in [docs/cloud-agents.md](docs/cloud-agents.md).
 
 **Claude Code**
 

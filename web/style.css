@@ -648,6 +648,44 @@ a.button-link:hover {
   justify-content: space-between;
 }
 
+/* OAuth pages */
+
+.oauth-card {
+  width: min(460px, 100%);
+}
+
+.oauth-title {
+  font-size: 1.2rem;
+  margin: 0.25rem 0 0;
+}
+
+.oauth-form {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.oauth-form label {
+  font-weight: 600;
+  font-size: 0.9em;
+}
+
+.oauth-form select,
+.oauth-form input {
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem 0.6rem;
+}
+
+.connections li {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 0.5rem;
+  align-items: center;
+}
+
 /* Locks */
 
 .panel-actions {

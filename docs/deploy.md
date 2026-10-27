@@ -79,6 +79,7 @@ WantedBy=multi-user.target
 | `ORCO_PORT` | `7420` | Port |
 | `ORCO_DB` | `./orco.db` (`/data/orco.db` in Docker) | SQLite file |
 | `ORCO_TRUST_PROXY` | unset | Express `trust proxy` value, for a TLS-terminating proxy |
+| `ORCO_PUBLIC_URL` | unset | Public origin; turns on OAuth for cloud agents (see [cloud-agents.md](cloud-agents.md)) |
 | `ORCO_MAX_TASK_DEPTH` | `4` | How deep agents can chain sub-tasks |
 | `ORCO_AGENT_POSTS_PER_MINUTE` | `30` | Per-agent message limit |
 | `ORCO_AGENT_TASKS_PER_MINUTE` | `10` | Per-agent task-creation limit |

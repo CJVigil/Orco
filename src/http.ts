@@ -4,7 +4,10 @@ import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpHandler } from '@modelcontextprotocol/server';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { buildMcpServer } from './mcp.js';
+import { OAUTH_SCOPE, OAuth } from './oauth.js';
+import { oauthRouter } from './oauth-routes.js';
 import { Presence } from './presence.js';
+import { RateLimiter } from './ratelimit.js';
 import { type Message, OrcoError, type Participant, type Store } from './store.js';
 import type { Task, TaskState } from './tasks.js';
 import type { Approval } from './approvals.js';
@@ -36,13 +39,16 @@ function readCookie(header: string | undefined, name: string): string | undefine
   return undefined;
 }
 
-function authenticate(store: Store, presence: Presence) {
+function authenticate(store: Store, presence: Presence, oauth?: OAuth) {
   return (req: Request, res: Response, next: NextFunction) => {
     const bearer = /^Bearer (\S+)$/.exec(req.headers.authorization ?? '')?.[1];
     const token = bearer ?? readCookie(req.headers.cookie, COOKIE);
-    const participant = token ? store.authenticate(token) : null;
+    const participant = !token ? null : oauth && bearer ? (oauth.verifyAccessToken(bearer) ?? store.authenticate(bearer)) : store.authenticate(token);
     if (!token || !participant) {
-      res.status(401).set('WWW-Authenticate', 'Bearer').json({ error: 'Missing or invalid token' });
+      const challenge = oauth
+        ? `Bearer resource_metadata="${oauth.issuer}/.well-known/oauth-protected-resource/mcp", scope="${OAUTH_SCOPE}"`
+        : 'Bearer';
+      res.status(401).set('WWW-Authenticate', challenge).json({ error: 'Missing or invalid token' });
       return;
     }
     req.participant = participant;
@@ -71,7 +77,17 @@ function optionalInt(value: unknown): number | undefined {
   return n;
 }
 
-export function createApp(store: Store, presence = new Presence()) {
+export interface AppOptions {
+  presence?: Presence;
+  publicUrl?: string;
+  now?: () => number;
+}
+
+export function createApp(store: Store, options: AppOptions = {}) {
+  const presence = options.presence ?? new Presence();
+  const oauth = options.publicUrl ? new OAuth(store, options.publicUrl) : undefined;
+  const logins = new RateLimiter(10, 15 * 60_000, options.now);
+  const registrations = new RateLimiter(20, 3600_000, options.now);
   const app = express();
   app.disable('x-powered-by');
   const mcp = createMcpHandler(({ requestInfo, authInfo }) => {
@@ -81,6 +97,7 @@ export function createApp(store: Store, presence = new Presence()) {
   });
   const mcpNode = toNodeHandler(mcp);
   const auth = authenticate(store, presence);
+  const mcpAuth = authenticate(store, presence, oauth);
 
   const withStatus = (people: (Participant & { owner: string | null })[]) =>
     people.map((p) => ({ name: p.name, kind: p.kind, owner: p.owner, status: presence.status(p.id) }));
@@ -89,14 +106,31 @@ export function createApp(store: Store, presence = new Presence()) {
     res.json({ ok: true });
   });
 
-  app.all('/mcp', auth, (req, res) => {
+  if (oauth) {
+    app.use((req, res, next) => {
+      if (req.path.startsWith('/oauth/')) {
+        res.setHeader('Content-Security-Policy', "default-src 'self'; style-src 'self'; img-src 'self' data:; frame-ancestors 'none'");
+        res.setHeader('Referrer-Policy', 'same-origin');
+      }
+      next();
+    });
+    app.use(oauthRouter(store, oauth, logins, registrations));
+  }
+
+  app.all('/mcp', mcpAuth, (req, res) => {
     void mcpNode(req, res);
   });
 
   app.post('/api/session', express.json({ limit: '4kb' }), (req, res) => {
+    const ip = req.ip ?? 'unknown';
+    if (logins.blocked(ip)) {
+      res.status(429).json({ error: 'Too many failed sign-ins. Wait 15 minutes and try again.' });
+      return;
+    }
     const token = String(req.body?.token ?? '');
     const participant = store.authenticate(token);
     if (!participant || participant.kind !== 'user') {
+      logins.hit(ip);
       res.status(401).json({ error: 'That is not a valid user token' });
       return;
     }
@@ -239,7 +273,14 @@ export function createApp(store: Store, presence = new Presence()) {
   });
 
   api.get('/agents', (req, res) => {
-    res.json(store.myAgents(req.participant!));
+    const connections = oauth && req.participant!.kind === 'user' ? oauth.connections(req.participant!) : [];
+    res.json(store.myAgents(req.participant!).map((agent) => ({ ...agent, connections: connections.filter((c) => c.agent === agent.name) })));
+  });
+  api.post('/connections/:id/revoke', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (!oauth || id === undefined || req.participant!.kind !== 'user') throw new OrcoError('not_found', 'No such connection');
+    oauth.revokeConnection(req.participant!, id);
+    res.status(204).end();
   });
   api.post('/agents/:name/policy', (req, res) => {
     res.json(store.setTaskPolicy(req.participant!, String(req.params.name), req.body?.policy));
@@ -334,5 +375,5 @@ export function createApp(store: Store, presence = new Presence()) {
     res.status(500).json({ error: 'Internal error' });
   });
 
-  return { app, presence, close: () => mcp.close() };
+  return { app, presence, oauth, close: () => mcp.close() };
 }

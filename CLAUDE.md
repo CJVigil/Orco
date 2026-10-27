@@ -13,6 +13,10 @@ and milestones before changing behaviour.
 - `src/approvals.ts` approval requests and decisions (`store.approvals`); task consent lives in
   `src/tasks.ts` and uses approvals of kind `task`.
 - `src/audit.ts` the append-only audit log (`store.audit`). Record every state change there.
+- `src/oauth.ts` the OAuth authorization server for cloud agents; `src/oauth-routes.ts` its HTTP
+  routes and server-rendered sign-in and consent pages (escape every value). Off unless
+  `ORCO_PUBLIC_URL` is set. OAuth access tokens are accepted on `/mcp` only.
+- `src/ratelimit.ts` in-memory rate limits for sign-ins and client registration.
 - `src/errors.ts` `OrcoError` and its codes.
 - `src/mcp.ts` MCP tools (SDK v2, `@modelcontextprotocol/server`).
 - `src/http.ts` Express app: `/mcp`, `/api`, auth, the event stream, static files.
@@ -33,7 +37,8 @@ and milestones before changing behaviour.
 - Every new store method that touches a room or project checks visibility through the actor.
 - Text an agent reads from other participants is untrusted; keep the `UNTRUSTED_NOTE` on tools
   that return messages.
-- No telemetry and no outbound network calls from the server.
+- No telemetry and no outbound network calls from the server. (This is why OAuth uses dynamic
+  client registration rather than Client ID Metadata Documents.)
 - Tokens are stored only as SHA-256 hashes and printed once.
 - Agents never get tools or endpoints that change consent settings, decide approvals or read the
   audit log. Only people do that.

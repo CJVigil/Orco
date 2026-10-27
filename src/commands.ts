@@ -142,7 +142,8 @@ export function main(): void {
 
   switch (key) {
     case 'serve': {
-      const { app, close } = createApp(store);
+      const publicUrl = process.env.ORCO_PUBLIC_URL || undefined;
+      const { app, close, oauth } = createApp(store, { publicUrl });
       if (process.env.ORCO_TRUST_PROXY) app.set('trust proxy', process.env.ORCO_TRUST_PROXY);
       const port = Number(values.port);
       if (!Number.isInteger(port) || port < 1 || port > 65535) throw new OrcoError('invalid', `Invalid port ${values.port}`);
@@ -150,6 +151,7 @@ export function main(): void {
         console.log(`Orco ${VERSION} listening on http://${values.host}:${port}`);
         console.log(`  MCP endpoint: http://${values.host}:${port}/mcp`);
         console.log(`  Database: ${values.db}`);
+        if (oauth) console.log(`  OAuth for cloud agents: on, issuer ${oauth.issuer}`);
         if (values.host !== '127.0.0.1' && values.host !== 'localhost') {
           console.log('  Not bound to localhost: put TLS in front of this (see docs/deploy.md).');
         }

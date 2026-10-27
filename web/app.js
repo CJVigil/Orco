@@ -282,10 +282,31 @@ async function showMyAgents() {
           }),
         ),
       );
+      const connections = (agent.connections || []).map((c) =>
+        el(
+          'li',
+          {},
+          el('span', { text: c.client, title: `Connected ${new Date(c.createdAt).toLocaleString()}` }),
+          el('span', { class: 'small muted', text: c.lastUsedAt ? `used ${formatTime(c.lastUsedAt)}` : 'not used yet' }),
+          el('button', {
+            class: 'ghost small danger',
+            type: 'button',
+            text: 'Revoke',
+            onclick: async () => {
+              if (!confirm(`Disconnect ${c.client} from ${agent.name}? It will need to sign in again.`)) return;
+              await api(`/connections/${c.id}/revoke`, { method: 'POST', body: {} });
+              void showMyAgents();
+            },
+          }),
+        ),
+      );
       return el(
         'section',
         { class: 'agent-settings' },
         el('div', { class: 'agent-name' }, avatar(agent.name, 'agent'), el('strong', { text: agent.name })),
+        connections.length
+          ? el('div', { class: 'trusted' }, el('span', { class: 'small muted', text: 'Connected apps:' }), el('ul', { class: 'connections' }, connections))
+          : null,
         el('label', { class: 'small', text: 'Who may give it tasks' }),
         select,
         agent.taskPolicy === 'ask'

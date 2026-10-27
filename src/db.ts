@@ -129,6 +129,62 @@ const MIGRATIONS = [
   CREATE TRIGGER audit_no_update BEFORE UPDATE ON audit BEGIN SELECT RAISE(ABORT, 'the audit log is append-only'); END;
   CREATE TRIGGER audit_no_delete BEFORE DELETE ON audit BEGIN SELECT RAISE(ABORT, 'the audit log is append-only'); END;
   `,
+  `
+  CREATE TABLE oauth_clients (
+    client_id TEXT PRIMARY KEY,
+    secret_hash TEXT,
+    name TEXT NOT NULL,
+    redirect_uris TEXT NOT NULL,
+    auth_method TEXT NOT NULL CHECK (auth_method IN ('none', 'client_secret_post', 'client_secret_basic')),
+    created_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE oauth_requests (
+    id TEXT PRIMARY KEY,
+    client_id TEXT NOT NULL REFERENCES oauth_clients(client_id),
+    redirect_uri TEXT NOT NULL,
+    code_challenge TEXT NOT NULL,
+    state TEXT,
+    scope TEXT NOT NULL,
+    viewer_id INTEGER REFERENCES participants(id),
+    nonce TEXT,
+    expires_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE oauth_grants (
+    id INTEGER PRIMARY KEY,
+    client_id TEXT NOT NULL REFERENCES oauth_clients(client_id),
+    agent_id INTEGER NOT NULL REFERENCES participants(id),
+    user_id INTEGER NOT NULL REFERENCES participants(id),
+    scope TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    last_used_at INTEGER,
+    revoked_at INTEGER
+  );
+  CREATE INDEX oauth_grants_agent ON oauth_grants (agent_id);
+
+  CREATE TABLE oauth_codes (
+    code_hash TEXT PRIMARY KEY,
+    client_id TEXT NOT NULL REFERENCES oauth_clients(client_id),
+    agent_id INTEGER NOT NULL REFERENCES participants(id),
+    user_id INTEGER NOT NULL REFERENCES participants(id),
+    scope TEXT NOT NULL,
+    redirect_uri TEXT NOT NULL,
+    code_challenge TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    used_at INTEGER,
+    grant_id INTEGER REFERENCES oauth_grants(id)
+  );
+
+  CREATE TABLE oauth_tokens (
+    token_hash TEXT PRIMARY KEY,
+    grant_id INTEGER NOT NULL REFERENCES oauth_grants(id),
+    kind TEXT NOT NULL CHECK (kind IN ('access', 'refresh')),
+    expires_at INTEGER NOT NULL,
+    used_at INTEGER
+  );
+  CREATE INDEX oauth_tokens_grant ON oauth_tokens (grant_id);
+  `,
 ];
 
 export function openDatabase(path: string): DatabaseSync {

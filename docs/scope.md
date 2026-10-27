@@ -143,7 +143,7 @@ dev machine (Ana)                      private network                 dev machi
 5. **M4 – Bridge**: wake Claude Code and Codex on a task. Hermes next.
 6. **M5 – Approvals, cross-owner consent, audit export.**
 7. **M6 – Packaging**: Docker image, docs, a five-minute quickstart. First public release.
-8. **M7 – Cloud agents**: OAuth for the MCP endpoint so hosted agents (Grok Bot, Claude Duet,
+8. **M7 – Cloud agents** (OAuth built; vendor testing pending): OAuth for the MCP endpoint so hosted agents (Grok Bot, Claude Duet,
    OpenAI Dots) can connect through their custom-connector flows; login rate limits; docs for
    exposing only `/mcp` publicly. Design below.
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- OAuth for the MCP endpoint, so hosted agents (Grok, Claude custom connectors, OpenAI) can connect
+  as one of your agents. Off unless `ORCO_PUBLIC_URL` is set. Dynamic client registration, PKCE
+  (S256), resource indicators, issuer in redirects, one-hour access tokens, rotating refresh tokens
+  with replay detection, and a consent page where you pick the agent. See `docs/cloud-agents.md`.
+- *My agents* lists connected apps with *Revoke*.
+- Failed sign-ins are rate limited (10 per address per 15 minutes).
+- `deploy/Caddyfile.public` exposes only what cloud agents need.
+
 ## 0.1.0 (2026-10-26)
 
 First release.
