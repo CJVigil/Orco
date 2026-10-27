@@ -14,12 +14,20 @@ export type TaskState =
 
 export const OPEN_STATES: readonly TaskState[] = ['awaiting_approval', 'requested', 'accepted', 'needs_input'];
 
+export interface TaskProgress {
+  text: string;
+  percent: number | null;
+  at: string;
+}
+
 export interface TaskSummary {
   id: number;
   state: TaskState;
   assignee: string;
   since: string;
   chain: string[];
+  progress: TaskProgress | null;
+  stalled: boolean;
 }
 
 export interface AgentActivity {
@@ -49,6 +57,10 @@ export interface Task {
   chain: string[];
   /** The latest question the assignee asked on this task, if any. */
   question: QuestionSummary | null;
+  /** The assignee's latest progress line, updated in place. */
+  progress: TaskProgress | null;
+  /** Accepted, not waiting on a person, and no sign of life from the agent for a while. */
+  stalled: boolean;
 }
 
 interface TaskRow {
@@ -73,6 +85,11 @@ interface TaskRow {
   approval_id: number | null;
   approval_state: string | null;
   open_question: number | null;
+  progress: string | null;
+  progress_pct: number | null;
+  progress_at: string | null;
+  heartbeat_at: number | null;
+  stall_notified: number;
   created_at: string;
   updated_at: string;
 }
@@ -83,6 +100,7 @@ const TASK_SELECT = `
          t.assignee_id, a.name AS assignee, a.owner_id AS assignee_owner_id, ao.name AS assignee_owner,
          t.parent_id, t.depth, t.request, t.state, t.note, t.approval_id, ap.state AS approval_state,
          (SELECT q.id FROM questions q WHERE q.task_id = t.id AND q.state = 'open') AS open_question,
+         t.progress, t.progress_pct, t.progress_at, t.heartbeat_at, t.stall_notified,
          t.created_at, t.updated_at
   FROM tasks t
   LEFT JOIN approvals ap ON ap.id = t.approval_id
@@ -105,6 +123,8 @@ const ASSIGNEE_MOVES: Record<TaskState, TaskState[]> = {
 };
 
 const MAX_REQUEST = 4_000;
+const MAX_PROGRESS = 300;
+const TOUCH_EVERY_MS = 30_000;
 
 function effectiveState(row: { state: TaskState; approval_state: string | null; open_question: number | null }): TaskState {
   if (row.state === 'requested' && row.approval_state === 'pending') return 'awaiting_approval';
@@ -112,7 +132,11 @@ function effectiveState(row: { state: TaskState; approval_state: string | null; 
   return row.state;
 }
 
-function baseTask(row: TaskRow): Omit<Task, 'chain' | 'question'> {
+function progressOf(row: { progress: string | null; progress_pct: number | null; progress_at: string | null }): TaskProgress | null {
+  return row.progress === null ? null : { text: row.progress, percent: row.progress_pct, at: row.progress_at! };
+}
+
+function baseTask(row: TaskRow): Omit<Task, 'chain' | 'question' | 'progress' | 'stalled'> {
   return {
     id: row.id,
     room: row.project ? `${row.project}/${row.room}` : row.room,
@@ -132,6 +156,8 @@ function baseTask(row: TaskRow): Omit<Task, 'chain' | 'question'> {
 }
 
 export class Tasks {
+  private readonly lastTouch = new Map<number, number>();
+
   constructor(private readonly store: Store) {}
 
   create(actor: Participant, input: { agent: string; room: string; request: string; parentId?: number }): Task {
@@ -240,25 +266,122 @@ export class Tasks {
       }
     }
     if (state === 'cancelled' && row.approval_id !== null) this.store.approvals.withdraw(row.approval_id);
-    if (state !== 'accepted') this.store.questions.closeForTask(id);
+    return this.transition(actor, row, state, trimmedNote);
+  }
 
+  private transition(actor: Participant, row: TaskRow, state: TaskState, note: string | null, detail: Record<string, unknown> = {}): Task {
+    const id = row.id;
+    if (state !== 'accepted') this.store.questions.closeForTask(id);
     const notify = state === 'cancelled' ? row.assignee : row.requester;
     const ping = state === 'accepted' || notify === actor.name ? '' : `@${notify} `;
-    const text = `${ping}Task #${id} ${state}.${trimmedNote ? `\n${trimmedNote}` : ''}`;
+    const text = `${ping}Task #${id} ${state}.${note ? `\n${note}` : ''}`;
     this.store.post(actor, this.toTask(row).room, text, row.message_id, {
       skipRateLimit: true,
       onInsert: () => {
         this.store.db
           .prepare(
-            "UPDATE tasks SET state = ?, note = coalesce(?, note), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+            `UPDATE tasks SET state = ?, note = coalesce(?, note), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+               heartbeat_at = CASE WHEN ? = 'accepted' THEN ? ELSE heartbeat_at END, stall_notified = 0 WHERE id = ?`,
           )
-          .run(state, trimmedNote, id);
+          .run(state, note, state, this.store.now(), id);
       },
     });
     const task = this.byId(id)!;
-    this.store.audit.record(actor, 'task.update', { projectId: task.projectId, subject: `task:${id}`, detail: { state, note: trimmedNote } });
+    this.store.audit.record(actor, 'task.update', { projectId: task.projectId, subject: `task:${id}`, detail: { state, note, ...detail } });
     this.store.events.emit('task', task);
     return task;
+  }
+
+  /** Updates the progress line on an open task in place, without posting a message. */
+  reportProgress(actor: Participant, id: number, text: string, percent?: number | null): Task {
+    const row = this.row(id);
+    if (!row || !this.store.canSeeRoomId(actor, row.room_id)) throw new OrcoError('not_found', `No task ${id}`);
+    if (row.assignee_id !== actor.id) throw new OrcoError('forbidden', `Only ${row.assignee} can report progress on task ${id}`);
+    if (row.state !== 'accepted') throw new OrcoError('conflict', `Task ${id} is ${effectiveState(row)}; accept it first`);
+    const line = text.trim().replace(/\s+/g, ' ');
+    if (!line) throw new OrcoError('invalid', 'Progress text is empty');
+    if (line.length > MAX_PROGRESS) throw new OrcoError('invalid', `Progress can be at most ${MAX_PROGRESS} characters`);
+    if (percent !== undefined && percent !== null && (!Number.isInteger(percent) || percent < 0 || percent > 100)) {
+      throw new OrcoError('invalid', 'Percent must be a whole number from 0 to 100');
+    }
+    this.store.checkRate(actor, 'post');
+    this.store.db
+      .prepare(
+        `UPDATE tasks SET progress = ?, progress_pct = ?, progress_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+           heartbeat_at = ?, stall_notified = 0 WHERE id = ?`,
+      )
+      .run(line, percent ?? null, this.store.now(), id);
+    const task = this.byId(id)!;
+    this.store.audit.record(actor, 'task.progress', { projectId: task.projectId, subject: `task:${id}`, detail: { text: line, percent: percent ?? null } });
+    this.store.events.emit('task', task);
+    return task;
+  }
+
+  /**
+   * Hands an open task to another agent: a new task (consent rules apply, the chain is kept) and
+   * this one declined with a pointer to it.
+   */
+  reassign(actor: Participant, id: number, agentName: string, note?: string): { from: Task; to: Task } {
+    const row = this.row(id);
+    if (!row || !this.store.canSeeRoomId(actor, row.room_id)) throw new OrcoError('not_found', `No task ${id}`);
+    if (row.assignee_id !== actor.id) throw new OrcoError('forbidden', `Only ${row.assignee} can hand task ${id} over`);
+    const current = effectiveState(row);
+    if (!['requested', 'accepted', 'needs_input'].includes(current)) throw new OrcoError('conflict', `Task ${id} is ${current}`);
+    const why = note?.trim();
+    const request = `${row.request}\n\nHanded over by ${actor.name}${why ? `: ${why}` : '.'}`.slice(0, MAX_REQUEST);
+    const room = this.toTask(row).room;
+    const to = this.create(actor, { agent: agentName, room, request, parentId: id });
+    const from = this.transition(actor, this.row(id)!, 'declined', `Handed over to ${to.assignee} as task #${to.id}${why ? `: ${why}` : '.'}`, {
+      handedTo: to.id,
+    });
+    this.store.events.emit('handoff', { from, to });
+    return { from, to };
+  }
+
+  /** Records that an agent is alive: any request it makes counts. Cheap; writes at most every 30s per agent. */
+  touch(actor: Participant): void {
+    if (actor.kind !== 'agent') return;
+    const now = this.store.now();
+    if (now - (this.lastTouch.get(actor.id) ?? 0) < TOUCH_EVERY_MS) return;
+    this.lastTouch.set(actor.id, now);
+    const revived = this.store.db
+      .prepare("SELECT id FROM tasks WHERE assignee_id = ? AND state = 'accepted' AND stall_notified = 1")
+      .all(actor.id) as unknown as { id: number }[];
+    this.store.db.prepare("UPDATE tasks SET heartbeat_at = ?, stall_notified = 0 WHERE assignee_id = ? AND state = 'accepted'").run(now, actor.id);
+    for (const { id } of revived) this.store.events.emit('task', this.byId(id)!);
+  }
+
+  /** Announces newly stalled tasks once each (as task events); returns them. */
+  sweepStalled(): Task[] {
+    const cutoff = this.store.now() - this.store.limits.taskStallMinutes * 60_000;
+    const rows = this.store.db
+      .prepare(
+        `${TASK_SELECT} WHERE t.state = 'accepted' AND t.stall_notified = 0 AND t.heartbeat_at IS NOT NULL AND t.heartbeat_at < ?`,
+      )
+      .all(cutoff) as unknown as TaskRow[];
+    const stalled: Task[] = [];
+    for (const row of rows) {
+      if (row.open_question !== null) continue;
+      this.store.db.prepare('UPDATE tasks SET stall_notified = 1 WHERE id = ?').run(row.id);
+      const task = this.byId(row.id)!;
+      this.store.audit.record(null, 'task.stalled', { projectId: task.projectId, subject: `task:${task.id}`, detail: { assignee: task.assignee } });
+      this.store.events.emit('task', task);
+      stalled.push(task);
+    }
+    return stalled;
+  }
+
+  /** Open tasks this participant requested (or their agents did) that have stalled. */
+  stalledFor(actor: Participant): Task[] {
+    const rows = this.store.db
+      .prepare(`${TASK_SELECT} WHERE t.state = 'accepted' AND (t.requester_id = ? OR rq.owner_id = ? OR a.owner_id = ?) ORDER BY t.id`)
+      .all(actor.id, actor.id, actor.id) as unknown as TaskRow[];
+    return rows.filter((row) => this.isStalled(row) && this.store.canSee(actor, row.project_id)).map((row) => this.toTask(row));
+  }
+
+  private isStalled(row: { state: TaskState; heartbeat_at: number | null; open_question?: number | null }): boolean {
+    if (row.state !== 'accepted' || row.heartbeat_at === null || row.open_question) return false;
+    return this.store.now() - row.heartbeat_at > this.store.limits.taskStallMinutes * 60_000;
   }
 
   get(actor: Participant, id: number): Task {
@@ -313,7 +436,7 @@ export class Tasks {
     const row = this.store.db
       .prepare(
         `SELECT t.id, t.state, a.name AS assignee, ap.state AS approval_state, t.updated_at AS since, t.parent_id,
-                rq.name AS requester,
+                rq.name AS requester, t.progress, t.progress_pct, t.progress_at, t.heartbeat_at,
                 (SELECT q.id FROM questions q WHERE q.task_id = t.id AND q.state = 'open') AS open_question
          FROM tasks t
          JOIN participants a ON a.id = t.assignee_id JOIN participants rq ON rq.id = t.requester_id
@@ -321,10 +444,27 @@ export class Tasks {
          WHERE t.message_id = ?`,
       )
       .get(messageId) as
-      | (Omit<TaskSummary, 'chain'> & { approval_state: string | null; open_question: number | null; parent_id: number | null; requester: string })
+      | (Omit<TaskSummary, 'chain' | 'progress' | 'stalled'> & {
+          approval_state: string | null;
+          open_question: number | null;
+          parent_id: number | null;
+          requester: string;
+          progress: string | null;
+          progress_pct: number | null;
+          progress_at: string | null;
+          heartbeat_at: number | null;
+        })
       | undefined;
     return row
-      ? { id: row.id, state: effectiveState(row), assignee: row.assignee, since: row.since, chain: this.chainFor(row) }
+      ? {
+          id: row.id,
+          state: effectiveState(row),
+          assignee: row.assignee,
+          since: row.since,
+          chain: this.chainFor(row),
+          progress: progressOf(row),
+          stalled: this.isStalled(row),
+        }
       : null;
   }
 
@@ -345,7 +485,13 @@ export class Tasks {
 
   /** A task as callers see it, with where the request came from and its latest question. */
   private toTask(row: TaskRow): Task {
-    return { ...baseTask(row), chain: this.chainFor(row), question: this.store.questions.latestForTask(row.id) };
+    return {
+      ...baseTask(row),
+      chain: this.chainFor(row),
+      question: this.store.questions.latestForTask(row.id),
+      progress: progressOf(row),
+      stalled: this.isStalled(row),
+    };
   }
 
   private chainFor(row: { requester: string; parent_id: number | null }): string[] {

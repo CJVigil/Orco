@@ -86,6 +86,31 @@ export class Audit {
     return rows.filter((row) => this.store.canSee(actor, row.project_id)).map(toEntry);
   }
 
+  /**
+   * What happened around one task, for people: everything recorded about it, plus everything its
+   * assignee did from when the task was created until it closed. Work the agent did for other tasks
+   * in the same window shows up too; the entries say what they were about.
+   */
+  trailForTask(actor: Participant, taskId: number): AuditEntry[] {
+    if (actor.kind !== 'user') throw new OrcoError('forbidden', 'Only people can read the audit log');
+    const task = this.store.tasks.get(actor, taskId);
+    const assignee = this.store.participantByName(task.assignee)!;
+    const subject = `task:${taskId}`;
+    const start = this.store.db.prepare("SELECT min(id) AS id FROM audit WHERE subject = ? AND action = 'task.create'").get(subject) as { id: number | null };
+    const end = this.store.db
+      .prepare(
+        `SELECT max(id) AS id FROM audit WHERE subject = ? AND action = 'task.update'
+         AND json_extract(detail, '$.state') IN ('done', 'failed', 'declined', 'cancelled')`,
+      )
+      .get(subject) as { id: number | null };
+    const rows = this.store.db
+      .prepare(
+        `${AUDIT_SELECT} WHERE au.subject = ? OR (au.actor_id = ? AND au.id BETWEEN ? AND ?) ORDER BY au.id LIMIT 2000`,
+      )
+      .all(subject, assignee.id, start.id ?? 0, end.id ?? Number.MAX_SAFE_INTEGER) as unknown as AuditRow[];
+    return rows.filter((row) => this.store.canSee(actor, row.project_id)).map(toEntry);
+  }
+
   all(sinceId = 0): AuditEntry[] {
     const rows = this.store.db.prepare(`${AUDIT_SELECT} WHERE au.id > ? ORDER BY au.id`).all(sinceId) as unknown as AuditRow[];
     return rows.map(toEntry);

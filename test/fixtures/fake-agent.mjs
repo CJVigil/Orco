@@ -16,7 +16,7 @@ if (FAKE_MODE === 'crash') {
 if (FAKE_MODE === 'ask') {
   // First run: accept and ask. Second run (resumed): the prompt carries the answer; finish with it.
   const prompt = process.argv[2] ?? '';
-  const answer = /Answer from \S+: (.*)/.exec(prompt)?.[1];
+  const answer = /Reply from \S+: (.*)/.exec(prompt)?.[1];
   if (answer) {
     await call(`/tasks/${ORCO_TASK_ID}`, { state: 'done', note: `resumed with: ${answer}` });
   } else {

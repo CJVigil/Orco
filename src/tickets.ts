@@ -307,6 +307,13 @@ export function byWorkOrder(a: TicketSummary, b: TicketSummary): number {
 
 export class Tickets {
   constructor(private readonly store: Store) {
+    store.events.on('handoff', ({ from, to }: { from: Task; to: Task }) => {
+      try {
+        this.onHandoff(from, to);
+      } catch (err) {
+        console.error(`Could not move the ticket for task ${from.id} to task ${to.id}:`, err);
+      }
+    });
     store.events.on('task', (task: Task) => {
       // The task change is already committed; a failure here must not surface as a failed task update.
       try {
@@ -1013,6 +1020,22 @@ export class Tickets {
     } else {
       this.store.db.prepare(`UPDATE tickets SET updated_at = ${NOW_SQL} WHERE id = ?`).run(row.id);
     }
+    this.changed(row);
+  }
+
+  /** A ticket follows its task when the agent hands the work to another agent. */
+  private onHandoff(from: Task, to: Task): void {
+    const row = this.store.db.prepare(`${TICKET_SELECT} WHERE t.task_id = ?`).get(from.id) as TicketRow | undefined;
+    if (!row) return;
+    const agent = this.store.participantByName(to.assignee)!;
+    const actor = this.store.participantByName(from.assignee);
+    this.store.db
+      .prepare(`UPDATE tickets SET assignee_id = ?, task_id = ?, updated_at = ${NOW_SQL} WHERE id = ?`)
+      .run(agent.id, to.id, row.id);
+    const changes = [{ field: 'assignee', from: from.assignee, to: to.assignee }];
+    this.activity(row.id, actor, 'change', null, { changes });
+    this.activity(row.id, actor, 'task', null, { taskId: to.id, state: to.state, agent: to.assignee });
+    this.store.audit.record(actor, 'ticket.update', { projectId: row.project_id, subject: `ticket:${refOf(row)}`, detail: { changes, via: `task:${from.id}` } });
     this.changed(row);
   }
 

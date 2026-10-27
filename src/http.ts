@@ -43,6 +43,8 @@ function readCookie(header: string | undefined, name: string): string | undefine
   return undefined;
 }
 
+const STALL_SWEEP_MS = 60_000;
+
 function authenticate(store: Store, presence: Presence, oauth?: OAuth) {
   return (req: Request, res: Response, next: NextFunction) => {
     const bearer = /^Bearer (\S+)$/.exec(req.headers.authorization ?? '')?.[1];
@@ -57,7 +59,11 @@ function authenticate(store: Store, presence: Presence, oauth?: OAuth) {
     }
     req.participant = participant;
     req.viaCookie = bearer === undefined;
-    if (req.headers['x-orco-bridge'] !== '1') presence.touch(participant.id);
+    // The bridge uses the agent's token, but its calls say nothing about whether the agent is alive.
+    if (req.headers['x-orco-bridge'] !== '1') {
+      presence.touch(participant.id);
+      store.tasks.touch(participant);
+    }
     Object.assign(req, { auth: { token, clientId: participant.name, scopes: [] } });
     next();
   };
@@ -136,6 +142,13 @@ function ticketInput(body: Record<string, unknown> | undefined): TicketInput {
   };
 }
 
+/** A retry-safe key from the Idempotency-Key header or an idempotency_key body field. */
+function idempotencyKey(req: Request): string | undefined {
+  const header = req.headers['idempotency-key'];
+  if (typeof header === 'string') return header;
+  return str(req.body?.idempotency_key, 'idempotency_key');
+}
+
 function optionalInt(value: unknown): number | undefined {
   if (value === undefined || value === '') return undefined;
   const n = Number(value);
@@ -176,6 +189,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
       owner: p.owner,
       status: presence.status(p.id),
       working: activity.get(p.id) ?? null,
+      profile: p.kind === 'agent' ? store.profileOf(p) : null,
     }));
   };
 
@@ -269,9 +283,13 @@ export function createApp(store: Store, options: AppOptions = {}) {
     const { room, text, thread_id, attachment_ids } = req.body ?? {};
     const ids = Array.isArray(attachment_ids) ? attachment_ids.map((id: unknown) => optionalInt(id) ?? NaN) : [];
     if (ids.some((id) => Number.isNaN(id))) throw new OrcoError('invalid', 'attachment_ids must be integers');
-    res
-      .status(201)
-      .json(store.post(req.participant!, String(room ?? ''), String(text ?? ''), optionalInt(thread_id), { attachmentIds: ids }));
+    const key = idempotencyKey(req);
+    res.status(201).json(
+      store.once(req.participant!, key, 'message', (id) => store.message(id), () => {
+        const message = store.post(req.participant!, String(room ?? ''), String(text ?? ''), optionalInt(thread_id), { attachmentIds: ids });
+        return { id: message.id, result: message };
+      }),
+    );
   });
   api.get('/attachments/:id', (req, res) => {
     const id = optionalInt(req.params.id);
@@ -312,6 +330,82 @@ export function createApp(store: Store, options: AppOptions = {}) {
     const id = optionalInt(req.params.id);
     if (id === undefined) throw new OrcoError('invalid', 'Expected a question id');
     res.json({ resumed: store.questions.claimResume(req.participant!, id) });
+  });
+
+  api.get('/projects/:project/notes', (req, res) => {
+    res.json(store.notes.list(req.participant!, String(req.params.project)));
+  });
+  api.post('/projects/:project/notes', (req, res) => {
+    const id = req.body?.id === undefined || req.body?.id === null ? undefined : optionalInt(req.body.id);
+    res.json(
+      store.notes.save(req.participant!, String(req.params.project), { id, title: str(req.body?.title, 'title') ?? '', body: str(req.body?.body, 'body') ?? '' }),
+    );
+  });
+  api.delete('/projects/:project/notes/:id', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a note id');
+    store.notes.delete(req.participant!, String(req.params.project), id);
+    res.status(204).end();
+  });
+  api.post('/tasks/:id/progress', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a task id');
+    const percent = req.body?.percent === undefined || req.body?.percent === null ? null : optionalInt(req.body.percent);
+    res.json(store.tasks.reportProgress(req.participant!, id, str(req.body?.text, 'text') ?? '', percent));
+  });
+  api.post('/tasks/:id/reassign', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a task id');
+    res.json(store.tasks.reassign(req.participant!, id, str(req.body?.agent, 'agent') ?? '', str(req.body?.note, 'note')));
+  });
+  api.get('/tasks/:id/trail', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a task id');
+    res.json(store.audit.trailForTask(req.participant!, id));
+  });
+  api.post('/tasks/:id/plans', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a task id');
+    const to = str(req.body?.to, 'to') as 'owner' | 'requester' | undefined;
+    res.status(201).json(store.questions.proposePlan(req.participant!, id, str(req.body?.plan, 'plan') ?? '', to));
+  });
+  api.post('/questions/:id/decide', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a question id');
+    if (typeof req.body?.approve !== 'boolean') throw new OrcoError('invalid', 'approve must be true or false');
+    res.json(store.questions.decidePlan(req.participant!, id, { approve: req.body.approve, plan: str(req.body?.plan, 'plan'), note: str(req.body?.note, 'note') }));
+  });
+  api.post('/flags', (req, res) => {
+    const messageId = req.body?.message_id === undefined ? undefined : optionalInt(req.body.message_id);
+    res.status(201).json(store.flags.flag(req.participant!, { messageId, ticket: str(req.body?.ticket, 'ticket') }, str(req.body?.reason, 'reason') ?? ''));
+  });
+  api.post('/flags/:id/dismiss', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a flag id');
+    store.flags.dismiss(req.participant!, id);
+    res.status(204).end();
+  });
+  api.get('/agents/find', (req, res) => {
+    const text = (value: unknown) => (typeof value === 'string' && value ? value : undefined);
+    res.json(store.findAgents(req.participant!, { skill: text(req.query.skill), project: text(req.query.project) }));
+  });
+  api.post('/agents/:name/profile', (req, res) => {
+    const skills = req.body?.skills;
+    if (skills !== undefined && (!Array.isArray(skills) || skills.some((s: unknown) => typeof s !== 'string'))) {
+      throw new OrcoError('invalid', 'skills must be a list of strings');
+    }
+    res.json(store.setProfile(req.participant!, String(req.params.name), { skills, environment: str(req.body?.environment, 'environment') }));
+  });
+  api.get('/threads/:id/summary', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a thread id');
+    store.read(req.participant!, String(req.query.room ?? ''), { threadId: id, limit: 1 });
+    res.json(store.threadSummary(id));
+  });
+  api.post('/threads/:id/summary', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a thread id');
+    res.json(store.setThreadSummary(req.participant!, str(req.body?.room, 'room') ?? '', id, str(req.body?.summary, 'summary') ?? ''));
   });
 
   api.get('/tickets', (req, res) => {
@@ -451,8 +545,12 @@ export function createApp(store: Store, options: AppOptions = {}) {
   });
   api.post('/tasks', (req, res) => {
     const { agent, room, request } = req.body ?? {};
+    const me = req.participant!;
     res.status(201).json(
-      store.tasks.create(req.participant!, { agent: String(agent ?? ''), room: String(room ?? ''), request: String(request ?? '') }),
+      store.once(me, idempotencyKey(req), 'task', (id) => store.tasks.get(me, id), () => {
+        const task = store.tasks.create(me, { agent: String(agent ?? ''), room: String(room ?? ''), request: String(request ?? '') });
+        return { id: task.id, result: task };
+      }),
     );
   });
   api.post('/tasks/:id', (req, res) => {
@@ -487,16 +585,22 @@ export function createApp(store: Store, options: AppOptions = {}) {
     const tasks = me.kind === 'user' ? store.tasks.list(me, { forMyAgents: true, open: true }) : store.tasks.list(me, { assignedToMe: true, open: true });
     const mentions = store.recentMentions(me);
     const questions = store.questions.waitingOn(me);
+    const flags = store.flags.pendingFor(me);
+    const stalled = store.tasks.stalledFor(me).filter((t) => t.assignee !== me.name);
     const tickets = store.tickets.list(me, { assignee: me.name, open: true, limit: 100 }).sort(byWorkOrder);
     res.json({
       approvals,
       tasks,
       tickets,
       questions,
+      flags,
+      stalled,
       mentions,
       counts: {
         approvals: approvals.length,
         questions: questions.length,
+        flags: flags.length,
+        stalled: stalled.length,
         // Question pings live in `questions` while open and need nothing once answered, so they never count here.
         unseenMentions: mentions.filter((m) => !m.seen && m.approval?.state !== 'pending' && !m.question).length,
       },
@@ -607,8 +711,20 @@ export function createApp(store: Store, options: AppOptions = {}) {
     const onTicket = (event: { projectId: number; ref: string | null }) => {
       if (store.canSee(me, event.projectId)) send('ticket', event);
     };
+    const onNotes = ({ projectId }: { projectId: number }) => {
+      if (store.canSee(me, projectId)) send('notes', { projectId });
+    };
+    const onFlag = ({ ownerId }: { ownerId: number | null }) => {
+      if (ownerId === me.id) send('flag', {});
+    };
+    const onSummary = (event: { projectId: number | null; threadId: number }) => {
+      if (store.canSee(me, event.projectId)) send('summary', event);
+    };
     const onPresence = () => send('presence', {});
     store.events.on('ticket', onTicket);
+    store.events.on('notes', onNotes);
+    store.events.on('flag', onFlag);
+    store.events.on('summary', onSummary);
     store.events.on('message', onMessage);
     store.events.on('structure', onStructure);
     store.events.on('task', onTask);
@@ -622,6 +738,9 @@ export function createApp(store: Store, options: AppOptions = {}) {
     req.on('close', () => {
       clearInterval(heartbeat);
       store.events.off('ticket', onTicket);
+      store.events.off('notes', onNotes);
+      store.events.off('flag', onFlag);
+      store.events.off('summary', onSummary);
       store.events.off('message', onMessage);
       store.events.off('structure', onStructure);
       store.events.off('task', onTask);
@@ -675,5 +794,16 @@ export function createApp(store: Store, options: AppOptions = {}) {
     res.status(500).json({ error: 'Internal error' });
   });
 
-  return { app, presence, oauth, close: () => mcp.close() };
+  // Report tasks whose agents have gone quiet. Cheap: one query a minute.
+  const stallSweep = setInterval(() => store.tasks.sweepStalled(), STALL_SWEEP_MS);
+  stallSweep.unref();
+  return {
+    app,
+    presence,
+    oauth,
+    close: () => {
+      clearInterval(stallSweep);
+      return mcp.close();
+    },
+  };
 }

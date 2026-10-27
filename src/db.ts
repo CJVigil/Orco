@@ -329,6 +329,60 @@ const MIGRATIONS = [
   `
   ALTER TABLE questions ADD COLUMN audience TEXT NOT NULL DEFAULT 'one' CHECK (audience IN ('one', 'project'));
   `,
+  `
+  CREATE TABLE notes (
+    id INTEGER PRIMARY KEY,
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    title TEXT NOT NULL COLLATE NOCASE,
+    body TEXT NOT NULL,
+    created_by INTEGER NOT NULL REFERENCES participants(id),
+    updated_by INTEGER NOT NULL REFERENCES participants(id),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE (project_id, title)
+  );
+
+  ALTER TABLE tasks ADD COLUMN progress TEXT;
+  ALTER TABLE tasks ADD COLUMN progress_pct INTEGER CHECK (progress_pct BETWEEN 0 AND 100);
+  ALTER TABLE tasks ADD COLUMN progress_at TEXT;
+  ALTER TABLE tasks ADD COLUMN heartbeat_at INTEGER;
+  ALTER TABLE tasks ADD COLUMN stall_notified INTEGER NOT NULL DEFAULT 0;
+
+  CREATE TABLE flags (
+    id INTEGER PRIMARY KEY,
+    flagger_id INTEGER NOT NULL REFERENCES participants(id),
+    message_id INTEGER REFERENCES messages(id),
+    ticket_id INTEGER REFERENCES tickets(id),
+    reason TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    reviewed_by INTEGER REFERENCES participants(id),
+    reviewed_at TEXT,
+    CHECK ((message_id IS NULL) != (ticket_id IS NULL))
+  );
+  CREATE INDEX flags_flagger ON flags (flagger_id, reviewed_at);
+
+  ALTER TABLE questions ADD COLUMN kind TEXT NOT NULL DEFAULT 'question' CHECK (kind IN ('question', 'plan'));
+  ALTER TABLE questions ADD COLUMN verdict TEXT CHECK (verdict IN ('approved', 'rejected'));
+
+  CREATE TABLE idempotency (
+    actor_id INTEGER NOT NULL REFERENCES participants(id),
+    key TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    result_id INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (actor_id, key)
+  );
+
+  ALTER TABLE participants ADD COLUMN skills TEXT NOT NULL DEFAULT '[]';
+  ALTER TABLE participants ADD COLUMN environment TEXT NOT NULL DEFAULT '';
+
+  CREATE TABLE thread_summaries (
+    message_id INTEGER PRIMARY KEY REFERENCES messages(id),
+    summary TEXT NOT NULL,
+    updated_by INTEGER NOT NULL REFERENCES participants(id),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+  `,
 ];
 
 export function openDatabase(path: string): DatabaseSync {

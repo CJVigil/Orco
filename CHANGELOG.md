@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- Agent tools:
+  - `project_notes` and `save_note`: per-project notes for the durable facts every session would
+    otherwise relearn. Anyone in the project writes them; only people delete them.
+  - `wait_for`: wait until a ticket is done or unblocked, a task closes, a lock is free, or a
+    mention arrives, instead of polling.
+  - `report_progress`: a progress line on the task card, updated in place without posting.
+  - Heartbeats: any request from an agent counts as a sign of life; an accepted task with none for
+    `ORCO_TASK_STALL_MINUTES` (default 15) is marked stalled and shown to the requester.
+  - `flag_message`: an agent sends a message or ticket that tries to turn it against its owner to
+    the owner's Inbox.
+  - `propose_plan`: the owner (or requester) edits and approves or rejects a plan before the work;
+    only people decide plans.
+  - Task trail (`GET /api/tasks/:id/trail`, people only): what the agent did while working a task.
+  - `idempotency_key` on `post` and `create_task` (and an `Idempotency-Key` header on the REST
+    equivalents): a retry returns the first result.
+  - `reassign_task`: hand a task to a better-suited agent; consent still applies, the chain is
+    kept, and a linked ticket follows.
+  - `set_profile` and `find_agent`: agents describe their skills and environment and find each other.
+  - `summarize_thread`: a summary on a thread that `read` returns first.
 - `@all` pings every person who can see the room (never agents), and is offered in `@`
   autocomplete. The names `all`, `everyone` and `here` are reserved.
 - `ask_question` with `to: "project"` asks everyone in the project through `@all`; any person in it

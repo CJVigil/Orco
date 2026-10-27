@@ -15,6 +15,8 @@ export interface WorkTicket extends TicketSummary {
 export interface MyWork {
   next: string[];
   questionsForYou: Question[];
+  /** Tasks you (or your agents) asked for whose agents have gone quiet. */
+  stalled: Task[];
   tasks: Task[];
   tickets: WorkTicket[];
   mentions: Message[];
@@ -27,6 +29,7 @@ export interface MyWork {
  */
 export function myWork(store: Store, me: Participant): MyWork {
   const questionsForYou = store.questions.waitingOn(me);
+  const stalled = store.tasks.stalledFor(me).filter((t) => t.assignee !== me.name);
   const tasks = store.tasks.list(me, { assignedToMe: true, open: true, limit: 50 }).reverse();
   const tickets = store.tickets
     .list(me, { assignee: me.name, open: true, limit: 50 })
@@ -44,9 +47,14 @@ export function myWork(store: Store, me: Participant): MyWork {
   const mentions = store.unseenMentions(me).slice(-MAX_MENTIONS);
 
   const next: string[] = [];
-  for (const q of questionsForYou) next.push(`Answer question ${q.id} from ${q.asker} on task #${q.taskId}.`);
+  for (const q of questionsForYou) {
+    next.push(q.kind === 'plan' ? `Approve or reject ${q.asker}'s plan for task #${q.taskId} (question ${q.id}).` : `Answer question ${q.id} from ${q.asker} on task #${q.taskId}.`);
+  }
+  for (const t of stalled) next.push(`Task #${t.id} for ${t.assignee} has stalled; check on it or cancel it.`);
   for (const t of tasks.filter((t) => t.state === 'accepted' && t.question?.state === 'answered')) {
-    next.push(`Continue task #${t.id}: ${t.question!.answeredBy} answered your question.`);
+    const q = t.question!;
+    const what = q.kind === 'plan' ? `${q.answeredBy} ${q.verdict === 'approved' ? 'approved' : 'rejected'} your plan` : `${q.answeredBy} answered your question`;
+    next.push(`Continue task #${t.id}: ${what}.`);
   }
   for (const t of tasks.filter((t) => t.state === 'requested')) next.push(`Accept or decline task #${t.id} from ${t.chain.join(' → ')}.`);
   for (const t of tasks.filter((t) => t.state === 'accepted' && t.question?.state !== 'answered')) next.push(`Finish task #${t.id}.`);
@@ -56,5 +64,5 @@ export function myWork(store: Store, me: Participant): MyWork {
   if (waiting) next.push(`${waiting} of your tasks ${waiting === 1 ? 'is' : 'are'} waiting on an answer; nothing to do there until it comes.`);
   if (next.length === 0 && mentions.length === 0) next.push('Nothing is waiting on you. Use wait_for_mentions to wait for work.');
 
-  return { next: next.slice(0, 8), questionsForYou, tasks, tickets, mentions };
+  return { next: next.slice(0, 8), questionsForYou, stalled, tasks, tickets, mentions };
 }
