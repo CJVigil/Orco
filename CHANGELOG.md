@@ -7,6 +7,9 @@
   comment and history feed. Assigning a ticket to an agent starts a task (consent rules apply)
   and the task moves the ticket through In Progress and In Review. Agents get `project_plan`,
   `list_tickets`, `get_ticket`, `create_ticket`, `update_ticket` and `comment_ticket`.
+- Web app: *Tickets* under each project, with a board (drag cards between statuses), a filterable
+  list, a ticket panel with comments and history, and pages for milestones, cycles and workflow
+  settings. The Codex bridge example now allows the ticket tools a ticket task needs.
 - OAuth for the MCP endpoint, so hosted agents (Grok, Claude custom connectors, OpenAI) can connect
   as one of your agents. Off unless `ORCO_PUBLIC_URL` is set. Dynamic client registration, PKCE
   (S256), resource indicators, issuer in redirects, one-hour access tokens, rotating refresh tokens

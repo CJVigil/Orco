@@ -1,6 +1,7 @@
 import { attachMentionAutocomplete } from './autocomplete.js';
 import { icon } from './icons.js';
 import { renderMarkdown } from './markdown.js';
+import { createTickets } from './tickets.js';
 
 const $ = (id) => document.getElementById(id);
 const GROUP_MS = 5 * 60 * 1000;
@@ -17,6 +18,8 @@ const state = {
   panel: null,
   unread: new Map(),
   mentioned: new Map(),
+  view: 'room',
+  loadedRef: null,
 };
 
 class ApiError extends Error {
@@ -436,7 +439,7 @@ function roomLink(room) {
     {
       class: `room-link${unread ? ' unread' : ''}`,
       href: `#${room.ref}`,
-      'aria-current': state.room?.ref === room.ref ? 'page' : null,
+      'aria-current': state.view === 'room' && state.room?.ref === room.ref ? 'page' : null,
       onclick: () => $('sidebar').classList.remove('open'),
     },
     el('span', { class: 'hash', text: '#' }),
@@ -462,6 +465,17 @@ function renderNav() {
           el('span', { text: project.name }),
           el('button', { class: 'ghost', type: 'button', title: `New room in ${project.name}`, 'aria-label': `New room in ${project.name}`, onclick: () => newRoom(project.name) }, icon('plus')),
         ),
+        el(
+          'a',
+          {
+            class: 'room-link tickets-link',
+            href: `#~${project.name}`,
+            'aria-current': state.view === 'tickets' && tickets.project === project.name ? 'page' : null,
+            onclick: () => $('sidebar').classList.remove('open'),
+          },
+          icon('task'),
+          el('span', { text: 'Tickets' }),
+        ),
         rooms.map(roomLink),
       ),
     );
@@ -483,6 +497,11 @@ function roomFromHash() {
 function renderRoomTitle() {
   const title = $('room-title');
   title.replaceChildren();
+  if (state.view === 'tickets') {
+    title.append(el('span', { class: 'project', text: `${tickets.project} / ` }), 'Tickets');
+    document.title = `${tickets.project} tickets · Orco`;
+    return;
+  }
   if (state.room.project) title.append(el('span', { class: 'project', text: `${state.room.project} / ` }));
   title.append(`#${state.room.name}`);
   $('add-member').hidden = !state.room.project;
@@ -504,10 +523,36 @@ function renderMessages({ keepScroll = false } = {}) {
   else box.scrollTop = box.scrollHeight;
 }
 
+function ticketsRoute() {
+  const match = /^#~([a-z0-9][a-z0-9-]{0,31})(?:\/([a-z]+))?$/.exec(location.hash);
+  return match && state.projects.some((p) => p.name === match[1]) ? { project: match[1], tab: match[2] || 'board' } : null;
+}
+
+function setView(view) {
+  state.view = view;
+  for (const id of ['messages', 'composer', 'composer-pending']) $(id).hidden = view !== 'room';
+  $('tickets-view').hidden = view !== 'tickets';
+}
+
 async function selectRoom() {
+  const route = ticketsRoute();
+  if (route) {
+    setView('tickets');
+    state.room = state.rooms.find((r) => r.project === route.project && r.name === 'general') || state.rooms.find((r) => r.project === route.project);
+    state.loadedRef = null;
+    const showing = tickets.show(route.project, route.tab);
+    renderNav();
+    renderRoomTitle();
+    if (state.panel === 'thread' || state.panel === 'locks') closePanel();
+    else if (state.panel === 'members') void showMembers();
+    await showing;
+    return;
+  }
   const room = roomFromHash();
   if (!room) return;
-  const changed = state.room?.ref !== room.ref;
+  setView('room');
+  const changed = state.loadedRef !== room.ref;
+  state.loadedRef = room.ref;
   state.room = room;
   state.unread.delete(room.ref);
   state.mentioned.delete(room.ref);
@@ -547,6 +592,7 @@ function openPanel(kind, title) {
   $('panel-title').textContent = title;
   $('thread-composer').hidden = kind !== 'thread';
   $('thread-pending').hidden = kind !== 'thread';
+  $('panel').classList.toggle('wide', kind === 'ticket' || kind === 'new-ticket');
 }
 
 function closePanel() {
@@ -695,7 +741,7 @@ function onMessage(message) {
   if (seen.has(message.id)) return;
   seen.add(message.id);
   if (message.mentions.includes(state.me.name)) scheduleInbox();
-  const here = state.room && message.room === state.room.ref;
+  const here = state.view === 'room' && state.room && message.room === state.room.ref;
   if (message.threadId === null) {
     if (here) {
       if (!state.messages.some((m) => m.id === message.id)) {
@@ -752,6 +798,7 @@ function connect() {
     onApproval(JSON.parse(event.data));
     scheduleInbox();
   });
+  events.addEventListener('ticket', (event) => tickets.onEvent(JSON.parse(event.data)));
   events.addEventListener('locks', () => {
     if (state.panel === 'locks') void showLocks();
   });
@@ -1154,7 +1201,7 @@ async function jumpTo(target) {
     flash(`#panel-body [data-id="${target.id}"]`);
     return;
   }
-  if (state.room?.ref !== target.room) {
+  if (state.view !== 'room' || state.room?.ref !== target.room) {
     location.hash = target.room;
     await selectRoom();
   }
@@ -1245,11 +1292,25 @@ $('load-older').addEventListener('click', () => void loadOlder());
 $('toggle-sidebar').addEventListener('click', () => $('sidebar').classList.toggle('open'));
 window.addEventListener('hashchange', () => void selectRoom());
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && state.room) {
+  if (document.visibilityState === 'visible' && state.view === 'room' && state.room) {
     state.unread.delete(state.room.ref);
     state.mentioned.delete(state.room.ref);
     renderNav();
   }
+});
+
+const tickets = createTickets({
+  api,
+  el,
+  icon,
+  avatar,
+  richText,
+  openPanel,
+  closePanel,
+  panel: () => state.panel,
+  jumpTo,
+  me: () => state.me,
+  $,
 });
 
 const TASK_COMMAND = /^\/task\s+@?([a-z0-9][a-z0-9-]{0,31})\s+([\s\S]+)$/;

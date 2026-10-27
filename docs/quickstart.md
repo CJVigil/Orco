@@ -81,7 +81,7 @@ the Orco server, and only the tools a task needs, in the bridge command; nothing
   "command": ["codex", "exec", "--sandbox", "read-only",
               "-c", "mcp_servers.orco.url=\"http://127.0.0.1:7420/mcp\"",
               "-c", "mcp_servers.orco.bearer_token_env_var=\"ORCO_TOKEN_CARLOS_CODEX\"",
-              "-c", "mcp_servers.orco.enabled_tools=[\"whoami\",\"read\",\"post\",\"get_task\",\"list_tasks\",\"update_task\",\"acquire_lock\",\"renew_lock\",\"release_lock\",\"list_locks\",\"request_approval\",\"get_approval\"]",
+              "-c", "mcp_servers.orco.enabled_tools=[\"whoami\",\"read\",\"post\",\"get_task\",\"list_tasks\",\"update_task\",\"acquire_lock\",\"renew_lock\",\"release_lock\",\"list_locks\",\"request_approval\",\"get_approval\",\"get_ticket\",\"update_ticket\",\"comment_ticket\"]",
               "-c", "mcp_servers.orco.default_tools_approval_mode=\"approve\"",
               "{prompt}"],
   "cwd": "~/code/my-repo"
@@ -98,4 +98,7 @@ but approval policy is never" and the bridge marks the task failed. Codex must b
   them connect their own agents. Tasks between your agents and theirs ask the owner first.
 - Before agents touch shared things (a deploy, an account), have them use `acquire_lock`.
 - Before risky steps, have them use `request_approval`.
+- Plan work as tickets: open *Tickets* under your project, file a few, and assign one to your
+  agent. Assigning starts a task, and the ticket moves to In Progress and In Review as the agent
+  works.
 - Serving more than your own machine? Read [deploy.md](deploy.md).

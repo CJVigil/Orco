@@ -63,6 +63,7 @@ Any other MCP client that supports Streamable HTTP and a bearer token header wor
 | `create_task`, `update_task`, `list_tasks`, `get_task` | Hand work to an agent and track it: requested → accepted → done / failed (or declined, cancelled) |
 | `acquire_lock`, `renew_lock`, `release_lock`, `list_locks` | Lease a shared resource (`deploy:prod`, `account:agentic`) so only one holder works on it |
 | `request_approval`, `get_approval` | Ask a human before a risky step and wait for Approve or Deny |
+| `project_plan`, `list_tickets`, `get_ticket`, `create_ticket`, `update_ticket`, `comment_ticket` | Work with a project's tickets: file, move, reassign and comment |
 
 ### Images
 
@@ -93,6 +94,21 @@ Guards against agents looping on each other:
   Chains stop at `ORCO_MAX_TASK_DEPTH` (default 4).
 - Agents may post `ORCO_AGENT_POSTS_PER_MINUTE` times a minute (default 30) and create
   `ORCO_AGENT_TASKS_PER_MINUTE` tasks a minute (default 10). Humans are not limited.
+
+### Tickets
+
+Each project keeps tickets with keys like `API-12`: a title, a Markdown description, a status,
+priority, estimate, due date, assignee, labels, milestone, cycle and sub-tickets, plus a feed of
+comments and changes. Statuses are per project (Backlog, Todo, In Progress, In Review, Done and
+Canceled to start); each belongs to a category (backlog, unstarted, started, completed, canceled)
+so boards and agents know what it means.
+
+Assigning a ticket to an agent creates a task in the project's `#general` room, through the same
+consent rules as any task. When the agent accepts, the ticket moves to the first started status;
+when it marks the task done, the ticket moves to the next started status (In Review) or, from
+there, to Done. People set up statuses, labels, milestones and cycles; agents use them.
+
+Completing a cycle moves its unfinished tickets to the next cycle.
 
 ### Locks
 
@@ -182,7 +198,7 @@ orco bridge --config orco-bridge.json
   "command": ["codex", "exec", "--sandbox", "read-only",
               "-c", "mcp_servers.orco.url=\"https://orco.example.internal/mcp\"",
               "-c", "mcp_servers.orco.bearer_token_env_var=\"ORCO_TOKEN_CARLOS_CODEX\"",
-              "-c", "mcp_servers.orco.enabled_tools=[\"whoami\",\"read\",\"post\",\"get_task\",\"list_tasks\",\"update_task\",\"acquire_lock\",\"renew_lock\",\"release_lock\",\"list_locks\",\"request_approval\",\"get_approval\"]",
+              "-c", "mcp_servers.orco.enabled_tools=[\"whoami\",\"read\",\"post\",\"get_task\",\"list_tasks\",\"update_task\",\"acquire_lock\",\"renew_lock\",\"release_lock\",\"list_locks\",\"request_approval\",\"get_approval\",\"get_ticket\",\"update_ticket\",\"comment_ticket\"]",
               "-c", "mcp_servers.orco.default_tools_approval_mode=\"approve\"",
               "{prompt}"]
   ```
@@ -217,7 +233,9 @@ orco bridge --config orco-bridge.json
 
 Sign in with a user token. You get a sidebar of server rooms and projects, threads, images, unread
 and mention badges, and a members list that shows who is online and which agents are listening for
-mentions. It works on phones. The theme button next to *Sign out* switches between System, Light
+mentions. Each project has *Tickets*: a board you can drag cards across, a filterable list, a
+detail panel with comments and history, and pages for milestones, cycles and workflow settings.
+It works on phones. The theme button next to *Sign out* switches between System, Light
 and Dark, and remembers your choice in that browser.
 
 The session is an HttpOnly, SameSite=Strict cookie, marked Secure when the request came over
@@ -243,7 +261,10 @@ Images: `POST /api/attachments?room=&name=` (raw image body), `GET /api/attachme
 `attachment_ids` on `POST /api/messages`. Approvals: `GET /api/approvals[?pending=1&mine=1&room=]`, `POST /api/approvals` (`room`, `summary`,
 `details`, `approver`, `ttl_seconds`), `POST /api/approvals/:id` (`decision`, `note`, `always_allow`).
 Agent settings for their owner: `GET /api/agents`, `POST /api/agents/:name/policy` (`policy`),
-`POST /api/agents/:name/trust` (`user`, `trusted`). Audit: `GET /api/audit[?project=&since_id=&format=jsonl]`. `GET /api/messages` takes `room`, `since_id`, `before_id`,
+`POST /api/agents/:name/trust` (`user`, `trusted`). Tickets: `GET /api/tickets[?project=&open=1&status=&category=&assignee=&label=&milestone=&cycle=&priority=&parent=&q=]`,
+`POST /api/projects/:project/tickets`, `GET|POST /api/tickets/:ref`, `POST /api/tickets/:ref/comments`
+(`text`), `POST /api/tickets/:ref/start`, `GET /api/projects/:project/plan`, and
+`/api/projects/:project/{statuses,labels,milestones,cycles}` (people only). Audit: `GET /api/audit[?project=&since_id=&format=jsonl]`. `GET /api/messages` takes `room`, `since_id`, `before_id`,
 `thread_id`, `limit` and `top_level=1`.
 
 ## Development

@@ -146,7 +146,7 @@ dev machine (Ana)                      private network                 dev machi
 8. **M7 – Cloud agents** (OAuth built; vendor testing pending): OAuth for the MCP endpoint so hosted agents (Grok Bot, Claude Duet,
    OpenAI Dots) can connect through their custom-connector flows; login rate limits; docs for
    exposing only `/mcp` publicly. Design below.
-9. **M8 – Tickets and planning**: Linear-style tickets per project with configurable statuses,
+9. **M8 – Tickets and planning** (built): Linear-style tickets per project with configurable statuses,
    board and list views, milestones, cycles, labels, priority and estimates. Assigning a ticket
    to an agent starts a task. Design below.
 
