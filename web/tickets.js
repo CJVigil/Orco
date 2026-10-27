@@ -833,7 +833,6 @@ export function createTickets(ctx) {
       );
     });
     return [
-      el('p', { class: 'muted plan-intro', text: 'Milestones group tickets toward a goal. Progress counts finished tickets and points; canceled tickets do not count.' }),
       me().kind === 'user' ? form : null,
       cards.length ? cards : el('p', { class: 'muted plan-intro', text: 'No milestones yet.' }),
     ];
@@ -946,7 +945,6 @@ export function createTickets(ctx) {
     const active = cycles.filter((c) => !c.completedAt);
     const done = cycles.filter((c) => c.completedAt).reverse();
     return [
-      el('p', { class: 'muted plan-intro', text: 'Cycles are time-boxed iterations. Completing one moves its unfinished tickets to the next cycle. New cycles default to two weeks, starting after the last one.' }),
       me().kind === 'user' ? form : null,
       active.length ? active.map(cardFor) : el('p', { class: 'muted plan-intro', text: 'No upcoming cycles.' }),
       done.length ? el('details', { class: 'list-group' }, el('summary', { text: `Completed · ${done.length}` }), done.map(cardFor)) : null,
@@ -1050,7 +1048,7 @@ export function createTickets(ctx) {
     return [
       el('section', { class: 'settings-section' },
         el('h3', { text: 'Workflow' }),
-        el('p', { class: 'muted small', text: `Tickets move left to right through these statuses. Each status has a category so boards and agents know what it means: agents move tickets to the first Started status when they begin and to the next Started status (or Completed) when they finish. Ticket key: ${t.plan.key}.` }),
+        el('p', { class: 'muted small', text: `Statuses in board order. The category tells boards and agents what each one means. Ticket key: ${t.plan.key}.` }),
         el('div', { class: 'status-list' }, rows),
         addStatus,
       ),

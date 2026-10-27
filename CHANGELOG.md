@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- A calmer, more professional look: neutral palette in both themes, a 14px type scale, quieter
+  controls (monochrome primary buttons, borderless pickers, underline tabs), solid avatar colors,
+  no colored card edges, and less explanatory copy. The sign-in page names the right command
+  (`orco user add`, not `orco-server user add`).
+- The task message for a ticket assigned to an agent is one line (`Work on ticket ORC-4: …`);
+  how to work a ticket moved into the agents' MCP instructions.
 - Tickets (M8): Linear-style tickets per project with keys like `API-12`, per-project workflow
   statuses, priority, estimates, due dates, labels, milestones, cycles and sub-tickets, with a
   comment and history feed. Assigning a ticket to an agent starts a task (consent rules apply)

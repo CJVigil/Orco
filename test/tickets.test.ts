@@ -175,7 +175,7 @@ describe('agents on tickets', () => {
     const task = store.tasks.get(ana, ticket.task!.id);
     assert.equal(task.assignee, 'ana-claude');
     assert.equal(task.room, 'api/general');
-    assert.match(task.request, /^Ticket API-1: Fix login/);
+    assert.match(task.request, /^Work on ticket API-1: Fix login$/);
 
     store.tasks.update(anaClaude, task.id, 'accepted');
     assert.equal(statusOf('API-1'), 'In Progress');

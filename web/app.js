@@ -57,6 +57,9 @@ function el(tag, props = {}, ...children) {
 
 for (const node of document.querySelectorAll('[data-icon]')) node.prepend(icon(node.dataset.icon));
 
+// Muted, mid-tone colors that keep white initials readable in both themes.
+const AVATAR_COLORS = ['#5b63c7', '#3d7f6b', '#a2683a', '#7a5aa8', '#3f77a6', '#a24f6c', '#5f7a3c', '#6b6b78'];
+
 function hue(name) {
   let h = 0;
   for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) % 360;
@@ -65,8 +68,7 @@ function hue(name) {
 
 function avatar(name, kind) {
   const node = el('span', { class: `avatar ${kind === 'agent' ? 'agent' : ''}`, 'aria-hidden': 'true', text: name[0].toUpperCase() });
-  const h = hue(name);
-  node.style.background = kind === 'agent' ? `linear-gradient(135deg, hsl(${h} 72% 74%), hsl(${(h + 50) % 360} 65% 62%))` : `hsl(${h} 70% 72%)`;
+  node.style.background = AVATAR_COLORS[Math.floor(hue(name) / 45) % AVATAR_COLORS.length];
   return node;
 }
 
@@ -715,7 +717,7 @@ async function openThread(message) {
 const STATUS_TEXT = { online: 'Online', listening: 'Listening for mentions', standby: 'Standby · wakes on tasks', offline: 'Offline' };
 
 async function showMembers() {
-  openPanel('members', state.room.project ? `${state.room.project} members` : 'Everyone');
+  openPanel('members', 'Members');
   const people = await api(`/participants${state.room.project ? `?project=${encodeURIComponent(state.room.project)}` : ''}`);
   if (state.panel !== 'members') return;
   const order = { listening: 0, online: 1, standby: 2, offline: 3 };
@@ -745,9 +747,9 @@ async function showMembers() {
   const humans = sorted('user');
   const agents = sorted('agent');
   $('panel-body').replaceChildren(
-    el('div', { class: 'member-group', text: `People — ${humans.length}` }),
+    el('div', { class: 'member-group' }, 'People', el('span', { text: String(humans.length) })),
     ...humans.map(row),
-    el('div', { class: 'member-group', text: `Agents — ${agents.length}` }),
+    el('div', { class: 'member-group' }, 'Agents', el('span', { text: String(agents.length) })),
     ...agents.map(row),
   );
 }

@@ -154,8 +154,9 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         'When a mention carries a task, accept it with update_task, do the work, then mark it done or failed with a note. ' +
         'Before touching a shared resource (a deploy, a branch, an account), take its lock with acquire_lock and release it after. ' +
         'Before a risky or irreversible step, ask your owner with request_approval and wait for the answer. ' +
-        'Projects also keep tickets (like API-12): see project_plan, list_tickets and get_ticket; keep tickets you work on current ' +
-        'with update_ticket and comment_ticket. ' +
+        'Projects also keep tickets (like API-12): see project_plan, list_tickets and get_ticket. When a task asks you to work on a ' +
+        'ticket, read it with get_ticket, keep it current with update_ticket and comment_ticket, and mark the task done when the ' +
+        'work is ready for review. ' +
         UNTRUSTED_NOTE,
     },
   );

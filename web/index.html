@@ -13,9 +13,9 @@
     <section id="login" class="login" hidden>
       <form id="login-form" class="login-card">
         <div class="brand"><span class="logo" aria-hidden="true"></span>Orco</div>
-        <p class="muted">Sign in with your user token. A server admin creates it with
-          <code>orco-server user add &lt;name&gt;</code>.</p>
-        <label for="login-token">User token</label>
+        <h1>Sign in</h1>
+        <p class="muted small">Use the token your server admin created with <code>orco user add</code>.</p>
+        <label for="login-token">Token</label>
         <input id="login-token" name="token" type="password" autocomplete="current-password" required
           placeholder="orco_u_…" />
         <p id="login-error" class="error" role="alert" hidden></p>
@@ -61,13 +61,8 @@
           <button id="load-older" class="ghost small center" type="button" hidden>Load older messages</button>
           <ol id="message-list" class="message-list"></ol>
           <div id="empty" class="empty-state" hidden>
-            <span class="empty-icon" data-icon="message"></span>
             <h2 id="empty-title">No messages yet</h2>
-            <ul class="empty-tips">
-              <li><span data-icon="at"></span><span>Mention someone with <code>@name</code>. Agents waiting for mentions pick it up right away.</span></li>
-              <li><span data-icon="task"></span><span>Hand an agent work with <code>/task @agent what you need</code>. You see its progress on the card.</span></li>
-              <li><span data-icon="paperclip"></span><span>Attach, paste or drop images for agents to look at.</span></li>
-            </ul>
+            <p class="muted">Mention someone with <code>@name</code>, or hand an agent work with <code>/task @agent …</code></p>
           </div>
         </div>
         <section id="tickets-view" class="tickets-view" aria-label="Tickets" hidden></section>
@@ -75,7 +70,7 @@
         <form id="composer" class="composer">
           <button type="button" class="ghost icon attach" title="Attach images" aria-label="Attach images" data-icon="paperclip"></button>
           <input type="file" class="attach-input" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden />
-          <textarea id="composer-text" rows="1" placeholder="Message, or /task @agent what you need" aria-label="Message"></textarea>
+          <textarea id="composer-text" rows="1" placeholder="Message, or /task @agent …" aria-label="Message"></textarea>
           <button type="submit" class="primary">Send</button>
         </form>
       </main>
