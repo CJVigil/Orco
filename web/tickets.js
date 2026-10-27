@@ -96,8 +96,9 @@ export function createTickets(ctx) {
         )
       : null;
 
+  // Plans by project: the board shows one project while the panel may show a ticket from another.
+  const plans = new Map();
   const people = () => t.plan?.members ?? [];
-  const openCycles = () => (t.plan?.cycles ?? []).filter((c) => !c.completedAt);
 
   /* Loading */
 
@@ -112,14 +113,28 @@ export function createTickets(ctx) {
     await load();
   }
 
+  // True while someone is typing or choosing in a field inside `container`; live updates wait for them.
+  const typing = (container) => {
+    const active = document.activeElement;
+    return Boolean(container && active && container.contains(active) && active.matches('input, textarea, select'));
+  };
+
   async function load() {
     const project = t.project;
     const [plan, tickets] = await Promise.all([api(`/projects/${encodeURIComponent(project)}/plan`), fetchTickets()]);
     if (t.project !== project) return;
     t.plan = plan;
+    plans.set(project, plan);
     t.tickets = tickets;
-    renderShell();
+    const filters = root.querySelector('.ticket-filters');
+    if (!root.querySelector('.ticket-tabs')) renderShell();
+    else if (filters && !typing(filters)) filters.replaceWith(filterBar());
     renderTab();
+  }
+
+  async function planFor(project, fresh = false) {
+    if (fresh || !plans.has(project)) plans.set(project, await api(`/projects/${encodeURIComponent(project)}/plan`));
+    return plans.get(project);
   }
 
   function fetchTickets() {
@@ -137,12 +152,19 @@ export function createTickets(ctx) {
   function onEvent(event) {
     if (!t.project || !root || root.hidden) {
       if (event.ref && event.ref === t.open && panel() === 'ticket') scheduleDetail();
+      if (event.ref === null && panel() === 'ticket') {
+        t.replan = true;
+        scheduleDetail();
+      }
       return;
     }
     clearTimeout(t.timer);
     t.timer = setTimeout(() => void load(), 250);
     if (event.ref && event.ref === t.open && panel() === 'ticket') scheduleDetail();
-    if (event.ref === null && panel() === 'ticket') scheduleDetail();
+    if (event.ref === null && panel() === 'ticket') {
+      t.replan = true;
+      scheduleDetail();
+    }
   }
 
   let detailTimer = null;
@@ -215,6 +237,11 @@ export function createTickets(ctx) {
   function renderTab() {
     const body = $('ticket-body');
     if (!body || !t.plan) return;
+    if (typing(body) || dragging) {
+      t.pendingTab = true;
+      return;
+    }
+    t.pendingTab = false;
     const views = { board: renderBoard, list: renderList, milestones: renderMilestones, cycles: renderCycles, settings: renderSettings };
     body.replaceChildren(...[views[t.tab]()].flat(Infinity).filter((node) => node !== null && node !== undefined));
   }
@@ -367,9 +394,14 @@ export function createTickets(ctx) {
 
   /* Ticket details */
 
-  async function openTicket(ref, { refresh = false } = {}) {
+  async function openTicket(ref, { refresh = false, force = false } = {}) {
     if (!ref) return;
     if (refresh && (panel() !== 'ticket' || t.open !== ref || t.editing)) return;
+    if (refresh && !force && typing($('panel-body'))) {
+      t.pendingDetail = true;
+      return;
+    }
+    t.pendingDetail = false;
     if (!refresh) openPanel('ticket', ref);
     t.open = ref;
     let ticket;
@@ -380,7 +412,9 @@ export function createTickets(ctx) {
       return;
     }
     if (panel() !== 'ticket' || t.open !== ref) return;
-    if (!t.plan || t.plan.project !== ticket.project) t.plan = await api(`/projects/${encodeURIComponent(ticket.project)}/plan`);
+    await planFor(ticket.project, refresh && t.replan);
+    t.replan = false;
+    if (panel() !== 'ticket' || t.open !== ref) return;
     renderDetail(ticket);
   }
 
@@ -390,7 +424,7 @@ export function createTickets(ctx) {
       renderDetail(result.ticket, result.warning);
     } catch (err) {
       notify(err.message);
-      void openTicket(ticket.ref, { refresh: true });
+      void openTicket(ticket.ref, { refresh: true, force: true });
     }
   }
 
@@ -398,7 +432,7 @@ export function createTickets(ctx) {
     const body = $('panel-body');
     const draft = body.querySelector('.comment-box textarea')?.value ?? '';
     $('panel-title').textContent = ticket.ref;
-    const plan = t.plan;
+    const plan = plans.get(ticket.project);
     const change = (field, transform = (v) => v) => (value) => void save(ticket, { [field]: transform(value) });
 
     const title = el('textarea', { class: 'detail-title', rows: '1', 'aria-label': 'Title', maxlength: '200' });
@@ -413,7 +447,7 @@ export function createTickets(ctx) {
       if (title.value.trim() && title.value.trim() !== ticket.title) void save(ticket, { title: title.value });
     });
 
-    const cycles = [...openCycles()];
+    const cycles = plan.cycles.filter((c) => !c.completedAt);
     if (ticket.cycle && !cycles.some((c) => c.id === ticket.cycle.id)) cycles.push({ number: ticket.cycle.number, name: `Cycle ${ticket.cycle.number}` });
 
     const labelPicker = el(
@@ -456,7 +490,7 @@ export function createTickets(ctx) {
         'Assignee',
         select(
           ticket.assignee?.name ?? '',
-          [['', 'Unassigned'], ...people().filter((p) => p.kind === 'user').map((p) => [p.name, p.name]), ...people().filter((p) => p.kind === 'agent').map((p) => [p.name, `${p.name} (agent)`])],
+          [['', 'Unassigned'], ...plan.members.filter((p) => p.kind === 'user').map((p) => [p.name, p.name]), ...plan.members.filter((p) => p.kind === 'agent').map((p) => [p.name, `${p.name} (agent)`])],
           change('assignee', (v) => v || null),
           { 'aria-label': 'Assignee' },
         ),
@@ -567,7 +601,7 @@ export function createTickets(ctx) {
         'div',
         { class: 'section-head' },
         el('h3', { text: `Sub-tickets${ticket.children.length ? ` · ${ticket.children.filter((c) => c.status.category === 'completed').length}/${ticket.children.length}` : ''}` }),
-        el('button', { class: 'ghost small', type: 'button', text: 'Add', onclick: () => openNewTicket({ parent: ticket.ref }) }),
+        el('button', { class: 'ghost small', type: 'button', text: 'Add', onclick: () => openNewTicket({ parent: ticket.ref, project: ticket.project }) }),
       ),
       ticket.children.map((child) =>
         el(
@@ -679,8 +713,8 @@ export function createTickets(ctx) {
   /* New ticket */
 
   async function openNewTicket(defaults = {}) {
-    if (!t.plan || t.plan.project !== t.project) t.plan = await api(`/projects/${encodeURIComponent(t.project)}/plan`);
-    const plan = t.plan;
+    const project = defaults.project ?? t.project;
+    const plan = await planFor(project);
     openPanel('new-ticket', `New ${plan.key} ticket`);
     t.open = null;
     const title = el('input', { name: 'title', required: true, maxlength: '200', placeholder: 'Title', 'aria-label': 'Title', autocomplete: 'off' });
@@ -690,12 +724,12 @@ export function createTickets(ctx) {
       priority: select('none', PRIORITY_ORDER.map((p) => [p, PRIORITY_LABEL[p]]), () => {}, { 'aria-label': 'Priority' }),
       assignee: select(
         '',
-        [['', 'Unassigned'], ...people().filter((p) => p.kind === 'user').map((p) => [p.name, p.name]), ...people().filter((p) => p.kind === 'agent').map((p) => [p.name, `${p.name} (agent)`])],
+        [['', 'Unassigned'], ...plan.members.filter((p) => p.kind === 'user').map((p) => [p.name, p.name]), ...plan.members.filter((p) => p.kind === 'agent').map((p) => [p.name, `${p.name} (agent)`])],
         () => {},
         { 'aria-label': 'Assignee' },
       ),
       milestone: select(defaults.milestone ?? '', [['', 'No milestone'], ...plan.milestones.map((m) => [m.name, m.name])], () => {}, { 'aria-label': 'Milestone' }),
-      cycle: select(defaults.cycle ?? '', [['', 'No cycle'], ...openCycles().map((c) => [String(c.number), c.current ? `${c.name} (current)` : c.name])], () => {}, { 'aria-label': 'Cycle' }),
+      cycle: select(defaults.cycle ?? '', [['', 'No cycle'], ...plan.cycles.filter((c) => !c.completedAt).map((c) => [String(c.number), c.current ? `${c.name} (current)` : c.name])], () => {}, { 'aria-label': 'Cycle' }),
     };
     const estimate = el('input', { type: 'number', min: '0', max: '100', step: '1', placeholder: 'Points', 'aria-label': 'Estimate' });
     const chosen = new Set();
@@ -739,7 +773,7 @@ export function createTickets(ctx) {
             parent: defaults.parent ?? null,
           };
           try {
-            const result = await api(`/projects/${encodeURIComponent(t.project)}/tickets`, { method: 'POST', body });
+            const result = await api(`/projects/${encodeURIComponent(project)}/tickets`, { method: 'POST', body });
             openPanel('ticket', result.ticket.ref);
             t.open = result.ticket.ref;
             renderDetail(result.ticket, result.warning);
@@ -1064,6 +1098,18 @@ export function createTickets(ctx) {
     document.body.append(toast);
     setTimeout(() => toast.remove(), 5000);
   }
+
+  // Apply live updates that waited while someone was typing.
+  root.addEventListener('focusout', () =>
+    setTimeout(() => {
+      if (t.pendingTab && !typing($('ticket-body'))) renderTab();
+    }),
+  );
+  $('panel-body').addEventListener('focusout', () =>
+    setTimeout(() => {
+      if (t.pendingDetail && !typing($('panel-body'))) void openTicket(t.open, { refresh: true });
+    }),
+  );
 
   return { show, onEvent, openTicket, openNewTicket, get project() { return t.project; } };
 }

@@ -12,6 +12,16 @@
   settings. The Codex bridge example now allows the ticket tools a ticket task needs.
 - Ticket keys in messages, comments and descriptions (`ORC-12`) link to the ticket and open it in
   the side panel. Only keys of projects you can see become links; `list_projects` shows each key.
+- Fixes from a bug sweep of tickets:
+  - An agent assigning a ticket to itself no longer reports that it could not start a task.
+  - A new cycle starts today, not in the past, when the last one ended a while ago.
+  - Assigning a ticket to an agent no longer pings people @mentioned in its title or description.
+  - Canceling a ticket also cancels its agent's open task, when you may cancel that task.
+  - A failure while updating a ticket can no longer make an agent's task update report an error.
+  - Live updates no longer wipe what you are typing in the filter, a comment, or a settings form;
+    they apply when you leave the field.
+  - The ticket panel keeps its own project's statuses, labels and people while the board shows
+    another project, and *Add sub-ticket* files the child in the parent's project.
 - OAuth for the MCP endpoint, so hosted agents (Grok, Claude custom connectors, OpenAI) can connect
   as one of your agents. Off unless `ORCO_PUBLIC_URL` is set. Dynamic client registration, PKCE
   (S256), resource indicators, issuer in redirects, one-hour access tokens, rotating refresh tokens

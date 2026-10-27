@@ -257,7 +257,14 @@ function progressColumns(column: 'milestone_id' | 'cycle_id', alias: string): st
 
 export class Tickets {
   constructor(private readonly store: Store) {
-    store.events.on('task', (task: Task) => this.onTask(task));
+    store.events.on('task', (task: Task) => {
+      // The task change is already committed; a failure here must not surface as a failed task update.
+      try {
+        this.onTask(task);
+      } catch (err) {
+        console.error(`Could not update the ticket for task ${task.id}:`, err);
+      }
+    });
   }
 
   /** Gives a project its ticket key and default workflow if it has none yet. */
@@ -324,7 +331,7 @@ export class Tickets {
     }
     const created = this.row(id)!;
     this.store.audit.record(actor, 'ticket.create', { projectId: proj.id, subject: `ticket:${refOf(created)}`, detail: { title } });
-    const warning = assignee?.kind === 'agent' ? this.dispatch(actor, created) : undefined;
+    const warning = assignee?.kind === 'agent' && assignee.id !== actor.id ? this.dispatch(actor, created) : undefined;
     this.changed(created);
     return { ticket: this.detail(id), ...(warning ? { warning } : {}) };
   }
@@ -435,10 +442,19 @@ export class Tickets {
     }
     if (sets.length === 0 && newLabels === undefined) return { ticket: this.detail(row.id) };
 
-    // Reassigning away from an agent stops the work it was doing on this ticket.
-    if (newAssignee !== undefined && row.task_id !== null && OPEN_STATES.includes(taskState(row)!)) {
+    const openTask = row.task_id !== null && OPEN_STATES.includes(taskState(row)!);
+    // Canceling the ticket stops its agent too, when this person may cancel that task.
+    if (newStatus?.category === 'canceled' && newAssignee === undefined && openTask) {
       try {
-        this.store.tasks.update(actor, row.task_id, 'cancelled', `Ticket ${refOf(row)} was reassigned`);
+        this.store.tasks.update(actor, row.task_id!, 'cancelled', `Ticket ${refOf(row)} was canceled`);
+      } catch (err) {
+        if (!(err instanceof OrcoError && err.code === 'forbidden')) throw err;
+      }
+    }
+    // Reassigning away from an agent stops the work it was doing on this ticket.
+    if (newAssignee !== undefined && openTask) {
+      try {
+        this.store.tasks.update(actor, row.task_id!, 'cancelled', `Ticket ${refOf(row)} was reassigned`);
       } catch (err) {
         if (err instanceof OrcoError && err.code === 'forbidden') {
           throw new OrcoError('conflict', `${row.assignee} is still working on task #${row.task_id}; its requester or owner must cancel it first`);
@@ -466,7 +482,7 @@ export class Tickets {
     if (changes.length) {
       this.store.audit.record(actor, 'ticket.update', { projectId: row.project_id, subject: `ticket:${refOf(row)}`, detail: { changes } });
     }
-    const warning = newAssignee?.kind === 'agent' ? this.dispatch(actor, updated) : undefined;
+    const warning = newAssignee?.kind === 'agent' && newAssignee.id !== actor.id ? this.dispatch(actor, updated) : undefined;
     this.changed(updated);
     return { ticket: this.detail(row.id), ...(warning ? { warning } : {}) };
   }
@@ -728,7 +744,8 @@ export class Tickets {
     const proj = this.planner(actor, project);
     const existing = this.cycles(proj.id);
     const last = existing.at(-1);
-    const startsOn = checkDate(input.startsOn, 'Start date') ?? (last ? addDays(last.endsOn, 1) : this.today());
+    const afterLast = last ? addDays(last.endsOn, 1) : null;
+    const startsOn = checkDate(input.startsOn, 'Start date') ?? (afterLast && afterLast > this.today() ? afterLast : this.today());
     const endsOn = checkDate(input.endsOn, 'End date') ?? addDays(startsOn, DEFAULT_CYCLE_DAYS - 1);
     if (endsOn < startsOn) throw new OrcoError('invalid', 'A cycle must end on or after its start');
     const overlap = existing.find((c) => c.startsOn <= endsOn && c.endsOn >= startsOn);
@@ -782,9 +799,10 @@ export class Tickets {
       .prepare("SELECT name FROM rooms WHERE project_id = ? ORDER BY name = 'general' DESC, id LIMIT 1")
       .get(row.project_id) as { name: string };
     const ref = refOf(row);
-    const description = row.description.length > 1500 ? `${row.description.slice(0, 1500)}…` : row.description;
+    // The task message is parsed for @mentions; ticket text must not ping people, so the title's @ is
+    // swapped for a look-alike and the description stays in the ticket.
     const request =
-      `Ticket ${ref}: ${row.title}${description ? `\n\n${description}` : ''}\n\n` +
+      `Ticket ${ref}: ${row.title.replace(/@/g, '＠')}\n\n` +
       `Read it with get_ticket("${ref}"). Keep it current with update_ticket and comment_ticket, ` +
       'and mark this task done when the work is ready for review.';
     try {

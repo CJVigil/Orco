@@ -225,3 +225,54 @@ describe('agents on tickets', () => {
     assert.equal(statusOf('API-1', ben), 'In Progress');
   });
 });
+
+describe('ticket edge cases', () => {
+  it('lets an agent claim a ticket without trying to task itself', () => {
+    store.tickets.create(anaClaude, 'api', { title: 'mine' });
+    const { ticket, warning } = store.tickets.update(anaClaude, 'API-1', { assignee: 'ana-claude' });
+    assert.equal(warning, undefined);
+    assert.equal(ticket.task, null);
+    assert.ok(!ticket.activity.some((a) => a.kind === 'task'));
+  });
+
+  it('starts a new cycle today when the last one ended long ago', () => {
+    store.tickets.createCycle(ana, 'api');
+    clock += 60 * 86_400_000;
+    const next = store.tickets.createCycle(ana, 'api');
+    assert.equal(next.startsOn, '2027-01-01');
+    assert.ok(next.current);
+  });
+
+  it('does not ping people mentioned in a ticket when it goes to an agent', () => {
+    store.tickets.create(ana, 'api', { title: 'ask @ben', description: 'loop in @ben and @cara', assignee: 'ana-claude' });
+    assert.equal(store.unseenMentions(ben).length, 0);
+    assert.equal(store.unseenMentions(anaClaude).length, 1);
+  });
+
+  it('stops the agent when its ticket is canceled', () => {
+    store.tickets.create(ana, 'api', { title: 'x', assignee: 'ana-claude' });
+    const id = store.tickets.get(ana, 'API-1').task!.id;
+    store.tasks.update(anaClaude, id, 'accepted');
+    store.tickets.update(ana, 'API-1', { status: 'Canceled' });
+    assert.equal(store.tasks.get(ana, id).state, 'cancelled');
+    assert.equal(statusOf('API-1'), 'Canceled');
+  });
+
+  it('cancels a ticket even when the person may not stop its task', () => {
+    store.setTaskPolicy(ben, 'ben-codex', 'open');
+    store.tickets.create(ben, 'api', { title: 'x', assignee: 'ben-codex' });
+    const id = store.tickets.get(ana, 'API-1').task!.id;
+    store.tickets.update(ana, 'API-1', { status: 'Canceled' });
+    assert.equal(statusOf('API-1'), 'Canceled');
+    assert.equal(store.tasks.get(ana, id).state, 'requested');
+  });
+
+  it('never fails a task update because ticket bookkeeping failed', (t) => {
+    t.mock.method(console, 'error', () => {});
+    store.tickets.create(ana, 'api', { title: 'x', assignee: 'ana-claude' });
+    const id = store.tickets.get(ana, 'API-1').task!.id;
+    store.db.exec('DROP TABLE ticket_activity');
+    assert.equal(store.tasks.update(anaClaude, id, 'accepted').state, 'accepted');
+  });
+});
+
