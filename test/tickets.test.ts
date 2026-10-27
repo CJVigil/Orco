@@ -276,3 +276,66 @@ describe('ticket edge cases', () => {
   });
 });
 
+
+describe('working notes on tickets', () => {
+  it('keeps a handoff note with who wrote it', () => {
+    store.tickets.create(ana, 'api', { title: 'x', assignee: 'ana-claude' });
+    store.tickets.update(anaClaude, 'API-1', { handoff: 'Done: repro. Next: patch spawn. Branch fix/cwd.' });
+    const ticket = store.tickets.get(ana, 'API-1');
+    assert.equal(ticket.handoff?.text, 'Done: repro. Next: patch spawn. Branch fix/cwd.');
+    assert.equal(ticket.handoff?.by, 'ana-claude');
+    assert.ok(ticket.activity.some((a) => a.kind === 'change' && JSON.stringify(a.detail).includes('handoff')));
+  });
+
+  it('tracks acceptance criteria; agents can tick them but not remove them', () => {
+    store.tickets.create(ana, 'api', { title: 'x', criteriaAdd: ['Tests pass', 'Docs updated'] });
+    const [tests, docs] = store.tickets.get(ana, 'API-1').criteriaItems;
+    store.tickets.update(anaClaude, 'API-1', { criteriaDone: [tests!.id], criteriaAdd: ['Changelog line'] });
+    assert.throws(() => store.tickets.update(anaClaude, 'API-1', { criteriaRemove: [docs!.id] }), (e: OrcoError) => e.code === 'forbidden');
+    assert.deepEqual(store.tickets.list(ana, { project: 'api' })[0]!.criteria, { done: 1, total: 3 });
+    store.tickets.update(ana, 'API-1', { criteriaRemove: [docs!.id] });
+    assert.deepEqual(
+      store.tickets.get(ana, 'API-1').criteriaItems.map((c) => [c.text, c.done]),
+      [
+        ['Tests pass', true],
+        ['Changelog line', false],
+      ],
+    );
+    assert.throws(() => store.tickets.update(ana, 'API-1', { criteriaDone: [999] }), /No criterion/);
+  });
+
+  it('links blockers, reports open ones, and refuses loops', () => {
+    store.tickets.create(ana, 'api', { title: 'infra' });
+    store.tickets.create(ana, 'api', { title: 'app', blockedByAdd: ['API-1'] });
+    store.tickets.create(ana, 'api', { title: 'launch' });
+    store.tickets.update(ana, 'API-3', { blockedByAdd: ['API-2'] });
+    assert.deepEqual(store.tickets.get(ana, 'API-2').blockedBy, ['API-1']);
+    assert.deepEqual(store.tickets.get(ana, 'API-1').blocking.map((b) => b.ref), ['API-2']);
+    assert.throws(() => store.tickets.update(ana, 'API-1', { blockedByAdd: ['API-3'] }), /loop/);
+    assert.throws(() => store.tickets.update(ana, 'API-1', { blockedByAdd: ['API-1'] }), /itself/);
+    store.tickets.update(ana, 'API-1', { status: 'Done' });
+    assert.deepEqual(store.tickets.get(ana, 'API-2').blockedBy, []);
+    assert.equal(store.tickets.get(ana, 'API-2').blockers[0]!.category, 'completed');
+    store.tickets.update(ana, 'API-3', { blockedByRemove: ['API-2'] });
+    assert.deepEqual(store.tickets.get(ana, 'API-3').blockers, []);
+  });
+
+  it('reads only what changed since a given activity id', () => {
+    store.tickets.create(ana, 'api', { title: 'x' });
+    const first = store.tickets.get(ana, 'API-1');
+    store.tickets.comment(ben, 'API-1', 'new info');
+    const later = store.tickets.get(ana, 'API-1', first.lastActivityId);
+    assert.deepEqual(later.activity.map((a) => a.body), ['new info']);
+    assert.ok(later.lastActivityId > first.lastActivityId);
+  });
+
+  it('shows needs input on the ticket while its agent waits on a question', () => {
+    store.tickets.create(ana, 'api', { title: 'x', assignee: 'ana-claude' });
+    const taskId = store.tickets.get(ana, 'API-1').task!.id;
+    store.tasks.update(anaClaude, taskId, 'accepted');
+    store.questions.ask(anaClaude, taskId, 'Which region?');
+    const ticket = store.tickets.get(ana, 'API-1');
+    assert.equal(ticket.task?.state, 'needs_input');
+    assert.equal(ticket.activity.filter((a) => a.kind === 'task').at(-1)!.body, 'Which region?');
+  });
+});

@@ -13,7 +13,8 @@ import { type Message, OrcoError, type Participant, type Store } from './store.j
 import type { Task, TaskState } from './tasks.js';
 import type { Approval } from './approvals.js';
 import type { Question, QuestionTarget } from './questions.js';
-import type { Priority, StatusCategory, TicketFilter, TicketInput } from './tickets.js';
+import { byWorkOrder, type Priority, type StatusCategory, type TicketFilter, type TicketInput } from './tickets.js';
+import { myWork } from './work.js';
 
 declare module 'express-serve-static-core' {
   interface Request {
@@ -101,6 +102,13 @@ function ticketInput(body: Record<string, unknown> | undefined): TicketInput {
     if (typeof value !== 'number') throw new OrcoError('invalid', `${field} must be a number`);
     return value;
   };
+  const list = <T extends 'string' | 'number'>(value: unknown, field: string, type: T) => {
+    if (value === undefined) return undefined;
+    if (!Array.isArray(value) || value.some((v) => typeof v !== type || (type === 'number' && !Number.isInteger(v)))) {
+      throw new OrcoError('invalid', `${field} must be a list of ${type === 'number' ? 'ids' : 'strings'}`);
+    }
+    return value as (T extends 'number' ? number : string)[];
+  };
   if (b.labels !== undefined && (!Array.isArray(b.labels) || b.labels.some((l) => typeof l !== 'string'))) {
     throw new OrcoError('invalid', 'labels must be a list of names');
   }
@@ -118,6 +126,13 @@ function ticketInput(body: Record<string, unknown> | undefined): TicketInput {
     cycle,
     parent: nullableStr(b.parent, 'parent'),
     sort: num(b.sort, 'sort') ?? undefined,
+    handoff: str(b.handoff, 'handoff'),
+    criteriaAdd: list(b.criteriaAdd, 'criteriaAdd', 'string'),
+    criteriaDone: list(b.criteriaDone, 'criteriaDone', 'number'),
+    criteriaUndone: list(b.criteriaUndone, 'criteriaUndone', 'number'),
+    criteriaRemove: list(b.criteriaRemove, 'criteriaRemove', 'number'),
+    blockedByAdd: list(b.blockedByAdd, 'blockedByAdd', 'string'),
+    blockedByRemove: list(b.blockedByRemove, 'blockedByRemove', 'string'),
   };
 }
 
@@ -324,7 +339,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
     res.status(201).json(store.tickets.create(req.participant!, String(req.params.project), { ...input, title: input.title ?? '' }));
   });
   api.get('/tickets/:ref', (req, res) => {
-    res.json(store.tickets.get(req.participant!, String(req.params.ref)));
+    res.json(store.tickets.get(req.participant!, String(req.params.ref), optionalInt(req.query.since)));
   });
   api.post('/tickets/:ref', (req, res) => {
     res.json(store.tickets.update(req.participant!, String(req.params.ref), ticketInput(req.body)));
@@ -463,23 +478,16 @@ export function createApp(store: Store, options: AppOptions = {}) {
     res.status(204).end();
   });
 
+  api.get('/my-work', (req, res) => {
+    res.json(myWork(store, req.participant!));
+  });
   api.get('/inbox', (req, res) => {
     const me = req.participant!;
     const approvals = store.approvals.list(me, { pending: true, forMe: true });
     const tasks = me.kind === 'user' ? store.tasks.list(me, { forMyAgents: true, open: true }) : store.tasks.list(me, { assignedToMe: true, open: true });
     const mentions = store.recentMentions(me);
     const questions = store.questions.waitingOn(me);
-    // Open tickets assigned to you: work in progress first, then by priority, then most recently touched.
-    const stage = { started: 0, unstarted: 1, backlog: 2 } as Record<string, number>;
-    const urgency = { urgent: 0, high: 1, medium: 2, low: 3, none: 4 } as Record<string, number>;
-    const tickets = store.tickets
-      .list(me, { assignee: me.name, open: true, limit: 100 })
-      .sort(
-        (a, b) =>
-          stage[a.status.category]! - stage[b.status.category]! ||
-          urgency[a.priority]! - urgency[b.priority]! ||
-          b.updatedAt.localeCompare(a.updatedAt),
-      );
+    const tickets = store.tickets.list(me, { assignee: me.name, open: true, limit: 100 }).sort(byWorkOrder);
     res.json({
       approvals,
       tasks,

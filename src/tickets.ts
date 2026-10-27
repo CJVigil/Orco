@@ -23,6 +23,10 @@ const LABEL_NAME = /^[\p{L}\p{N}][\p{L}\p{N} ._/-]{0,31}$/u;
 const MAX_TITLE = 200;
 const MAX_DESCRIPTION = 20_000;
 const MAX_COMMENT = 10_000;
+const MAX_HANDOFF = 4_000;
+const MAX_CRITERIA = 50;
+
+type Change = { field: string; from: unknown; to: unknown };
 const DEFAULT_CYCLE_DAYS = 14;
 const NOW_SQL = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
 
@@ -82,6 +86,9 @@ export interface TicketSummary {
   cycle: { id: number; number: number } | null;
   parent: string | null;
   task: { id: number; state: TaskState; since: string } | null;
+  /** Unfinished tickets this one waits on. */
+  blockedBy: string[];
+  criteria: { done: number; total: number };
   sort: number;
   createdAt: string;
   updatedAt: string;
@@ -99,11 +106,25 @@ export interface TicketActivity {
   createdAt: string;
 }
 
+export interface TicketLink {
+  ref: string;
+  title: string;
+  status: string;
+  category: StatusCategory;
+}
+
 export interface Ticket extends TicketSummary {
   description: string;
   creator: string;
+  /** Where whoever works this ticket left off: done, next, branch or PR, gotchas. */
+  handoff: { text: string; by: string | null; at: string | null } | null;
+  criteriaItems: { id: number; text: string; done: boolean }[];
+  blockers: TicketLink[];
+  blocking: TicketLink[];
   children: TicketSummary[];
   activity: TicketActivity[];
+  /** The newest activity id; pass it back as `since` to read only what changed. */
+  lastActivityId: number;
 }
 
 export interface TicketInput {
@@ -119,6 +140,14 @@ export interface TicketInput {
   cycle?: number | 'current' | null;
   parent?: string | null;
   sort?: number;
+  handoff?: string;
+  criteriaAdd?: string[];
+  criteriaDone?: number[];
+  criteriaUndone?: number[];
+  /** People only: an agent cannot drop the bar it is measured against. */
+  criteriaRemove?: number[];
+  blockedByAdd?: string[];
+  blockedByRemove?: string[];
 }
 
 export interface TicketFilter {
@@ -179,6 +208,10 @@ interface TicketRow {
   task_state: TaskState | null;
   task_since: string | null;
   task_approval_state: string | null;
+  task_open_question: number | null;
+  handoff: string;
+  handoff_by: string | null;
+  handoff_at: string | null;
   sort: number;
   created_at: string;
   updated_at: string;
@@ -192,7 +225,10 @@ const TICKET_SELECT = `
          t.assignee_id, a.name AS assignee, a.kind AS assignee_kind, c.name AS creator,
          t.parent_id, pt.number AS parent_number, t.milestone_id, m.name AS milestone,
          t.cycle_id, cy.number AS cycle_number, t.task_id, tk.state AS task_state, tk.updated_at AS task_since,
-         ap.state AS task_approval_state, t.sort, t.created_at, t.updated_at, t.started_at, t.completed_at
+         ap.state AS task_approval_state,
+         (SELECT q.id FROM questions q WHERE q.task_id = t.task_id AND q.state = 'open') AS task_open_question,
+         t.handoff, hb.name AS handoff_by, t.handoff_at,
+         t.sort, t.created_at, t.updated_at, t.started_at, t.completed_at
   FROM tickets t
   JOIN projects p ON p.id = t.project_id
   JOIN ticket_statuses s ON s.id = t.status_id
@@ -203,6 +239,7 @@ const TICKET_SELECT = `
   LEFT JOIN cycles cy ON cy.id = t.cycle_id
   LEFT JOIN tasks tk ON tk.id = t.task_id
   LEFT JOIN approvals ap ON ap.id = tk.approval_id
+  LEFT JOIN participants hb ON hb.id = t.handoff_by
 `;
 
 function keyBase(name: string): string {
@@ -226,8 +263,9 @@ function addDays(date: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-function taskState(row: { task_state: TaskState | null; task_approval_state: string | null }): TaskState | null {
+function taskState(row: { task_state: TaskState | null; task_approval_state: string | null; task_open_question: number | null }): TaskState | null {
   if (row.task_state === 'requested' && row.task_approval_state === 'pending') return 'awaiting_approval';
+  if (row.task_state === 'accepted' && row.task_open_question !== null) return 'needs_input';
   return row.task_state;
 }
 
@@ -253,6 +291,18 @@ function progressColumns(column: 'milestone_id' | 'cycle_id', alias: string): st
     (SELECT count(*) ${from} AND s.category = 'completed') AS completed,
     (SELECT sum(coalesce(t.estimate, 0)) ${from} AND s.category != 'canceled') AS points,
     (SELECT sum(coalesce(t.estimate, 0)) ${from} AND s.category = 'completed') AS completed_points`;
+}
+
+const STAGE: Record<string, number> = { started: 0, unstarted: 1, backlog: 2, completed: 3, canceled: 4 };
+const URGENCY: Record<Priority, number> = { urgent: 0, high: 1, medium: 2, low: 3, none: 4 };
+
+/** Orders open work: in progress first, then by priority, then most recently touched. */
+export function byWorkOrder(a: TicketSummary, b: TicketSummary): number {
+  return (
+    STAGE[a.status.category]! - STAGE[b.status.category]! ||
+    URGENCY[a.priority] - URGENCY[b.priority] ||
+    b.updatedAt.localeCompare(a.updatedAt)
+  );
 }
 
 export class Tickets {
@@ -303,6 +353,12 @@ export class Tickets {
     const priority = this.priority(input.priority ?? 'none');
     const estimate = this.estimate(input.estimate ?? null);
     const dueDate = checkDate(input.dueDate, 'Due date');
+    const criteria = (input.criteriaAdd ?? []).map((text) => text.trim()).filter(Boolean);
+    if (criteria.length > MAX_CRITERIA) throw new OrcoError('invalid', `A ticket can have at most ${MAX_CRITERIA} criteria`);
+    for (const text of criteria) if (text.length > 300) throw new OrcoError('invalid', 'A criterion can be at most 300 characters');
+    const blockers = [...new Set(input.blockedByAdd ?? [])].map((ref) => this.byRef(actor, ref));
+    const handoff = (input.handoff ?? '').trim();
+    if (handoff.length > MAX_HANDOFF) throw new OrcoError('invalid', `Handoff notes can be at most ${MAX_HANDOFF} characters`);
 
     this.store.db.exec('BEGIN');
     let id: number;
@@ -323,6 +379,13 @@ export class Tickets {
       id = Number(lastInsertRowid);
       const link = this.store.db.prepare('INSERT INTO ticket_labels (ticket_id, label_id) VALUES (?, ?)');
       for (const labelId of labels) link.run(id, labelId);
+      const criterion = this.store.db.prepare('INSERT INTO ticket_criteria (ticket_id, text, position) VALUES (?, ?, ?)');
+      criteria.forEach((text, i) => criterion.run(id, text, i));
+      const blocked = this.store.db.prepare('INSERT INTO ticket_links (blocker_id, blocked_id) VALUES (?, ?)');
+      for (const blocker of blockers) blocked.run(blocker.id, id);
+      if (handoff) {
+        this.store.db.prepare(`UPDATE tickets SET handoff = ?, handoff_by = ?, handoff_at = ${NOW_SQL} WHERE id = ?`).run(handoff, actor.id, id);
+      }
       this.activity(id, actor, 'created', null, null);
       this.store.db.exec('COMMIT');
     } catch (err) {
@@ -341,7 +404,7 @@ export class Tickets {
     this.store.checkRate(actor, 'post');
     const sets: string[] = [];
     const params: (string | number | null)[] = [];
-    const changes: { field: string; from: unknown; to: unknown }[] = [];
+    const changes: Change[] = [];
     const set = (column: string, value: string | number | null) => {
       sets.push(`${column} = ?`);
       params.push(value);
@@ -430,6 +493,20 @@ export class Tickets {
         changes.push({ field: 'parent', from: row.parent_number === null ? null : `${row.ticket_key}-${row.parent_number}`, to: parent ? refOf(parent) : null });
       }
     }
+    if (input.handoff !== undefined) {
+      const handoff = input.handoff.trim();
+      if (handoff.length > MAX_HANDOFF) throw new OrcoError('invalid', `Handoff notes can be at most ${MAX_HANDOFF} characters`);
+      if (handoff !== row.handoff) {
+        set('handoff', handoff);
+        set('handoff_by', actor.id);
+        sets.push(`handoff_at = ${NOW_SQL}`);
+        changes.push({ field: 'handoff', from: null, to: null });
+      }
+    }
+    const criteria = this.criteriaOps(actor, row.id, input);
+    if (criteria.change) changes.push(criteria.change);
+    const links = this.linkOps(actor, row, input);
+    if (links.change) changes.push(links.change);
     if (newStatus) {
       set('status_id', newStatus.id);
       if (newStatus.category === 'started') sets.push(`started_at = coalesce(started_at, ${NOW_SQL})`);
@@ -440,7 +517,7 @@ export class Tickets {
       if (!Number.isFinite(input.sort)) throw new OrcoError('invalid', 'Sort must be a number');
       set('sort', input.sort);
     }
-    if (sets.length === 0 && newLabels === undefined) return { ticket: this.detail(row.id) };
+    if (sets.length === 0 && newLabels === undefined && !criteria.apply && !links.apply) return { ticket: this.detail(row.id) };
 
     const openTask = row.task_id !== null && OPEN_STATES.includes(taskState(row)!);
     // Canceling the ticket stops its agent too, when this person may cancel that task.
@@ -470,8 +547,10 @@ export class Tickets {
         this.store.db.prepare('DELETE FROM ticket_labels WHERE ticket_id = ?').run(row.id);
         const link = this.store.db.prepare('INSERT INTO ticket_labels (ticket_id, label_id) VALUES (?, ?)');
         for (const labelId of newLabels) link.run(row.id, labelId);
-        if (!sets.length) this.store.db.prepare(`UPDATE tickets SET updated_at = ${NOW_SQL} WHERE id = ?`).run(row.id);
       }
+      criteria.apply?.();
+      links.apply?.();
+      if (!sets.length) this.store.db.prepare(`UPDATE tickets SET updated_at = ${NOW_SQL} WHERE id = ?`).run(row.id);
       if (changes.length) this.activity(row.id, actor, 'change', null, { changes });
       this.store.db.exec('COMMIT');
     } catch (err) {
@@ -485,6 +564,74 @@ export class Tickets {
     const warning = newAssignee?.kind === 'agent' && newAssignee.id !== actor.id ? this.dispatch(actor, updated) : undefined;
     this.changed(updated);
     return { ticket: this.detail(row.id), ...(warning ? { warning } : {}) };
+  }
+
+  /** Checks criteria edits now and returns the writes to run inside the update's transaction. */
+  private criteriaOps(actor: Participant, ticketId: number, input: TicketInput): { apply?: () => void; change?: Change } {
+    const add = (input.criteriaAdd ?? []).map((text) => text.trim()).filter(Boolean);
+    const done = input.criteriaDone ?? [];
+    const undone = input.criteriaUndone ?? [];
+    const remove = input.criteriaRemove ?? [];
+    if (!add.length && !done.length && !undone.length && !remove.length) return {};
+    if (remove.length && actor.kind !== 'user') throw new OrcoError('forbidden', 'Only people can remove acceptance criteria');
+    for (const text of add) if (text.length > 300) throw new OrcoError('invalid', 'A criterion can be at most 300 characters');
+    const items = this.store.db
+      .prepare('SELECT id, text, done, position FROM ticket_criteria WHERE ticket_id = ?')
+      .all(ticketId) as unknown as { id: number; text: string; done: number; position: number }[];
+    if (items.length + add.length > MAX_CRITERIA) throw new OrcoError('invalid', `A ticket can have at most ${MAX_CRITERIA} criteria`);
+    const byId = new Map(items.map((c) => [c.id, c]));
+    for (const id of [...done, ...undone, ...remove]) {
+      if (!byId.has(id)) throw new OrcoError('not_found', `No criterion ${id} on this ticket`);
+    }
+    const textOf = (ids: number[]) => ids.map((id) => byId.get(id)!.text);
+    const next = Math.max(-1, ...items.map((c) => c.position)) + 1;
+    const change: Change = {
+      field: 'criteria',
+      from: null,
+      to: { added: add, done: textOf(done), undone: textOf(undone), removed: textOf(remove) },
+    };
+    return {
+      change,
+      apply: () => {
+        const insert = this.store.db.prepare('INSERT INTO ticket_criteria (ticket_id, text, position) VALUES (?, ?, ?)');
+        add.forEach((text, i) => insert.run(ticketId, text, next + i));
+        const mark = this.store.db.prepare('UPDATE ticket_criteria SET done = ? WHERE id = ?');
+        for (const id of done) mark.run(1, id);
+        for (const id of undone) mark.run(0, id);
+        const drop = this.store.db.prepare('DELETE FROM ticket_criteria WHERE id = ?');
+        for (const id of remove) drop.run(id);
+      },
+    };
+  }
+
+  /** Checks blocked-by edits (visibility, no cycles) and returns the writes. */
+  private linkOps(actor: Participant, row: TicketRow, input: TicketInput): { apply?: () => void; change?: Change } {
+    const add = [...new Set(input.blockedByAdd ?? [])].map((ref) => this.byRef(actor, ref));
+    const remove = [...new Set(input.blockedByRemove ?? [])].map((ref) => this.byRef(actor, ref));
+    if (!add.length && !remove.length) return {};
+    const blocks = this.store.db.prepare('SELECT blocked_id FROM ticket_links WHERE blocker_id = ?');
+    for (const blocker of add) {
+      if (blocker.id === row.id) throw new OrcoError('invalid', 'A ticket cannot block itself');
+      // Adding "blocker blocks row" makes a cycle if row already blocks blocker, directly or through others.
+      const seen = new Set<number>();
+      const stack = [row.id];
+      while (stack.length) {
+        const at = stack.pop()!;
+        if (at === blocker.id) throw new OrcoError('invalid', `${refOf(blocker)} already waits on ${refOf(row)}; that would be a loop`);
+        if (seen.has(at)) continue;
+        seen.add(at);
+        for (const next of blocks.all(at) as unknown as { blocked_id: number }[]) stack.push(next.blocked_id);
+      }
+    }
+    return {
+      change: { field: 'blockedBy', from: remove.map(refOf), to: add.map(refOf) },
+      apply: () => {
+        const link = this.store.db.prepare('INSERT OR IGNORE INTO ticket_links (blocker_id, blocked_id) VALUES (?, ?)');
+        for (const blocker of add) link.run(blocker.id, row.id);
+        const unlink = this.store.db.prepare('DELETE FROM ticket_links WHERE blocker_id = ? AND blocked_id = ?');
+        for (const blocker of remove) unlink.run(blocker.id, row.id);
+      },
+    };
   }
 
   comment(actor: Participant, ref: string, body: string): Ticket {
@@ -512,8 +659,9 @@ export class Tickets {
     return { ticket: this.detail(row.id) };
   }
 
-  get(actor: Participant, ref: string): Ticket {
-    return this.detail(this.byRef(actor, ref).id);
+  /** A ticket; with `since` (an activity id), only the activity after it. */
+  get(actor: Participant, ref: string, since?: number): Ticket {
+    return this.detail(this.byRef(actor, ref).id, since ?? 0);
   }
 
   list(actor: Participant, filter: TicketFilter = {}): TicketSummary[] {
@@ -887,7 +1035,7 @@ export class Tickets {
     return this.store.db.prepare(`${TICKET_SELECT} WHERE t.id = ?`).get(id) as TicketRow | undefined;
   }
 
-  private detail(id: number): Ticket {
+  private detail(id: number, since = 0): Ticket {
     const row = this.row(id)!;
     const [summary] = this.summaries([row]);
     const children = this.store.db.prepare(`${TICKET_SELECT} WHERE t.parent_id = ? ORDER BY t.number`).all(id) as unknown as TicketRow[];
@@ -895,9 +1043,9 @@ export class Tickets {
       .prepare(
         `SELECT ta.id, p.name AS actor, p.kind AS actor_kind, ta.kind, ta.body, ta.detail, ta.created_at
          FROM ticket_activity ta LEFT JOIN participants p ON p.id = ta.actor_id
-         WHERE ta.ticket_id = ? ORDER BY ta.id`,
+         WHERE ta.ticket_id = ? AND ta.id > ? ORDER BY ta.id`,
       )
-      .all(id) as unknown as {
+      .all(id, since) as unknown as {
       id: number;
       actor: string | null;
       actor_kind: 'user' | 'agent' | null;
@@ -906,10 +1054,26 @@ export class Tickets {
       detail: string | null;
       created_at: string;
     }[];
+    const criteriaItems = this.store.db
+      .prepare('SELECT id, text, done FROM ticket_criteria WHERE ticket_id = ? ORDER BY position, id')
+      .all(id) as unknown as { id: number; text: string; done: number }[];
+    const link = (sql: string) =>
+      (this.store.db.prepare(sql).all(id) as unknown as TicketRow[]).map((r) => ({
+        ref: refOf(r),
+        title: r.title,
+        status: r.status_name,
+        category: r.category,
+      }));
+    const last = this.store.db.prepare('SELECT max(id) AS id FROM ticket_activity WHERE ticket_id = ?').get(id) as { id: number | null };
     return {
       ...summary!,
       description: row.description,
       creator: row.creator,
+      handoff: row.handoff ? { text: row.handoff, by: row.handoff_by, at: row.handoff_at } : null,
+      criteriaItems: criteriaItems.map((c) => ({ id: c.id, text: c.text, done: c.done === 1 })),
+      blockers: link(`${TICKET_SELECT} WHERE t.id IN (SELECT blocker_id FROM ticket_links WHERE blocked_id = ?) ORDER BY t.id`),
+      blocking: link(`${TICKET_SELECT} WHERE t.id IN (SELECT blocked_id FROM ticket_links WHERE blocker_id = ?) ORDER BY t.id`),
+      lastActivityId: last.id ?? 0,
       children: this.summaries(children),
       activity: activity.map((a) => ({
         id: a.id,
@@ -924,7 +1088,10 @@ export class Tickets {
   }
 
   private summaries(rows: TicketRow[]): TicketSummary[] {
-    const labels = this.labelsFor(rows.map((r) => r.id));
+    const ids = rows.map((r) => r.id);
+    const labels = this.labelsFor(ids);
+    const criteria = this.criteriaCounts(ids);
+    const blockedBy = this.openBlockers(ids);
     return rows.map((row) => {
       const state = taskState(row);
       return {
@@ -944,6 +1111,8 @@ export class Tickets {
         cycle: row.cycle_id === null ? null : { id: row.cycle_id, number: row.cycle_number! },
         parent: row.parent_number === null ? null : `${row.ticket_key}-${row.parent_number}`,
         task: row.task_id === null || state === null ? null : { id: row.task_id, state, since: row.task_since! },
+        blockedBy: blockedBy.get(row.id) ?? [],
+        criteria: criteria.get(row.id) ?? { done: 0, total: 0 },
         sort: row.sort,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
@@ -951,6 +1120,34 @@ export class Tickets {
         completedAt: row.completed_at,
       };
     });
+  }
+
+  private criteriaCounts(ids: number[]): Map<number, { done: number; total: number }> {
+    const map = new Map<number, { done: number; total: number }>();
+    if (ids.length === 0) return map;
+    const rows = this.store.db
+      .prepare(
+        `SELECT ticket_id, count(*) AS total, sum(done) AS done FROM ticket_criteria
+         WHERE ticket_id IN (${ids.map(() => '?').join(', ')}) GROUP BY ticket_id`,
+      )
+      .all(...ids) as unknown as { ticket_id: number; total: number; done: number }[];
+    for (const r of rows) map.set(r.ticket_id, { done: r.done, total: r.total });
+    return map;
+  }
+
+  private openBlockers(ids: number[]): Map<number, string[]> {
+    const map = new Map<number, string[]>();
+    if (ids.length === 0) return map;
+    const rows = this.store.db
+      .prepare(
+        `SELECT tl.blocked_id, p.ticket_key, b.number FROM ticket_links tl
+         JOIN tickets b ON b.id = tl.blocker_id JOIN ticket_statuses s ON s.id = b.status_id JOIN projects p ON p.id = b.project_id
+         WHERE tl.blocked_id IN (${ids.map(() => '?').join(', ')}) AND s.category NOT IN ('completed', 'canceled')
+         ORDER BY b.id`,
+      )
+      .all(...ids) as unknown as { blocked_id: number; ticket_key: string; number: number }[];
+    for (const r of rows) map.set(r.blocked_id, [...(map.get(r.blocked_id) ?? []), refOf(r)]);
+    return map;
   }
 
   private labelsFor(ids: number[]): Map<number, Label[]> {

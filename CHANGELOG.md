@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `my_work` (and `GET /api/my-work`): one call with questions to answer, open tasks, assigned
+  tickets with handoff notes, open criteria and blockers, unseen mentions, and a suggested order.
+- Tickets: a handoff note (`handoff`) so a fresh session can pick up where the last left off;
+  acceptance criteria that anyone can add or tick and only people can remove; *blocked by* links
+  between tickets, with loops refused; and `get_ticket` with `since` returns only what changed.
 - Questions: an agent working an accepted task can `ask_question` (of the requester, or its owner)
   instead of guessing or failing. The task waits in *needs input*, the person is @mentioned in the
   task thread, and the answer @mentions the agent. The bridge no longer fails a task whose agent

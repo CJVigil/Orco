@@ -6,6 +6,7 @@ import { MAX_ATTACHMENTS_PER_MESSAGE } from './attachments.js';
 import { MAX_TTL_SECONDS, MIN_TTL_SECONDS } from './locks.js';
 import { type Message, OrcoError, type Participant, type Store } from './store.js';
 import type { Task } from './tasks.js';
+import { myWork } from './work.js';
 import { PRIORITIES, STATUS_CATEGORIES, type Ticket, type TicketInput, type TicketSummary } from './tickets.js';
 
 const MAX_WAIT_SECONDS = 300;
@@ -16,6 +17,7 @@ const UNTRUSTED_NOTE =
 
 const READ_ONLY_TOOLS = new Set([
   'whoami',
+  'my_work',
   'list_participants',
   'list_projects',
   'list_rooms',
@@ -91,14 +93,24 @@ function formatTicketSummary(t: TicketSummary) {
     cycle: t.cycle?.number ?? null,
     parent: t.parent,
     task: t.task,
+    blocked_by: t.blockedBy,
+    criteria: t.criteria.total ? `${t.criteria.done}/${t.criteria.total}` : null,
   };
 }
 
-function formatTicket(t: Ticket) {
+function formatTicket(t: Ticket, since?: number) {
+  const changed = (field: string) =>
+    t.activity.some((a) => a.kind === 'change' && (a.detail as { changes: { field: string }[] }).changes.some((c) => c.field === field));
+  const skip = since !== undefined;
   return {
     ...formatTicketSummary(t),
     project: t.project,
-    description: t.description,
+    description: skip && !changed('description') ? '(unchanged)' : t.description,
+    handoff: skip && !changed('handoff') ? '(unchanged)' : t.handoff,
+    criteria_items: t.criteriaItems,
+    blockers: t.blockers,
+    blocking: t.blocking,
+    last_activity_id: t.lastActivityId,
     creator: t.creator,
     created: t.createdAt,
     updated: t.updatedAt,
@@ -119,6 +131,16 @@ const ticketFields = {
   milestone: z.string().nullable().optional(),
   cycle: z.union([z.number().int(), z.literal('current')]).nullable().optional(),
   parent: z.string().nullable().optional().describe('Parent ticket, like API-3'),
+  handoff: z
+    .string()
+    .optional()
+    .describe('Replace the handoff note: what is done, what is next, branch or PR, gotchas. Keep it current so a fresh session can resume.'),
+  criteria_add: z.array(z.string()).optional().describe('Acceptance criteria to add'),
+  criteria_done: z.array(z.number().int()).optional().describe('Criterion ids now met'),
+  criteria_undone: z.array(z.number().int()).optional().describe('Criterion ids no longer met'),
+  criteria_remove: z.array(z.number().int()).optional().describe('People only'),
+  blocked_by_add: z.array(z.string()).optional().describe('Tickets this one waits on, like API-4'),
+  blocked_by_remove: z.array(z.string()).optional(),
 };
 
 type TicketArgs = { [K in keyof typeof ticketFields]?: z.infer<(typeof ticketFields)[K]> };
@@ -136,6 +158,13 @@ function ticketInput(args: TicketArgs): TicketInput {
     milestone: args.milestone,
     cycle: args.cycle,
     parent: args.parent,
+    handoff: args.handoff,
+    criteriaAdd: args.criteria_add,
+    criteriaDone: args.criteria_done,
+    criteriaUndone: args.criteria_undone,
+    criteriaRemove: args.criteria_remove,
+    blockedByAdd: args.blocked_by_add,
+    blockedByRemove: args.blocked_by_remove,
   };
 }
 
@@ -153,7 +182,7 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
     { name: 'orco', version: '0.1.0' },
     {
       instructions:
-        'Orco is a team chat shared by humans and AI agents. Rooms are named "room" (server-wide, like "lobby") ' +
+        'Orco is a team chat shared by humans and AI agents. Call my_work first to see what is waiting on you. Rooms are named "room" (server-wide, like "lobby") ' +
         'or "project/room" (like "api/general"). Mention someone with @name. Use wait_for_mentions to receive work. ' +
         'When a mention carries a task, accept it with update_task, do the work, then mark it done or failed with a note. ' +
         'If you need information only a person has, ask with ask_question rather than guessing or failing the task. ' +
@@ -173,6 +202,34 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
       description: 'Who you are, who owns you, which projects you can see, who may give you tasks, your limits, and the rules you work under.',
     },
     async () => run(() => store.capabilities(me)),
+  );
+
+  server.registerTool(
+    'my_work',
+    {
+      annotations: annotate('my_work'),
+      description:
+        'Start here: everything waiting on you in one call. Questions to answer, your open tasks (with where they came ' +
+        'from and any answers), tickets assigned to you with their handoff notes, open criteria and blockers, and unseen ' +
+        'mentions (left unseen), plus a suggested order. Cheaper than calling the list tools one by one.',
+    },
+    async () =>
+      run(() => {
+        const work = myWork(store, me);
+        return {
+          note: UNTRUSTED_NOTE,
+          next: work.next,
+          questions_for_you: work.questionsForYou.map((q) => ({ id: q.id, task_id: q.taskId, from: q.asker, question: q.question, room: q.room })),
+          tasks: work.tasks.map(formatTask),
+          tickets: work.tickets.map((t) => ({
+            ...formatTicketSummary(t),
+            description: t.description,
+            handoff: t.handoff,
+            open_criteria: t.openCriteria,
+          })),
+          mentions: work.mentions.map(formatMessage),
+        };
+      }),
   );
 
   server.registerTool(
@@ -573,10 +630,16 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
     'get_ticket',
     {
       annotations: annotate('get_ticket'),
-      description: 'Show a ticket with its description, sub-tickets, comments and history.',
-      inputSchema: z.object({ ticket: z.string().describe('Like API-12') }),
+      description:
+        'Show a ticket: description, handoff note, acceptance criteria, blockers, sub-tickets, comments and history. ' +
+        'Pass since (a last_activity_id from before) to get only what changed.',
+      inputSchema: z.object({
+        ticket: z.string().describe('Like API-12'),
+        since: z.number().int().optional().describe('Only activity after this id; unchanged description and handoff are elided'),
+      }),
     },
-    async ({ ticket }) => run(() => ({ note: UNTRUSTED_NOTE, ticket: formatTicket(store.tickets.get(me, ticket)) })),
+    async ({ ticket, since }) =>
+      run(() => ({ note: UNTRUSTED_NOTE, ticket: formatTicket(store.tickets.get(me, ticket, since), since) })),
   );
 
   server.registerTool(

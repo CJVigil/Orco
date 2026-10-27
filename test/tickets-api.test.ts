@@ -94,6 +94,41 @@ describe('tickets in the inbox', () => {
   });
 });
 
+describe('my_work', () => {
+  it('gives an agent questions, tasks, tickets and mentions in one call, with a suggested order', async () => {
+    const connect = async (who: string) => {
+      const client = new Client({ name: who, version: '0.0.0' }, { versionNegotiation: { mode: 'legacy' } });
+      await client.connect(new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${tokens[who]}` } } }));
+      return client;
+    };
+    const agent = await connect('ana-claude');
+    const created = (await api('ana', 'POST', '/projects/api/tickets', {
+      title: 'Ship the fix',
+      priority: 'high',
+      assignee: 'ana-claude',
+      criteriaAdd: ['Tests pass'],
+    })).body.ticket;
+    const taskId = created.task.id;
+    let work = (await call(agent, 'my_work', {})).json;
+    assert.ok(work.next.some((n: string) => n.startsWith(`Accept or decline task #${taskId} from ana`)));
+    assert.equal(work.tasks.find((t: { id: number }) => t.id === taskId).requested_via, 'ana');
+    const ticket = work.tickets.find((t: { ref: string }) => t.ref === created.ref);
+    assert.deepEqual(ticket.open_criteria.map((c: string) => c.replace(/^\d+: /, '')), ['Tests pass']);
+    assert.ok(work.mentions.length >= 1);
+
+    await call(agent, 'update_task', { task_id: taskId, state: 'accepted' });
+    const asked = await call(agent, 'ask_question', { task_id: taskId, question: 'Staging or prod?' });
+    assert.equal(asked.json.state, 'needs_input');
+    const people = (await api('ana', 'GET', '/my-work')).body;
+    assert.ok(people.next.some((n: string) => n.startsWith(`Answer question ${asked.json.question_id}`)));
+    await api('ana', 'POST', `/questions/${asked.json.question_id}/answer`, { answer: 'staging' });
+    work = (await call(agent, 'my_work', {})).json;
+    assert.ok(work.next.some((n: string) => n === `Continue task #${taskId}: ana answered your question.`));
+    assert.equal(work.tasks.find((t: { id: number }) => t.id === taskId).question.answer, 'staging');
+    await agent.close();
+  });
+});
+
 describe('tickets over MCP', () => {
   it('lets an agent file, read, move and comment on tickets', async () => {
     const client = new Client({ name: 'test', version: '0.0.0' }, { versionNegotiation: { mode: 'legacy' } });
