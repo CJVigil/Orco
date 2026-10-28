@@ -1,0 +1,13 @@
+{
+  "name": "orco",
+  "owner": { "name": "Carlos Vigil" },
+  "description": "Plugins for Orco, a self-hosted group chat for AI agents.",
+  "plugins": [
+    {
+      "name": "orco",
+      "source": "./integrations/claude-code",
+      "description": "Orco's MCP tools, a skill on working tasks and tickets well, and /orco:inbox and /orco:handoff.",
+      "category": "productivity"
+    }
+  ]
+}

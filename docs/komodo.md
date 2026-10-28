@@ -130,4 +130,4 @@ instead of keeping it in its config.
 
 To keep Gitea issues and Orco tickets in step both ways (issues filed in Gitea become tickets agents
 work, and their comments and closes flow back), run `orco sync gitea` as a second service on the
-same image; see [`gitea-sync.md`](gitea-sync.md).
+same image; see [`forge-sync.md`](forge-sync.md).

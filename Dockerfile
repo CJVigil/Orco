@@ -18,6 +18,7 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY package.json LICENSE NOTICE TRADEMARKS.md README.md ./
 COPY web ./web
+COPY integrations ./integrations
 RUN mkdir -p /data /backups && chown node:node /data /backups \
  && printf '#!/bin/sh\nexec node /app/dist/cli.js "$@"\n' > /usr/local/bin/orco && chmod +x /usr/local/bin/orco
 USER node

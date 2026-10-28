@@ -6,9 +6,9 @@ import { OrcoError } from '../errors.js';
 /** Marks comments the sync wrote, so it never copies them back. */
 const MARKER = '<!-- orco-sync -->';
 
-const configSchema = z.object({
-  orco: z.object({ server: z.url(), token_env: z.string().regex(/^[A-Z_][A-Z0-9_]*$/) }),
-  gitea: z.object({ url: z.url(), token_env: z.string().regex(/^[A-Z_][A-Z0-9_]*$/) }),
+const tokenEnv = z.string().regex(/^[A-Z_][A-Z0-9_]*$/);
+const common = {
+  orco: z.object({ server: z.url(), token_env: tokenEnv }),
   repos: z
     .array(
       z.object({
@@ -20,23 +20,52 @@ const configSchema = z.object({
     )
     .min(1),
   poll_seconds: z.number().int().min(10).max(3600).default(60),
+};
+const giteaSchema = z.object({
+  ...common,
+  gitea: z.object({ url: z.url(), token_env: tokenEnv }),
   state: z.string().default('./orco-gitea-state.json'),
 });
+const githubSchema = z.object({
+  ...common,
+  /** api_url is https://<host>/api/v3 for GitHub Enterprise Server. */
+  github: z.object({ api_url: z.url().default('https://api.github.com'), token_env: tokenEnv }),
+  state: z.string().default('./orco-github-state.json'),
+});
 
-export type GiteaSyncConfig = z.infer<typeof configSchema>;
+export type ForgeKind = 'gitea' | 'github';
 
-export function loadGiteaSyncConfig(path: string): GiteaSyncConfig {
+const FORGE_NAMES: Record<ForgeKind, string> = { gitea: 'Gitea', github: 'GitHub' };
+
+export interface ForgeSyncConfig {
+  orco: { server: string; token_env: string };
+  forge: { kind: ForgeKind; api: string; token_env: string };
+  repos: { repo: string; project: string; labels: boolean }[];
+  poll_seconds: number;
+  state: string;
+}
+
+/** Reads a sync config: `gitea: {url, token_env}` for Gitea or Forgejo, `github: {api_url?, token_env}` for GitHub. */
+export function loadForgeSyncConfig(path: string, kind: ForgeKind): ForgeSyncConfig {
   let raw: unknown;
   try {
     raw = JSON.parse(readFileSync(path, 'utf8'));
   } catch (err) {
     throw new OrcoError('invalid', `Cannot read ${path}: ${(err as Error).message}`);
   }
-  const result = configSchema.safeParse(raw);
-  if (!result.success) {
-    throw new OrcoError('invalid', `Gitea sync config is not valid:\n${result.error.issues.map((i) => `  ${i.path.join('.') || '(root)'}: ${i.message}`).join('\n')}`);
+  const issues = (error: z.ZodError) => error.issues.map((i) => `  ${i.path.join('.') || '(root)'}: ${i.message}`).join('\n');
+  const invalid = (error: z.ZodError) => new OrcoError('invalid', `${FORGE_NAMES[kind]} sync config is not valid:\n${issues(error)}`);
+  const at = (state: string) => resolve(dirname(resolve(path)), state);
+  if (kind === 'gitea') {
+    const result = giteaSchema.safeParse(raw);
+    if (!result.success) throw invalid(result.error);
+    const { gitea, state, ...rest } = result.data;
+    return { ...rest, forge: { kind, api: `${gitea.url.replace(/\/+$/, '')}/api/v1`, token_env: gitea.token_env }, state: at(state) };
   }
-  return { ...result.data, state: resolve(dirname(resolve(path)), result.data.state) };
+  const result = githubSchema.safeParse(raw);
+  if (!result.success) throw invalid(result.error);
+  const { github, state, ...rest } = result.data;
+  return { ...rest, forge: { kind, api: github.api_url.replace(/\/+$/, ''), token_env: github.token_env }, state: at(state) };
 }
 
 interface IssueSnapshot {
@@ -47,14 +76,14 @@ interface IssueSnapshot {
 }
 
 interface RepoState {
-  /** Issues and comments are read from Gitea from these times on. */
+  /** Issues and comments are read from the forge from these times on. */
   issuesSince: string | null;
   commentsSince: string | null;
   /** Issue number to its ticket, with the issue as last synced. */
   issues: Record<string, IssueSnapshot>;
-  /** Gitea comment ids already copied into Orco. */
+  /** Forge comment ids already copied into Orco. */
   comments: number[];
-  /** Per ticket: the last Orco activity already copied to Gitea. */
+  /** Per ticket: the last Orco activity already copied to the forge. */
   activity: Record<string, number>;
 }
 
@@ -63,9 +92,11 @@ interface SyncState {
 }
 
 type Json = Record<string, any>;
+type Repo = ForgeSyncConfig['repos'][number];
 
 /**
- * Keeps Gitea (or Forgejo) issues and Orco tickets in step, run beside Orco as `orco sync gitea`:
+ * Keeps Gitea (or Forgejo) or GitHub issues and Orco tickets in step, run beside Orco as
+ * `orco sync gitea` or `orco sync github`:
  *
  * - New issues become tickets (title, body with a link back, labels; closed issues land in a
  *   completed status). Edits to the title and body, and closing or reopening, follow.
@@ -75,15 +106,15 @@ type Json = Record<string, any>;
  *
  * It polls both sides, so Orco still makes no outbound calls. It acts in Orco as the user whose token
  * it holds (best a dedicated one, like "gitea") and skips that user's own changes, and it marks the
- * comments it writes in Gitea, so nothing echoes back and forth.
+ * comments it writes on the forge, so nothing echoes back and forth.
  */
-export class GiteaSync {
+export class ForgeSync {
   private state: SyncState;
   private me = '';
 
   constructor(
-    private readonly config: GiteaSyncConfig,
-    private readonly tokens: { orco: string; gitea: string },
+    private readonly config: ForgeSyncConfig,
+    private readonly tokens: { orco: string; forge: string },
     private readonly log: (message: string) => void = () => {},
   ) {
     this.state = existsSync(config.state) ? (JSON.parse(readFileSync(config.state, 'utf8')) as SyncState) : { repos: {} };
@@ -118,18 +149,17 @@ export class GiteaSync {
     }
   }
 
-  /* Gitea → Orco */
+  /* Forge → Orco */
 
-  private async pullIssues(repo: GiteaSyncConfig['repos'][number], state: RepoState): Promise<void> {
+  private async pullIssues(repo: Repo, state: RepoState): Promise<void> {
     const plan = (await this.orco('GET', `/api/projects/${repo.project}/plan`)) as Json;
     const completed = plan.statuses.find((s: Json) => s.category === 'completed')?.name;
     const reopened = (plan.statuses.find((s: Json) => s.category === 'unstarted') ?? plan.statuses.find((s: Json) => s.category === 'backlog'))?.name;
     let newest = state.issuesSince;
-    for (let page = 1; page <= 50; page++) {
-      const query = new URLSearchParams({ state: 'all', type: 'issues', limit: '50', page: String(page) });
+    for (let page = 1; page <= 100; page++) {
+      const query = this.page(page, { state: 'all', ...(this.config.forge.kind === 'gitea' ? { type: 'issues' } : {}) });
       if (state.issuesSince) query.set('since', state.issuesSince);
-      const issues = (await this.gitea('GET', `/repos/${repo.repo}/issues?${query}`)) as Json[];
-      if (!issues.length) break;
+      const issues = (await this.forge('GET', `/repos/${repo.repo}/issues?${query}`)) as Json[];
       for (const issue of issues) {
         if (issue.pull_request) continue;
         if (!newest || issue.updated_at > newest) newest = issue.updated_at;
@@ -160,31 +190,35 @@ export class GiteaSync {
         }
         state.issues[key] = { ...known, title: issue.title, body, state: issue.state };
       }
-      if (issues.length < 50) break;
+      if (issues.length < this.pageSize) break;
     }
     state.issuesSince = newest;
   }
 
-  private async pullComments(repo: GiteaSyncConfig['repos'][number], state: RepoState): Promise<void> {
-    const query = new URLSearchParams({ limit: '50' });
-    if (state.commentsSince) query.set('since', state.commentsSince);
-    const comments = (await this.gitea('GET', `/repos/${repo.repo}/issues/comments?${query}`)) as Json[];
+  private async pullComments(repo: Repo, state: RepoState): Promise<void> {
     let newest = state.commentsSince;
-    for (const comment of comments) {
-      if (!newest || comment.updated_at > newest) newest = comment.updated_at;
-      const number = /\/issues\/(\d+)$/.exec(comment.issue_url ?? '')?.[1];
-      const known = number ? state.issues[number] : undefined;
-      if (!known || state.comments.includes(comment.id) || String(comment.body ?? '').includes(MARKER)) continue;
-      await this.orco('POST', `/api/tickets/${known.ref}/comments`, { text: `**${comment.user?.login ?? 'someone'}** on Gitea:\n\n${comment.body}` });
-      state.comments.push(comment.id);
+    for (let page = 1; page <= 100; page++) {
+      // Oldest first, so a long backlog is read in order across pages.
+      const query = this.page(page, this.config.forge.kind === 'github' ? { sort: 'updated', direction: 'asc' } : {});
+      if (state.commentsSince) query.set('since', state.commentsSince);
+      const comments = (await this.forge('GET', `/repos/${repo.repo}/issues/comments?${query}`)) as Json[];
+      for (const comment of comments) {
+        if (!newest || comment.updated_at > newest) newest = comment.updated_at;
+        const number = /\/issues\/(\d+)$/.exec(comment.issue_url ?? '')?.[1];
+        const known = number ? state.issues[number] : undefined;
+        if (!known || state.comments.includes(comment.id) || String(comment.body ?? '').includes(MARKER)) continue;
+        await this.orco('POST', `/api/tickets/${known.ref}/comments`, { text: `**${comment.user?.login ?? 'someone'}** on ${this.name}:\n\n${comment.body}` });
+        state.comments.push(comment.id);
+      }
+      if (comments.length < this.pageSize) break;
     }
     state.comments = state.comments.slice(-2000);
     state.commentsSince = newest;
   }
 
-  /* Orco → Gitea */
+  /* Orco → forge */
 
-  private async pushTickets(repo: GiteaSyncConfig['repos'][number], state: RepoState): Promise<void> {
+  private async pushTickets(repo: Repo, state: RepoState): Promise<void> {
     const plan = (await this.orco('GET', `/api/projects/${repo.project}/plan`)) as Json;
     const category = new Map<string, string>(plan.statuses.map((s: Json) => [s.name, s.category]));
     for (const [number, issue] of Object.entries(state.issues)) {
@@ -202,7 +236,7 @@ export class GiteaSync {
           const closed = ['completed', 'canceled'].includes(category.get(status.to) ?? '');
           const wanted = closed ? 'closed' : 'open';
           if (wanted !== issue.state) {
-            await this.gitea('PATCH', `/repos/${repo.repo}/issues/${number}`, { state: wanted });
+            await this.forge('PATCH', `/repos/${repo.repo}/issues/${number}`, { state: wanted });
             state.issues[number] = { ...issue, state: wanted };
             this.log(`${issue.ref} → ${repo.repo}#${number}: ${wanted}`);
           }
@@ -213,7 +247,7 @@ export class GiteaSync {
   }
 
   private async comment(repo: string, number: string, body: string): Promise<void> {
-    await this.gitea('POST', `/repos/${repo}/issues/${number}/comments`, { body: `${body}\n\n${MARKER}` });
+    await this.forge('POST', `/repos/${repo}/issues/${number}/comments`, { body: `${body}\n\n${MARKER}` });
   }
 
   /** Label names for a ticket, creating the ones Orco lacks. */
@@ -233,19 +267,35 @@ export class GiteaSync {
     renameSync(tmp, this.config.state);
   }
 
+  private get name(): string {
+    return FORGE_NAMES[this.config.forge.kind];
+  }
+
+  private get pageSize(): number {
+    return this.config.forge.kind === 'github' ? 100 : 50;
+  }
+
+  private page(page: number, extra: Record<string, string>): URLSearchParams {
+    return new URLSearchParams({ ...extra, [this.config.forge.kind === 'github' ? 'per_page' : 'limit']: String(this.pageSize), page: String(page) });
+  }
+
   private orco(method: string, path: string, body?: unknown): Promise<unknown> {
     return call(`${this.config.orco.server.replace(/\/+$/, '')}${path}`, method, { Authorization: `Bearer ${this.tokens.orco}` }, body, 'Orco');
   }
 
-  private gitea(method: string, path: string, body?: unknown): Promise<unknown> {
-    return call(`${this.config.gitea.url.replace(/\/+$/, '')}/api/v1${path}`, method, { Authorization: `token ${this.tokens.gitea}` }, body, 'Gitea');
+  private forge(method: string, path: string, body?: unknown): Promise<unknown> {
+    const headers: Record<string, string> =
+      this.config.forge.kind === 'github'
+        ? { Authorization: `Bearer ${this.tokens.forge}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'orco-sync' }
+        : { Authorization: `token ${this.tokens.forge}` };
+    return call(`${this.config.forge.api}${path}`, method, headers, body, this.name);
   }
 }
 
 async function call(url: string, method: string, headers: Record<string, string>, body: unknown, who: string): Promise<unknown> {
   const res = await fetch(url, {
     method,
-    headers: { ...headers, Accept: 'application/json', ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
+    headers: { Accept: 'application/json', ...headers, ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();

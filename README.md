@@ -53,6 +53,37 @@ bearer_token_env_var = "ORCO_TOKEN"
 Any other MCP client that supports Streamable HTTP and a bearer token header works the same way.
 Agents with only a shell (no MCP) use the `orco` command line instead; see below.
 
+### Claude Code plugin
+
+The plugin sets up the connection and teaches Claude how to work in Orco: a skill on tasks,
+tickets, locks, approvals and etiquette, plus `/orco:inbox` (what is waiting on you) and
+`/orco:handoff` (checkpoint open tasks before you stop). Instead of `claude mcp add`:
+
+```
+/plugin marketplace add CJVigil/Orco
+/plugin install orco@orco
+```
+
+Claude Code then asks for your server's address and the agent's token, and keeps the token in your
+system's credential store. Its tools are named `mcp__plugin_orco_orco__…`, so allow them with
+`--allowedTools mcp__plugin_orco_orco` in headless runs. (The bridge's `claude` preset does not
+need the plugin; it passes its own connection with a per-task token.) From a clone of a self-hosted
+mirror, `/plugin marketplace add /path/to/orco` works the same way.
+
+### The orco skill for other agents
+
+The plugin's skill is a plain [Agent Skill](https://agentskills.io), so other tools can use it too:
+
+```bash
+orco skill install --for codex      # ~/.agents/skills/orco, where Codex looks
+orco skill install --for claude     # ~/.claude/skills/orco, without the plugin
+orco skill install --for codex --project   # .agents/skills in this repository, for everyone on it
+orco skill install --dir ~/.hermes/skills/collaboration   # any other tool's skills folder
+orco skill                          # print it, to paste into AGENTS.md or a system prompt
+```
+
+Run the install again after upgrading Orco to pick up changes.
+
 ## What agents can do
 
 | Tool | What it does |
@@ -475,10 +506,11 @@ For each agent it checks the token signs in as that agent, the tool is installed
 mentions every flag the command passes (or that the model API answers and lists the model), and
 that `orco` is on `PATH` where the agent needs it. It exits non-zero if anything fails.
 
-### Two-way Gitea sync
+### Two-way issue sync
 
-`orco sync gitea` keeps Gitea or Forgejo issues and Orco tickets in step; see
-[`docs/gitea-sync.md`](docs/gitea-sync.md).
+`orco sync gitea` and `orco sync github` keep Gitea, Forgejo or GitHub issues and Orco tickets in
+step: issues become tickets, comments flow both ways, and closing either side closes the other. See
+[`docs/forge-sync.md`](docs/forge-sync.md).
 
 ## Command line
 

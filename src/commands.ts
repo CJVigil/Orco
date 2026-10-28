@@ -6,12 +6,13 @@ import { Backups, backupTo, networkFilesystemWarning, restore } from './backups.
 import { Bridge } from './bridge/bridge.js';
 import { loadBridgeConfig } from './bridge/config.js';
 import { doctor } from './bridge/doctor.js';
-import { GiteaSync, loadGiteaSyncConfig } from './sync/gitea.js';
+import { ForgeSync, loadForgeSyncConfig } from './sync/forge.js';
 import { CLIENT_COMMANDS, CLIENT_USAGE, readStdin, runClient } from './client.js';
 import { openDatabase } from './db.js';
 import { createApp } from './http.js';
 import { importTickets, parseImport } from './import.js';
 import { parseSecretsKey } from './secrets.js';
+import { installSkill, skillText } from './skill.js';
 import { type Limits, OrcoError, Store, type TaskPolicy } from './store.js';
 
 const USAGE = `Usage: orco <command> [options]
@@ -35,7 +36,13 @@ Bridge commands (run on each developer's machine):
   bridge                     Wake local agents when they are assigned tasks
   bridge example             Print an example bridge config
   bridge doctor              Check each bridge agent: token, tool installed, flags, model API
-  sync gitea <config> [--once]   Keep Gitea/Forgejo issues and Orco tickets in step (see docs/gitea-sync.md)
+  sync gitea <config> [--once]   Keep Gitea/Forgejo issues and Orco tickets in step
+  sync github <config> [--once]  The same for GitHub (see docs/forge-sync.md)
+
+Agent setup:
+  skill                      Print the orco skill (how to work in Orco) for any agent tool
+  skill install --for claude|codex|agents [--project]   Install it where that tool looks
+  skill install --dir <dir>  Install it into another tool's skills directory
 
 Options:
   --config <path> Bridge config (env ORCO_BRIDGE_CONFIG, default ./orco-bridge.json)
@@ -142,6 +149,9 @@ export function main(): void {
       'dry-run': { type: 'boolean' },
       force: { type: 'boolean' },
       once: { type: 'boolean' },
+      for: { type: 'string' },
+      dir: { type: 'string' },
+      project: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
       version: { type: 'boolean', short: 'v' },
     },
@@ -174,6 +184,17 @@ export function main(): void {
     return;
   }
 
+  if (command === 'skill') {
+    if (sub === undefined || sub === 'print') {
+      process.stdout.write(skillText());
+      return;
+    }
+    if (sub !== 'install') throw new OrcoError('invalid', 'Usage: orco skill [print] | orco skill install --for claude|codex|agents [--project] | --dir <dir>');
+    const path = installSkill({ target: values.for, dir: values.dir, project: values.project });
+    console.log(`Installed the orco skill at ${path}. Run this again after upgrading Orco to update it.`);
+    return;
+  }
+
   // Restoring replaces the database file, so it runs before anything opens it.
   if (command === 'restore') {
     if (!sub) throw new OrcoError('invalid', 'Usage: orco restore <backup file> [--force]');
@@ -183,12 +204,12 @@ export function main(): void {
   }
 
   if (command === 'sync') {
-    if (sub !== 'gitea' || !args[0]) throw new OrcoError('invalid', 'Usage: orco sync gitea <config.json> [--once]');
-    const config = loadGiteaSyncConfig(args[0]);
+    if ((sub !== 'gitea' && sub !== 'github') || !args[0]) throw new OrcoError('invalid', 'Usage: orco sync gitea|github <config.json> [--once]');
+    const config = loadForgeSyncConfig(args[0], sub);
     const orcoToken = process.env[config.orco.token_env];
-    const giteaToken = process.env[config.gitea.token_env];
-    if (!orcoToken || !giteaToken) throw new OrcoError('invalid', `Set ${config.orco.token_env} and ${config.gitea.token_env} first`);
-    const sync = new GiteaSync(config, { orco: orcoToken, gitea: giteaToken }, (m) => console.log(`${new Date().toISOString()} ${m}`));
+    const forgeToken = process.env[config.forge.token_env];
+    if (!orcoToken || !forgeToken) throw new OrcoError('invalid', `Set ${config.orco.token_env} and ${config.forge.token_env} first`);
+    const sync = new ForgeSync(config, { orco: orcoToken, forge: forgeToken }, (m) => console.log(`${new Date().toISOString()} ${m}`));
     if (values.once) {
       void sync.runOnce().catch((err: Error) => {
         console.error(err.message);

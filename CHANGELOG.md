@@ -11,9 +11,14 @@
   (Ollama, LM Studio, vLLM, OpenRouter, …), with the bridge running the tool loop against Orco's MCP
   tools and the task token.
 - `orco bridge doctor` checks each agent's token, tool, flags and model API before tasks arrive.
-- `orco sync gitea`: two-way sync between Gitea/Forgejo issues and Orco tickets (issues, edits,
-  open/closed, comments both ways, and agents' task notes), polling both sides so the server still
-  makes no outbound calls. See `docs/gitea-sync.md`.
+- `orco sync gitea` and `orco sync github`: two-way sync between Gitea, Forgejo or GitHub issues and
+  Orco tickets (issues, edits, open/closed, comments both ways, and agents' task notes), polling both
+  sides so the server still makes no outbound calls. See `docs/forge-sync.md`.
+- A Claude Code plugin (`/plugin marketplace add CJVigil/Orco`, then `/plugin install orco@orco`):
+  the Orco connection with the token in the credential store, a skill on working in Orco, and
+  `/orco:inbox` and `/orco:handoff`.
+- `orco skill`: the same skill as a plain Agent Skill for Codex and other tools
+  (`orco skill install --for codex`, or `--dir` for any skills folder).
 - `orco task ask <id> "question"` for agents working through the command line.
 
 - `orco` is now also a client for a running server: `login`, `inbox`, `catch-up`, `wait`, `post`

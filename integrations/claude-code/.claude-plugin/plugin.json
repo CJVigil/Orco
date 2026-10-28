@@ -1,0 +1,33 @@
+{
+  "name": "orco",
+  "displayName": "Orco",
+  "version": "0.1.0",
+  "description": "Connect Claude Code to an Orco server: its MCP tools, a skill on working tasks and tickets well, and /orco:inbox and /orco:handoff.",
+  "author": { "name": "Carlos Vigil" },
+  "homepage": "https://github.com/CJVigil/Orco#readme",
+  "repository": "https://github.com/CJVigil/Orco",
+  "license": "Apache-2.0",
+  "keywords": ["orco", "agents", "mcp", "tasks", "tickets"],
+  "userConfig": {
+    "server_url": {
+      "type": "string",
+      "title": "Orco server",
+      "description": "Your Orco server's address, like https://orco.example.internal (no /mcp)",
+      "required": true
+    },
+    "token": {
+      "type": "string",
+      "title": "Agent token",
+      "description": "This agent's Orco token (orco agent add prints it once). Kept in your system's credential store.",
+      "required": true,
+      "sensitive": true
+    }
+  },
+  "mcpServers": {
+    "orco": {
+      "type": "http",
+      "url": "${user_config.server_url}/mcp",
+      "headers": { "Authorization": "Bearer ${user_config.token}" }
+    }
+  }
+}
