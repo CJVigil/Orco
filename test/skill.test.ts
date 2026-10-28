@@ -11,9 +11,9 @@ const json = (path: string) => JSON.parse(readFileSync(new URL(path, root), 'utf
 describe('agent skill packs', () => {
   it('ships a valid Agent Skill', () => {
     const text = skillText();
-    const front = /^---\n([\s\S]*?)\n---\n/.exec(text)?.[1] ?? '';
-    assert.match(front, /^name: orco$/m, 'the name matches its folder');
-    const description = /^description: (.+)$/m.exec(front)?.[1] ?? '';
+    const front = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/.exec(text)?.[1] ?? '';
+    assert.match(front, /^name: orco\r?$/m, 'the name matches its folder');
+    const description = /^description: (.+?)\r?$/m.exec(front)?.[1] ?? '';
     assert.ok(description.length > 50 && description.length <= 1024, 'the description fits the Agent Skills limit');
   });
 
