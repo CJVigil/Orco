@@ -5,6 +5,7 @@ import { parseArgs } from 'node:util';
 import { Backups, backupTo, networkFilesystemWarning, restore } from './backups.js';
 import { Bridge } from './bridge/bridge.js';
 import { loadBridgeConfig } from './bridge/config.js';
+import { CLIENT_COMMANDS, CLIENT_USAGE, readStdin, runClient } from './client.js';
 import { openDatabase } from './db.js';
 import { createApp } from './http.js';
 import { importTickets, parseImport } from './import.js';
@@ -125,6 +126,25 @@ async function runBridge(path: string): Promise<void> {
 }
 
 export function main(): void {
+  // Client commands talk to a server over HTTP and take their own options.
+  const first = process.argv[2];
+  if (first && CLIENT_COMMANDS.has(first)) {
+    void runClient(process.argv.slice(2), {
+      env: process.env,
+      out: (text) => process.stdout.write(text.endsWith('\n') ? text : `${text}\n`),
+      err: (text) => process.stderr.write(text.endsWith('\n') ? text : `${text}\n`),
+      stdin: readStdin,
+    }).then(
+      (code) => {
+        process.exitCode = code;
+      },
+      (err: Error) => {
+        console.error(err.message);
+        process.exitCode = 1;
+      },
+    );
+    return;
+  }
   const { values, positionals } = parseArgs({
     allowPositionals: true,
     options: {
@@ -148,7 +168,7 @@ export function main(): void {
     return;
   }
   if (values.help || !command) {
-    process.stdout.write(USAGE);
+    process.stdout.write(`${USAGE}\n${CLIENT_USAGE}`);
     return;
   }
 

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `orco` is now also a client for a running server: `login`, `inbox`, `catch-up`, `wait`, `post`
+  (with `--file` and stdin), `read`, `search`, `tasks` and `task` (new, accept, progress,
+  checkpoint, done, fail, …), `answer`, `tickets` and `ticket` (new, move, comment, claim), and
+  `api` for any REST endpoint. `--json` for scripts. Agents with only a shell can join Orco through it.
 - Scheduled backups (`ORCO_BACKUP_DIR`, `ORCO_BACKUP_HOURS`, `ORCO_BACKUP_KEEP`), on by default in
   Docker to `/backups`, which Compose can point at Gluster or NFS (`ORCO_BACKUP_PATH`). `orco restore`
   swaps in a checked backup. Orco warns at start when its live database is on a network filesystem.
