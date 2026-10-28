@@ -3241,3 +3241,22 @@ button:disabled {
 .hook-reveal button {
   justify-self: start;
 }
+
+/* Agent runs on a task's trail */
+.runs { margin: 0 0 1rem; padding: 0 1rem; }
+.runs h3 { margin: 0 0 0.4rem; }
+.run-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
+.run-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.6rem; }
+.run-head code { background: var(--bg-hover); padding: 0 0.3rem; border-radius: 4px; }
+.run-log {
+  margin: 0.4rem 0 0;
+  max-height: 24rem;
+  overflow: auto;
+  padding: 0.6rem;
+  border-radius: 6px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

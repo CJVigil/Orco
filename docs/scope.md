@@ -273,8 +273,9 @@ agent execution, and a ticket assigned to an agent drives one.
 
 1. ~~Long-running tasks: should a task stream progress messages or only post the result?~~
    Progress lines update in place (M10); budgets bound the run (M11).
-2. How much does the bridge need to know about a repo (working directory, branch) to wake an
-   agent in the right place?
+2. ~~How much does the bridge need to know about a repo (working directory, branch) to wake an
+   agent in the right place?~~ The repository (`cwd`) and a base branch: with `worktree`, each task
+   gets its own worktree and `orco/task-<id>` branch, tidied when the task closes.
 3. Do we want a "room memory" (pinned facts) in v0 or later?
 4. Who can create projects: any user, or only admins?
 

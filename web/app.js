@@ -804,13 +804,7 @@ async function showMyAgents() {
         'section',
         { class: 'agent-settings' },
         el('div', { class: 'agent-name' }, avatar(agent.name, 'agent'), el('strong', { text: agent.name })),
-        spend && spend.tasks
-          ? el(
-              'p',
-              { class: 'small muted agent-spend', title: 'Tasks accepted in the last 30 days, with the time and cost the agent reported' },
-              `Last 30 days: ${spend.tasks} ${spend.tasks === 1 ? 'task' : 'tasks'} · ${spend.minutes < 60 ? `${spend.minutes} min` : `${Math.round(spend.minutes / 6) / 10} h`}${spend.cents ? ` · ${money(spend.cents)}` : ''}${spend.tokens ? ` · ${spend.tokens.toLocaleString()} tokens` : ''}`,
-            )
-          : null,
+        scorecard(agent.scorecard30d, spend),
         el(
           'details',
           { class: 'memory-details', ontoggle: (event) => event.target.open && void showMemory() },
@@ -1237,6 +1231,10 @@ function trailLine(entry) {
       return `released the lock ${entry.subject?.replace(/^lock:/, '') ?? ''}`;
     case 'agent.profile':
       return 'updated its profile';
+    case 'task.run':
+      return `ran ${d.mode === 'start' ? '' : `(${d.mode}) `}for ${duration(d.seconds ?? 0)}: ${d.outcome}${d.costMicros ? ` · ${dollars(d.costMicros)}` : ''}`;
+    case 'task.feedback':
+      return `rated the result ${d.rating === 'up' ? '▲' : '▼'}${d.note ? `: ${snippet(d.note, 120)}` : ''}`;
     case 'thread.summary':
       return 'updated a thread summary';
     case 'flag.create':
@@ -1252,12 +1250,110 @@ function trailLine(entry) {
   }
 }
 
+function duration(seconds) {
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  return minutes < 60 ? `${minutes}m ${seconds % 60}s` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+function compact(n) {
+  return n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n);
+}
+
+function dollars(micros) {
+  return `$${(micros / 1e6).toFixed(micros < 10_000 ? 4 : 2)}`;
+}
+
+/** The bridge's reports on each run of the agent: time, outcome, usage, branch, and the log. */
+function runList(runs) {
+  if (!runs.length) return null;
+  return el(
+    'section',
+    { class: 'runs' },
+    el('h3', { class: 'small', text: `Runs (${runs.length})` }),
+    el(
+      'ol',
+      { class: 'run-list' },
+      runs.map((run, i) => {
+        const tokens = (run.inputTokens ?? 0) + (run.outputTokens ?? 0);
+        const log = el('pre', { class: 'run-log', hidden: true });
+        const facts = [
+          run.mode === 'start' ? null : run.mode === 'resume' ? 'resumed' : 'reminder',
+          duration(run.seconds),
+          run.outcome,
+          tokens ? `${compact(tokens)} tokens` : null,
+          run.costMicros !== null ? dollars(run.costMicros) : null,
+        ].filter(Boolean);
+        return el(
+          'li',
+          {},
+          el(
+            'div',
+            { class: 'run-head' },
+            el('strong', { text: `#${i + 1}` }),
+            el('span', { class: 'muted small', text: formatTime(run.startedAt) }),
+            el('span', { class: 'small', text: facts.join(' · ') }),
+            run.branch ? el('code', { class: 'small', title: run.workspace ?? '', text: run.branch }) : null,
+            run.logBytes
+              ? el('button', {
+                  class: 'ghost small',
+                  type: 'button',
+                  text: 'Log',
+                  title: `${compact(run.logBytes)} bytes${run.logCut ? ', middle cut' : ''}; secrets the bridge knew of are hidden`,
+                  onclick: async () => {
+                    if (!log.hidden) {
+                      log.hidden = true;
+                      return;
+                    }
+                    try {
+                      // Agent output is untrusted: shown as plain text only.
+                      log.textContent = (await api(`/runs/${run.id}/log?format=json`)).log;
+                    } catch (err) {
+                      log.textContent = err.message;
+                    }
+                    log.hidden = false;
+                  },
+                })
+              : el('span', { class: 'muted small', text: 'no log' }),
+          ),
+          log,
+        );
+      }),
+    ),
+  );
+}
+
+/** How an agent did over the last 30 days, from its tasks, the bridge's run reports and people's feedback. */
+function scorecard(card, spend) {
+  if (!card || !card.tasks.total) return null;
+  const { done, failed, open } = card.tasks;
+  const cents = spend?.cents ?? 0;
+  const parts = [
+    `${done} done`,
+    failed ? `${failed} failed` : null,
+    card.successRate !== null ? `${Math.round(card.successRate * 100)}% success` : null,
+    open ? `${open} open` : null,
+    card.medianMinutes !== null ? `median ${card.medianMinutes < 60 ? `${Math.round(card.medianMinutes)} min` : `${Math.round(card.medianMinutes / 6) / 10} h`}` : null,
+    card.askedForHelp ? `asked for help on ${card.askedForHelp}` : null,
+    cents ? `${money(cents)}${done ? ` (${money(Math.round(cents / done))} per done task)` : ''}` : null,
+    card.tokens.input + card.tokens.output ? `${compact(card.tokens.input + card.tokens.output)} tokens` : null,
+    card.feedback.up || card.feedback.down ? `▲ ${card.feedback.up} ▼ ${card.feedback.down}` : null,
+  ].filter(Boolean);
+  return el(
+    'p',
+    { class: 'small muted agent-spend', title: 'Tasks from the last 30 days. Cost and tokens come from the bridge and from what the agent reported.' },
+    el('strong', { text: 'Last 30 days: ' }),
+    parts.join(' · '),
+  );
+}
+
 async function showTrail(taskId) {
   openPanel('trail', `Task #${taskId} trail`);
   $('panel-body').replaceChildren(el('p', { class: 'panel-intro muted small', text: 'Loading…' }));
   let entries;
+  let runs;
   try {
-    entries = await api(`/tasks/${taskId}/trail`);
+    [entries, runs] = await Promise.all([api(`/tasks/${taskId}/trail`), api(`/tasks/${taskId}/runs`)]);
   } catch (err) {
     $('panel-body').replaceChildren(el('p', { class: 'panel-intro error', text: err.message }));
     return;
@@ -1265,6 +1361,7 @@ async function showTrail(taskId) {
   if (state.panel !== 'trail') return;
   $('panel-body').replaceChildren(
     el('p', { class: 'panel-intro muted small', text: 'Everything recorded about this task, and what its agent did while it was open. Work for other tasks in the same window shows too.' }),
+    runList(runs),
     el(
       'ol',
       { class: 'trail' },

@@ -74,6 +74,14 @@ export async function doctor(config: BridgeConfig, env: NodeJS.ProcessEnv, probe
     if (missing.length) note(false, `${[bin, ...sub].join(' ')} --help does not mention ${missing.join(', ')}; this version may use other flags: set command yourself`);
     else note(true, `${bin} is installed and accepts ${flagsOf(agent.command).join(' ') || 'its arguments'}`);
 
+    if (agent.worktree) {
+      const base = agent.worktree.base ?? 'HEAD';
+      const sha = probe('git', ['-C', agent.worktree.repo, 'rev-parse', '--verify', '--quiet', `${base}^{commit}`]);
+      if (sha === null) note(false, 'git is not installed or not on PATH, and worktree needs it');
+      else if (!/\b[0-9a-f]{40}\b/.test(sha)) note(false, `worktree: ${agent.worktree.repo} is not a git repository, or ${base} is not a commit there`);
+      else note(true, `worktree: tasks branch from ${base} in ${agent.worktree.repo}`);
+    }
+
     const preset = agent.preset ? PRESETS[agent.preset] : undefined;
     if (preset?.via === 'cli' || agent.prompt_template?.includes('orco task')) {
       if (probe('orco', ['--version']) === null) note(false, 'orco is not on PATH, but this agent works through the orco command; npm link (or install) it on this machine');

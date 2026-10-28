@@ -1,5 +1,6 @@
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import type { ModelConfig } from './config.js';
+import type { RunOutput } from './output.js';
 
 /** The Orco tools a model gets by default: what working a task needs, nothing that reaches further. */
 export const DEFAULT_MODEL_TOOLS = [
@@ -56,6 +57,8 @@ export async function runModel(options: {
   apiKey?: string;
   signal: AbortSignal;
   log: (message: string) => void;
+  /** Collects the run's log and token usage. */
+  output?: RunOutput;
 }): Promise<ModelRun> {
   const { model } = options;
   const client = new Client({ name: `orco-bridge-${options.agent}`, version: '1.0.0' });
@@ -78,12 +81,22 @@ export async function runModel(options: {
     let lastText = '';
     for (let turn = 1; turn <= model.max_turns; turn++) {
       if (options.signal.aborted) throw new Error('stopped');
-      const reply = await chat(model, options.apiKey, messages, functions, options.signal);
+      const { message: reply, usage } = await chat(model, options.apiKey, messages, functions, options.signal);
+      if (usage && options.output) {
+        const input = Number(usage.prompt_tokens) || 0;
+        const output = Number(usage.completion_tokens) || 0;
+        const cost = model.price ? Math.round(input * model.price.input_per_million + output * model.price.output_per_million) : null;
+        options.output.addUsage(input, output, cost);
+      }
+      if (reply.content?.trim()) options.output?.note(`assistant: ${reply.content.trim()}`);
       messages.push({ role: 'assistant', content: reply.content ?? null, ...(reply.tool_calls?.length ? { tool_calls: reply.tool_calls } : {}) });
       if (reply.content) lastText = reply.content;
       if (!reply.tool_calls?.length) return { ended: true, turns: turn, lastText };
       for (const call of reply.tool_calls) {
-        messages.push({ role: 'tool', tool_call_id: call.id, content: await runTool(client, allowed, call, options.log) });
+        options.output?.note(`→ ${call.function.name} ${call.function.arguments.slice(0, 400)}`);
+        const result = await runTool(client, allowed, call, options.log);
+        options.output?.note(`← ${result.replace(/\s+/g, ' ').slice(0, 400)}`);
+        messages.push({ role: 'tool', tool_call_id: call.id, content: result });
       }
     }
     return { ended: false, turns: model.max_turns, lastText };
@@ -120,7 +133,7 @@ async function chat(
   messages: ChatMessage[],
   tools: unknown[],
   signal: AbortSignal,
-): Promise<{ content?: string | null; tool_calls?: ToolCall[] }> {
+): Promise<{ message: { content?: string | null; tool_calls?: ToolCall[] }; usage?: { prompt_tokens?: number; completion_tokens?: number } }> {
   const res = await fetch(`${model.base_url.replace(/\/+$/, '')}/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
@@ -133,12 +146,16 @@ async function chat(
     }),
     signal: AbortSignal.any([signal, AbortSignal.timeout(CALL_TIMEOUT_MS)]),
   });
-  const data = (await res.json().catch(() => ({}))) as { choices?: { message?: { content?: string | null; tool_calls?: ToolCall[] } }[]; error?: { message?: string } | string };
+  const data = (await res.json().catch(() => ({}))) as {
+    choices?: { message?: { content?: string | null; tool_calls?: ToolCall[] } }[];
+    usage?: { prompt_tokens?: number; completion_tokens?: number };
+    error?: { message?: string } | string;
+  };
   if (!res.ok) {
     const error = typeof data.error === 'string' ? data.error : data.error?.message;
     throw new Error(`The model API answered ${res.status}${error ? `: ${error}` : ''}`);
   }
   const message = data.choices?.[0]?.message;
   if (!message) throw new Error('The model API returned no message');
-  return message;
+  return { message, usage: data.usage };
 }

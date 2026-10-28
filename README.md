@@ -496,6 +496,44 @@ that reaches further; `tools` replaces that list. The model works only through O
 and no files beyond Orco's project files. Pick a model that is good at tool calls; small ones often
 stop before closing the task, and the bridge then fails it with the reason.
 
+### A worktree per task
+
+Two agents working one repository at once would edit the same files. With `worktree`, the bridge
+gives each task its own git worktree and branch (`orco/task-42`), starts the agent there, and tells it
+so in the prompt (and in `ORCO_WORKTREE` and `ORCO_BRANCH`):
+
+```json
+{ "name": "carlos-claude", "token_env": "ORCO_TOKEN_CARLOS_CLAUDE", "preset": "claude",
+  "cwd": "~/code/api", "max_concurrent": 3, "worktree": true }
+```
+
+- New branches start from origin's default branch (after a `git fetch`), or set
+  `"worktree": {"base": "origin/develop"}`. Worktrees live in `~/.orco/worktrees/<repo>` unless you
+  set `dir`; `branch_prefix` (default `orco/`) and `fetch` (default on) are the other settings.
+- A resumed or reminded task goes back to its own worktree.
+- When the task closes, the worktree is removed. A branch with commits is kept (the work is in git:
+  push it, merge it, or delete it yourself); a branch with no commits is deleted. A worktree with
+  uncommitted changes is left alone for you to look at, and the bridge says so in its log.
+
+### Run logs, usage and scorecards
+
+After every run the bridge reports to Orco how long it took, how it ended, the branch it worked on,
+tokens and cost, and a log of what the agent did. Open **Trail** on a task to see its runs and read
+each log.
+
+- Claude Code (`--output-format stream-json --verbose`) and Codex (`exec --json`) report tokens and
+  cost; the presets turn that on. The bridge turns their JSON events into a readable log: messages,
+  tool calls and results, commands. Other tools' logs are their plain output. Model agents report
+  tokens from the API, and cost too if you set `"price": {"input_per_million": 3, "output_per_million": 15}`.
+- Before sending a log, the bridge hides the tokens it handed out, its own token, model API keys and
+  the values in the agent's `env`; Orco also hides anything shaped like a well-known key or token.
+  Logs keep their first 64 KB and last 192 KB, and are dropped after `ORCO_RUN_LOG_DAYS` (30). Set
+  `"run_logs": false` on an agent to send only the numbers.
+- A run's cost counts toward the task's budget.
+- *My agents* shows each agent's last 30 days: tasks done and failed, success rate, median time to
+  done, how often it asked for help, cost per finished task, tokens, and people's ▲/▼. The agent sees
+  its own scorecard in `my_feedback`.
+
 ### Check a setup
 
 ```bash
@@ -503,8 +541,8 @@ orco bridge doctor --config orco-bridge.json
 ```
 
 For each agent it checks the token signs in as that agent, the tool is installed and its `--help`
-mentions every flag the command passes (or that the model API answers and lists the model), and
-that `orco` is on `PATH` where the agent needs it. It exits non-zero if anything fails.
+mentions every flag the command passes (or that the model API answers and lists the model), that
+`orco` is on `PATH` where the agent needs it, and that a `worktree` repository and base exist. It exits non-zero if anything fails.
 
 ### Two-way issue sync
 

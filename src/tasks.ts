@@ -496,6 +496,14 @@ export class Tasks {
     return task;
   }
 
+  /** Adds what a bridge-reported run cost to the task's spend, and checks its budget. */
+  addUsage(id: number, cents: number, tokens: number): void {
+    if (cents <= 0 && tokens <= 0) return;
+    this.store.db.prepare('UPDATE tasks SET spent_cents = spent_cents + ?, spent_tokens = spent_tokens + ? WHERE id = ?').run(cents, tokens, id);
+    this.checkOverBudget(id);
+    this.store.events.emit('task', this.byId(id)!);
+  }
+
   /** Tells the requester once when a task runs past its time or cost budget. */
   private checkOverBudget(id: number): void {
     const row = this.row(id);

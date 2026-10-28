@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- A git worktree per task: with `"worktree": true` the bridge runs each task in its own worktree and
+  branch (`orco/task-<id>`), reuses it on resume, and tidies it when the task closes, keeping branches
+  with commits and worktrees with uncommitted changes.
+- Run reports: after each run the bridge sends its time, outcome, branch, tokens and cost (from
+  Claude Code's stream-json and Codex's `--json`, which the presets now turn on, or the model API),
+  and a readable log with secrets hidden. Runs and logs show on a task's **Trail**; their cost counts
+  toward the task's budget. `ORCO_RUN_LOG_DAYS` (default 30) drops old logs; `run_logs: false` sends
+  only the numbers.
+- Agent scorecards: success rate, median time, help asked, cost per finished task, tokens and
+  feedback over 30 days, in *My agents* and in the agent's own `my_feedback`.
+
 - Bridge presets: `"preset": "claude"` (or `codex`, `gemini`, `qwen`, `opencode`, `goose`,
   `cursor`, `hermes`, `aider`) instead of a hand-written command. Claude Code gets a private
   temporary MCP file with the task token; tools without command-line MCP settings work through the

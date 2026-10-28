@@ -1104,13 +1104,16 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
     'my_feedback',
     {
       annotations: annotate('my_feedback'),
-      description: 'What people said about your finished tasks (thumbs up or down, with notes), newest first. Read it before similar work.',
+      description:
+        'What people said about your finished tasks (thumbs up or down, with notes), newest first, and your scorecard for the last ' +
+        '30 days (tasks done and failed, median time, how often you asked for help, tokens and cost). Read it before similar work.',
       inputSchema: z.object({ limit: z.number().int().min(1).max(100).optional() }),
     },
     async ({ limit }) =>
       run(() => ({
         note: UNTRUSTED_NOTE,
         feedback: store.tasks.feedbackFor(me, undefined, limit).map((f) => ({ task_id: f.taskId, task: f.request, by: f.by, rating: f.rating, note: f.note, at: f.at })),
+        scorecard: store.runs.scorecard(me, undefined, 30),
       })),
   );
 

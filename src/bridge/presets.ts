@@ -10,6 +10,9 @@
  * - `bridge`: the tool cannot talk to Orco at all (it only edits files), so the bridge accepts the
  *   task, runs the tool once, and marks the task done or failed from its exit code and output.
  *
+ * Claude Code and Codex print JSON events (stream-json, --json), which the bridge turns into a readable
+ * run log and reads tokens and cost from.
+ *
  * `verified` presets were run end to end against Orco. The others use each tool's documented
  * headless flags, which change between versions: `orco bridge doctor` checks them against the
  * version you have installed.
@@ -31,14 +34,14 @@ const CODEX_TOOLS = [
 
 export const PRESETS: Record<string, Preset> = {
   claude: {
-    command: ['claude', '-p', '{prompt}', '--mcp-config', '{mcp_config}', '--strict-mcp-config', '--allowedTools', 'mcp__orco'],
+    command: ['claude', '-p', '{prompt}', '--output-format', 'stream-json', '--verbose', '--mcp-config', '{mcp_config}', '--strict-mcp-config', '--allowedTools', 'mcp__orco'],
     via: 'mcp',
     verified: true,
     setup: 'Claude Code installed and signed in. The bridge passes the Orco connection itself.',
   },
   codex: {
     command: [
-      'codex', 'exec', '--sandbox', 'read-only',
+      'codex', 'exec', '--json', '--sandbox', 'read-only',
       '-c', 'mcp_servers.orco.url="{mcp_url}"',
       '-c', 'mcp_servers.orco.bearer_token_env_var="{token_env}"',
       '-c', `mcp_servers.orco.enabled_tools=[${CODEX_TOOLS.map((t) => `"${t}"`).join(',')}]`,

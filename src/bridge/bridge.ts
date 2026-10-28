@@ -3,10 +3,13 @@ import { randomBytes } from 'node:crypto';
 import { rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { maskSecrets } from '../mask.js';
 import type { Task } from '../tasks.js';
 import type { BridgeAgentConfig, BridgeConfig } from './config.js';
 import { EventStream } from './events.js';
 import { runModel } from './model.js';
+import { RunOutput } from './output.js';
+import { type Workspace, Worktrees } from './worktree.js';
 
 export const DEFAULT_PROMPT = `You have a task from Orco, your team's agent chat.
 
@@ -51,6 +54,13 @@ work is finished.`;
 
 const KILL_GRACE_MS = 10_000;
 const OUTPUT_TAIL = 2_000;
+const OPEN = ['awaiting_approval', 'requested', 'accepted', 'needs_input'];
+
+const WORKSPACE_NOTE = `
+
+You are working in a git worktree made for this task: {path}, on branch {branch} (from {base}). Other
+agents work in their own worktrees, so change files only here. Commit your work on this branch. If the
+task calls for it, push the branch and open a pull request, and put the link in your result.`;
 
 export interface Logger {
   info(message: string): void;
@@ -122,6 +132,7 @@ class AgentRunner {
     private readonly env: NodeJS.ProcessEnv,
     private readonly log: Logger,
     private readonly echoOutput: boolean,
+    private readonly worktrees: Worktrees | null,
   ) {}
 
   async start(): Promise<void> {
@@ -136,6 +147,7 @@ class AgentRunner {
         if (status === 'connected') {
           this.log.info(`[${this.config.name}] connected, waiting for tasks`);
           void this.catchUp();
+          void this.sweepWorktrees();
         } else if (!this.stopped) {
           this.log.error(`[${this.config.name}] disconnected (${detail}); retrying`);
         }
@@ -175,6 +187,7 @@ class AgentRunner {
 
   private offer(task: Task): void {
     if (this.stopped || task.assignee !== this.config.name) return;
+    if (!OPEN.includes(task.state) && !this.running.has(task.id) && this.worktrees?.has(task.id)) void this.cleanup(task.id);
     // Someone cancelled the task while its agent works: stop the agent instead of letting it finish.
     if (task.state === 'cancelled' && this.running.has(task.id) && !this.stopping.has(task.id)) {
       this.stopping.add(task.id);
@@ -251,23 +264,38 @@ class AgentRunner {
         return;
       }
     }
+    let workspace: Workspace | null = null;
+    if (this.worktrees) {
+      try {
+        workspace = await this.worktrees.prepare(task.id, this.config.name);
+      } catch (err) {
+        this.running.delete(task.id);
+        const note = `The bridge could not make a git worktree for the task, so it did not start the agent: ${(err as Error).message}`;
+        this.log.error(`[${this.config.name}] task #${task.id}: ${note}`);
+        void this.finish(task, note).finally(() => this.pump());
+        return;
+      }
+    }
     if (this.stopped || this.stopping.has(task.id)) {
       this.running.delete(task.id);
       this.stopping.delete(task.id);
       this.pump();
       return;
     }
-    this.run(job, token);
+    this.run(job, token, workspace);
   }
 
-  private run({ task, mode, note }: Job, token: string): void {
+  private run({ task, mode, note }: Job, token: string, workspace: Workspace | null): void {
     const template = mode === 'resume' ? RESUME_PROMPT : mode === 'reminder' ? REMINDER_PROMPT : (this.config.prompt_template ?? DEFAULT_PROMPT);
     const checkpoint = task.checkpoint ? `\n\nYour last checkpoint on this task (${task.checkpoint.at}):\n${task.checkpoint.text}` : '';
-    const prompt = fill(template, task, '', note) + checkpoint;
+    const where = workspace ? WORKSPACE_NOTE.replace('{path}', workspace.path).replace('{branch}', workspace.branch).replace('{base}', workspace.base) : '';
+    const prompt = fill(template, task, '', note) + checkpoint + where;
     const what = { start: 'starting', resume: 'resuming with the answer', reminder: 'waking for a reminder' }[mode];
+    const output = new RunOutput();
+    const startedAt = new Date();
     if (this.config.model) {
       this.log.info(`[${this.config.name}] task #${task.id} from ${task.requester}: ${what} model ${this.config.model.name}`);
-      void this.runModelJob(task, token, prompt);
+      void this.runModelJob(task, token, prompt, mode, output);
       return;
     }
     // Tools that take their MCP settings from a file get a private one for this run, holding the task's token.
@@ -286,12 +314,11 @@ class AgentRunner {
     this.log.info(`[${this.config.name}] task #${task.id} from ${task.requester}: ${what} ${command}`);
     if (this.config.lifecycle === 'bridge' && task.state === 'requested') void this.api(`/tasks/${task.id}`, { state: 'accepted' }).catch(() => {});
     const started = Date.now();
-    let tail = '';
     let timedOut = false;
     let child: ChildProcess;
     try {
       child = spawn(command!, args, {
-        cwd: this.config.cwd,
+        cwd: workspace?.path ?? this.config.cwd,
         env: {
           ...this.env,
           ...this.config.env,
@@ -305,6 +332,7 @@ class AgentRunner {
           ORCO_TASK_ROOM: task.room,
           ORCO_TASK_THREAD_ID: String(task.messageId),
           ORCO_TASK_PROMPT: prompt,
+          ...(workspace ? { ORCO_WORKTREE: workspace.path, ORCO_BRANCH: workspace.branch } : {}),
         },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
@@ -317,22 +345,11 @@ class AgentRunner {
     this.running.set(task.id, child);
 
     const prefix = `[${this.config.name} #${task.id}] `;
-    const partial = { stdout: '', stderr: '' };
-    const capture = (stream: 'stdout' | 'stderr') => (chunk: Buffer) => {
-      const text = chunk.toString();
-      tail = (tail + text).slice(-OUTPUT_TAIL);
-      if (!this.echoOutput) return;
-      const lines = (partial[stream] + text).split('\n');
-      partial[stream] = lines.pop()!;
-      for (const line of lines) process.stdout.write(`${prefix}${line}\n`);
+    const echo = (lines: string[]) => {
+      if (this.echoOutput) for (const line of lines) process.stdout.write(`${prefix}${line}\n`);
     };
-    const flush = () => {
-      if (!this.echoOutput) return;
-      for (const stream of ['stdout', 'stderr'] as const) {
-        if (partial[stream]) process.stdout.write(`${prefix}${partial[stream]}\n`);
-        partial[stream] = '';
-      }
-    };
+    const capture = (stream: 'stdout' | 'stderr') => (chunk: Buffer) => echo(output.feed(stream, chunk.toString()));
+    const flush = () => echo(output.flush());
     child.stdout?.on('data', capture('stdout'));
     child.stderr?.on('data', capture('stderr'));
 
@@ -354,35 +371,41 @@ class AgentRunner {
       this.stopping.delete(task.id);
       const seconds = Math.round((Date.now() - started) / 1000);
       this.log.info(`[${this.config.name}] task #${task.id} agent exited after ${seconds}s (${reason})`);
+      const tail = output.last(OUTPUT_TAIL);
       if (!this.stopped && tail.trim() && reason !== 'code 0') {
         this.log.error(`[${this.config.name}] last output of task #${task.id}:\n${tail.trimEnd()}`);
       }
+      const outcome = timedOut ? `stopped after ${this.config.timeout_seconds}s` : reason;
+      const report = this.report(task, mode, startedAt, outcome, output, workspace, token);
       if (this.config.lifecycle === 'bridge' && reason === 'code 0' && !timedOut) {
         // The tool cannot report back, so its own summary becomes the result.
-        const summary = tail.replace(/\u001b\[[0-9;]*[A-Za-z]/g, '').trim().slice(-1500) || 'Finished.';
-        void this.api(`/tasks/${task.id}`, { state: 'done', note: summary })
+        const summary = maskSecrets(tail.trim().slice(-1500), this.secrets(token)) || 'Finished.';
+        void report
+          .then(() => this.api(`/tasks/${task.id}`, { state: 'done', note: summary }))
           .then(() => this.log.info(`[${this.config.name}] marked task #${task.id} done`))
           .catch((err: Error) => this.log.error(`[${this.config.name}] could not close task #${task.id}: ${err.message}`))
-          .finally(() => this.pump());
+          .finally(() => this.afterRun(task));
         return;
       }
       const note = timedOut
         ? `The agent was stopped after ${this.config.timeout_seconds}s without finishing the task.`
         : `The agent exited (${reason}) without finishing the task.`;
-      void this.finish(task, note).finally(() => this.pump());
+      void report.then(() => this.finish(task, note)).finally(() => this.afterRun(task));
     };
     child.on('error', (err) => done(`could not start: ${err.message}`));
     child.on('exit', (code, signal) => done(signal ? `signal ${signal}` : `code ${code}`));
   }
 
   /** Runs the task with a model behind an OpenAI-compatible API; the bridge drives the tool loop. */
-  private async runModelJob(task: Task, token: string, prompt: string): Promise<void> {
+  private async runModelJob(task: Task, token: string, prompt: string, mode: Job['mode'], output: RunOutput): Promise<void> {
     const model = this.config.model!;
     const abort = new AbortController();
     this.aborts.set(task.id, abort);
     const timer = setTimeout(() => abort.abort(), this.config.timeout_seconds * 1000);
     const started = Date.now();
+    const startedAt = new Date(started);
     let note: string;
+    let outcome: string;
     try {
       const run = await runModel({
         server: this.server,
@@ -393,7 +416,9 @@ class AgentRunner {
         apiKey: model.api_key_env ? this.env[model.api_key_env] : undefined,
         signal: abort.signal,
         log: (message) => this.log.info(`[${this.config.name} #${task.id}] ${message}`),
+        output,
       });
+      outcome = run.ended ? `model stopped after ${run.turns} turns` : `model used its ${model.max_turns} turns`;
       this.log.info(`[${this.config.name}] task #${task.id} model stopped after ${run.turns} turns in ${Math.round((Date.now() - started) / 1000)}s`);
       note = run.ended
         ? `The model stopped without closing the task.${run.lastText ? ` Its last words: ${run.lastText.slice(0, 500)}` : ''}`
@@ -402,14 +427,77 @@ class AgentRunner {
       const message = abort.signal.aborted ? `stopped after ${this.config.timeout_seconds}s or cancelled` : (err as Error).message;
       this.log.error(`[${this.config.name}] task #${task.id} model run failed: ${message}`);
       note = `The model run failed: ${message}`;
+      outcome = `failed: ${message}`.slice(0, 200);
+      output.note(`! ${message}`);
     } finally {
       clearTimeout(timer);
       this.aborts.delete(task.id);
       this.running.delete(task.id);
       this.stopping.delete(task.id);
     }
+    await this.report(task, mode, startedAt, outcome, output, null, token);
     await this.finish(task, note);
+    this.afterRun(task);
+  }
+
+  /** Values the bridge knows are secret, to hide in what it sends to Orco. */
+  private secrets(taskToken: string): (string | undefined)[] {
+    const apiKey = this.config.model?.api_key_env ? this.env[this.config.model.api_key_env] : undefined;
+    return [this.token, taskToken, apiKey, ...Object.values(this.config.env ?? {})];
+  }
+
+  /** Tells Orco how the run went: time, outcome, usage, worktree, and (unless turned off) the masked log. */
+  private async report(task: Task, mode: Job['mode'], startedAt: Date, outcome: string, output: RunOutput, workspace: Workspace | null, token: string): Promise<void> {
+    if (this.stopped) return;
+    const { inputTokens, outputTokens, costMicros } = output.usage;
+    try {
+      await this.api(`/tasks/${task.id}/runs`, {
+        mode,
+        started_at: startedAt.toISOString(),
+        seconds: Math.round((Date.now() - startedAt.getTime()) / 1000),
+        outcome,
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
+        cost_micros: costMicros,
+        branch: workspace?.branch ?? null,
+        workspace: workspace?.path ?? null,
+        log: this.config.run_logs ? maskSecrets(output.text, this.secrets(token)) : null,
+      });
+    } catch (err) {
+      this.log.error(`[${this.config.name}] could not report the run of task #${task.id}: ${(err as Error).message}`);
+    }
+  }
+
+  /** After a run: start queued work, and tidy the worktree if the task has closed. */
+  private afterRun(task: Task): void {
     this.pump();
+    if (!this.worktrees?.has(task.id) || this.stopped) return;
+    void this.api(`/tasks/${task.id}`)
+      .then((current) => {
+        if (!OPEN.includes((current as Task).state) && !this.running.has(task.id)) return this.cleanup(task.id);
+      })
+      .catch(() => {});
+  }
+
+  private async cleanup(taskId: number): Promise<void> {
+    try {
+      await this.worktrees!.cleanup(taskId);
+    } catch (err) {
+      this.log.error(`[${this.config.name}] could not tidy the worktree of task #${taskId}: ${(err as Error).message}`);
+    }
+  }
+
+  /** Worktrees left from tasks that closed while the bridge was down. */
+  private async sweepWorktrees(): Promise<void> {
+    for (const id of this.worktrees?.tasks(this.config.name) ?? []) {
+      if (this.running.has(id)) continue;
+      try {
+        const task = (await this.api(`/tasks/${id}`)) as Task;
+        if (!OPEN.includes(task.state)) await this.cleanup(id);
+      } catch {
+        // A task this agent can no longer see: leave its worktree for a person to look at.
+      }
+    }
   }
 
   private async finish(task: Task, note: string): Promise<void> {
@@ -461,8 +549,17 @@ export class Bridge {
     if (missing.length > 0) {
       throw new Error(`Set these environment variables first: ${missing.map((a) => a.token_env).join(', ')}`);
     }
+    // Agents branching the same repository into the same folder share one manager, so git work on it is serialized.
+    const worktrees = new Map<string, Worktrees>();
     for (const agent of this.config.agents) {
-      const runner = new AgentRunner(this.config.server, agent, env[agent.token_env]!, env, log, this.options.echoOutput ?? true);
+      let manager: Worktrees | null = null;
+      if (agent.worktree) {
+        const candidate = new Worktrees(agent.worktree, (message) => log.info(`[${agent.name}] ${message}`));
+        const key = `${agent.worktree.repo}\0${candidate.dir}`;
+        manager = worktrees.get(key) ?? candidate;
+        worktrees.set(key, manager);
+      }
+      const runner = new AgentRunner(this.config.server, agent, env[agent.token_env]!, env, log, this.options.echoOutput ?? true, manager);
       await runner.start();
       this.runners.push(runner);
     }

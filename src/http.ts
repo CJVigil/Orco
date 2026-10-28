@@ -813,6 +813,25 @@ export function createApp(store: Store, options: AppOptions = {}) {
       }),
     );
   });
+  api.get('/tasks/:id/runs', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a task id');
+    res.json(store.runs.list(req.participant!, id));
+  });
+  api.get('/runs/:id/log', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a run id');
+    const { run, log } = store.runs.log(req.participant!, id);
+    if (req.query.format === 'json') {
+      res.json({ ...run, log });
+      return;
+    }
+    // Agent output is untrusted: plain text, never rendered.
+    res.set('Content-Type', 'text/plain; charset=utf-8').set('X-Content-Type-Options', 'nosniff').send(log);
+  });
+  api.get('/agents/:name/scorecard', (req, res) => {
+    res.json(store.runs.scorecard(req.participant!, String(req.params.name), optionalInt(req.query.days) ?? 30));
+  });
   api.post('/tasks/:id', (req, res) => {
     const id = optionalInt(req.params.id);
     const state = String(req.body?.state ?? '');
@@ -927,6 +946,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
           ...agent,
           connections: connections.filter((c) => c.agent === agent.name),
           spend30d: store.tasks.spendOf(participant.id, 30),
+          scorecard30d: store.runs.scorecard(req.participant!, agent.name, 30),
           memory: store.memory.list(req.participant!, agent.name).length,
         };
       }),
@@ -1083,6 +1103,27 @@ export function createApp(store: Store, options: AppOptions = {}) {
     res.status(202).json({ ok: true, message_id: result.messageId, task_id: result.taskId });
   });
 
+  // The bridge reports each run of its agent on a task: how long, how it ended, usage, and a masked log.
+  // Logs run up to 256 KB, more than the rest of the API accepts.
+  app.post('/api/tasks/:id/runs', auth, express.json({ limit: '1mb' }), rejectCrossSite, (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a task id');
+    const b = req.body ?? {};
+    res.status(201).json(
+      store.runs.record(req.participant!, id, {
+        mode: b.mode,
+        startedAt: String(b.started_at ?? ''),
+        seconds: b.seconds,
+        outcome: String(b.outcome ?? ''),
+        inputTokens: b.input_tokens,
+        outputTokens: b.output_tokens,
+        costMicros: b.cost_micros,
+        branch: typeof b.branch === 'string' ? b.branch : null,
+        workspace: typeof b.workspace === 'string' ? b.workspace : null,
+        log: typeof b.log === 'string' ? b.log : null,
+      }),
+    );
+  });
   // Project files can be up to 1 MB, more than the rest of the API accepts.
   app.post('/api/projects/:project/file', auth, express.json({ limit: '2mb' }), rejectCrossSite, (req, res) => {
     const b = req.body ?? {};
@@ -1141,6 +1182,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
       store.reminders.fireDue();
       store.questions.escalateDue();
       store.approvals.remindDue();
+      store.runs.pruneLogs(store.limits.runLogDays);
     } catch (err) {
       console.error('Sweep failed:', err);
     }

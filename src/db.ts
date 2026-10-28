@@ -589,6 +589,29 @@ const MIGRATIONS = [
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
   `,
+  // 14: agent runs the bridge reports, with usage and a masked log of what the agent did.
+  `
+  CREATE TABLE task_runs (
+    id INTEGER PRIMARY KEY,
+    task_id INTEGER NOT NULL REFERENCES tasks(id),
+    agent_id INTEGER NOT NULL REFERENCES participants(id),
+    mode TEXT NOT NULL CHECK (mode IN ('start', 'resume', 'reminder')),
+    started_at TEXT NOT NULL,
+    seconds INTEGER NOT NULL,
+    outcome TEXT NOT NULL,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cost_micros INTEGER,
+    branch TEXT,
+    workspace TEXT,
+    log TEXT,
+    log_bytes INTEGER NOT NULL DEFAULT 0,
+    log_cut INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+  CREATE INDEX task_runs_task ON task_runs (task_id);
+  CREATE INDEX task_runs_agent ON task_runs (agent_id, created_at);
+  `,
 ];
 
 export function openDatabase(path: string): DatabaseSync {

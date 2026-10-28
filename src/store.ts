@@ -9,6 +9,7 @@ import { Files } from './files.js';
 import { Hooks } from './hooks.js';
 import { Locks } from './locks.js';
 import { Reminders } from './reminders.js';
+import { Runs } from './runs.js';
 import { Secrets } from './secrets.js';
 import { Memory } from './memory.js';
 import { Notes } from './notes.js';
@@ -116,6 +117,8 @@ export interface Limits {
   taskStallMinutes: number;
   /** A question or approval with no answer for this long is widened (questions) or re-sent (approvals). 0 turns it off. */
   escalateHours: number;
+  /** Agent run logs are dropped after this many days (the runs themselves stay). 0 keeps them. */
+  runLogDays: number;
 }
 
 export interface StoreOptions {
@@ -125,7 +128,7 @@ export interface StoreOptions {
   secretsKey?: Buffer;
 }
 
-export const DEFAULT_LIMITS: Limits = { maxTaskDepth: 4, agentPostsPerMinute: 30, agentTasksPerMinute: 10, taskStallMinutes: 15, escalateHours: 4 };
+export const DEFAULT_LIMITS: Limits = { maxTaskDepth: 4, agentPostsPerMinute: 30, agentTasksPerMinute: 10, taskStallMinutes: 15, escalateHours: 4, runLogDays: 30 };
 
 const NAME = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const MENTION = /(?<![\w@])@([a-z0-9][a-z0-9-]{0,31})\b/g;
@@ -229,6 +232,7 @@ export class Store {
   readonly reviews: Reviews;
   readonly schedules: Schedules;
   readonly reminders: Reminders;
+  readonly runs: Runs;
   readonly files: Files;
   readonly hooks: Hooks;
   readonly secrets: Secrets;
@@ -256,6 +260,7 @@ export class Store {
     this.reviews = new Reviews(this);
     this.schedules = new Schedules(this);
     this.reminders = new Reminders(this);
+    this.runs = new Runs(this);
     this.files = new Files(this);
     this.hooks = new Hooks(this);
     this.secrets = new Secrets(this, options.secretsKey);

@@ -78,6 +78,7 @@ function limitsFromEnv(): Partial<Limits> {
     agentTasksPerMinute: read('ORCO_AGENT_TASKS_PER_MINUTE'),
     taskStallMinutes: read('ORCO_TASK_STALL_MINUTES'),
     escalateHours: read('ORCO_ESCALATE_HOURS'),
+    runLogDays: read('ORCO_RUN_LOG_DAYS'),
   };
   return Object.fromEntries(Object.entries(limits).filter(([, v]) => v !== undefined));
 }

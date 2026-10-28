@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import * as z from 'zod/v4';
 import { OrcoError } from '../errors.js';
 import { BRIDGE_PROMPT, CLI_PROMPT, PRESET_NAMES, PRESETS } from './presets.js';
+import type { WorktreeSettings } from './worktree.js';
 
 const modelSchema = z.object({
   /** An OpenAI-compatible API: Ollama (http://localhost:11434/v1), LM Studio, vLLM, OpenRouter, ... */
@@ -14,6 +15,8 @@ const modelSchema = z.object({
   temperature: z.number().min(0).max(2).optional(),
   /** Orco tools the model may call; defaults to the tools a task needs. */
   tools: z.array(z.string()).optional(),
+  /** US dollars per million tokens, to put a cost on runs (local models: leave it out). */
+  price: z.object({ input_per_million: z.number().min(0), output_per_million: z.number().min(0) }).optional(),
 });
 
 const agentSchema = z.object({
@@ -33,6 +36,21 @@ const agentSchema = z.object({
   prompt_template: z.string().optional(),
   /** Hand the agent a token limited to the task's project instead of its own (default on). */
   task_tokens: z.boolean().default(true),
+  /** Run each task in its own git worktree and branch: true (the repo is cwd), or settings. */
+  worktree: z
+    .union([
+      z.boolean(),
+      z.object({
+        repo: z.string().optional(),
+        base: z.string().min(1).optional(),
+        dir: z.string().optional(),
+        branch_prefix: z.string().regex(/^[\w./-]*$/).default('orco/'),
+        fetch: z.boolean().default(true),
+      }),
+    ])
+    .optional(),
+  /** Send each run's log to Orco with its usage (default on; usage is always sent). */
+  run_logs: z.boolean().default(true),
 });
 
 const configSchema = z.object({
@@ -42,9 +60,10 @@ const configSchema = z.object({
 
 export type ModelConfig = z.infer<typeof modelSchema>;
 /** An agent as the bridge runs it: a preset resolved into its command, lifecycle and prompt. */
-export type BridgeAgentConfig = Omit<z.infer<typeof agentSchema>, 'command' | 'lifecycle'> & {
+export type BridgeAgentConfig = Omit<z.infer<typeof agentSchema>, 'command' | 'lifecycle' | 'worktree'> & {
   command: string[];
   lifecycle: 'agent' | 'bridge';
+  worktree?: WorktreeSettings;
 };
 export type BridgeConfig = Omit<z.infer<typeof configSchema>, 'agents'> & { agents: BridgeAgentConfig[] };
 
@@ -73,12 +92,28 @@ export function parseBridgeConfig(raw: unknown, baseDir = process.cwd()): Bridge
       const lifecycle = agent.lifecycle ?? (preset?.via === 'bridge' ? 'bridge' : 'agent');
       const prompt_template =
         agent.prompt_template ?? (preset?.via === 'cli' ? CLI_PROMPT : lifecycle === 'bridge' ? BRIDGE_PROMPT : undefined);
+      const cwd = agent.cwd ? resolveDir(baseDir, agent.cwd) : undefined;
+      let worktree: WorktreeSettings | undefined;
+      if (agent.worktree) {
+        if (agent.model) throw new OrcoError('invalid', `Bridge config: agent ${agent.name} runs a model, which has no files to work in; drop worktree`);
+        const settings = agent.worktree === true ? { branch_prefix: 'orco/', fetch: true } : agent.worktree;
+        const repo = 'repo' in settings && settings.repo ? resolveDir(baseDir, settings.repo) : cwd;
+        if (!repo) throw new OrcoError('invalid', `Bridge config: agent ${agent.name} needs cwd (or worktree.repo) to know which repository to branch`);
+        worktree = {
+          repo,
+          base: 'base' in settings ? settings.base : undefined,
+          dir: 'dir' in settings && settings.dir ? resolveDir(baseDir, settings.dir) : undefined,
+          branch_prefix: settings.branch_prefix,
+          fetch: settings.fetch,
+        };
+      }
       return {
         ...agent,
         command: agent.command ?? preset?.command ?? [],
         lifecycle,
         prompt_template,
-        cwd: agent.cwd ? resolveDir(baseDir, agent.cwd) : undefined,
+        cwd,
+        worktree,
       };
     }),
   };
