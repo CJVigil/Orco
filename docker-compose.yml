@@ -1,6 +1,8 @@
 # Orco on your network.
 #   docker compose up -d
 #   docker compose exec orco orco user add <you>
+# Builds the image from this checkout. To run a prebuilt image instead (Komodo, a Gitea registry),
+# use deploy/compose.registry.yml; see docs/komodo.md.
 # With HTTPS through Caddy (see docs/deploy.md):
 #   ORCO_DOMAIN=orco.office.lan ORCO_TRUST_PROXY=uniquelocal docker compose --profile tls up -d
 services:
@@ -14,6 +16,13 @@ services:
       - orco-data:/data
     environment:
       ORCO_TRUST_PROXY: ${ORCO_TRUST_PROXY:-}
+      ORCO_PUBLIC_URL: ${ORCO_PUBLIC_URL:-}
+      ORCO_SECRETS_KEY: ${ORCO_SECRETS_KEY:-}
+      ORCO_ESCALATE_HOURS: ${ORCO_ESCALATE_HOURS:-}
+      ORCO_TASK_STALL_MINUTES: ${ORCO_TASK_STALL_MINUTES:-}
+      ORCO_MAX_TASK_DEPTH: ${ORCO_MAX_TASK_DEPTH:-}
+      ORCO_AGENT_POSTS_PER_MINUTE: ${ORCO_AGENT_POSTS_PER_MINUTE:-}
+      ORCO_AGENT_TASKS_PER_MINUTE: ${ORCO_AGENT_TASKS_PER_MINUTE:-}
 
   caddy:
     image: caddy:2

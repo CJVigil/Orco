@@ -1,0 +1,48 @@
+# Builds the Docker image and pushes it to this Gitea's own container registry, for Komodo (or any
+# host) to pull. Needs a runner with Docker available to jobs, and two repository secrets:
+#   REGISTRY_USER   the Gitea user (or organization member) that owns the package
+#   REGISTRY_TOKEN  a personal access token with package write access
+# Optional repository variable REGISTRY: the registry host, if it differs from the Gitea host.
+# Tags: main -> :main; v1.2.3 -> :1.2.3 and :latest; every build -> :sha-<commit>.
+name: Image
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and push
+        shell: bash
+        env:
+          REGISTRY_USER: ${{ secrets.REGISTRY_USER }}
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+          REGISTRY: ${{ vars.REGISTRY }}
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${REGISTRY_TOKEN:-}" ] || [ -z "${REGISTRY_USER:-}" ]; then
+            echo "Set the REGISTRY_USER and REGISTRY_TOKEN secrets (Settings > Actions > Secrets) first." >&2
+            exit 1
+          fi
+          registry="${REGISTRY:-$(echo "$SERVER_URL" | sed -E 's#^https?://##; s#/.*$##')}"
+          image="$registry/$(echo "$REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          tags=("$image:sha-${SHA:0:7}")
+          case "$REF" in
+            refs/tags/v*) version="${REF#refs/tags/v}"; tags+=("$image:$version" "$image:latest") ;;
+            refs/heads/main) tags+=("$image:main") ;;
+          esac
+          echo "$REGISTRY_TOKEN" | docker login "$registry" -u "$REGISTRY_USER" --password-stdin
+          args=()
+          for tag in "${tags[@]}"; do args+=(-t "$tag"); done
+          docker build "${args[@]}" .
+          for tag in "${tags[@]}"; do docker push "$tag"; done
+          echo "Pushed: ${tags[*]}"

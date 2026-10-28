@@ -66,6 +66,21 @@ describe('webhooks', () => {
     assert.equal(store.hooks.deliver(token, Buffer.from('{}'), {}), null);
   });
 
+  it('summarize Gitea and Forgejo events, preferring them over the GitHub header Gitea also sends', () => {
+    const repo = { repository: { full_name: 'home/api' } };
+    const gitea = (event: string) => ({ 'x-gitea-event': event, 'x-github-event': event });
+    assert.equal(summarize({ ...repo, ref: 'refs/heads/main', commits: [{}, {}] }, '', gitea('push')), '2 commits pushed to main in home/api');
+    assert.equal(
+      summarize({ ...repo, context: 'ci / test', state: 'failure', sha: 'abcdef123456', description: 'Failing after 2m' }, '', gitea('status')),
+      'Status ci / test failure for abcdef1: Failing after 2m in home/api',
+    );
+    assert.equal(summarize({ ...repo, action: 'opened', pull_request: { number: 7, title: 'Add search' } }, '', gitea('pull_request')), 'PR #7 opened: Add search in home/api');
+    assert.equal(summarize({ ...repo, action: 'published', release: { tag_name: 'v1.2.0' } }, '', { 'x-forgejo-event': 'release' }), 'Release v1.2.0 published in home/api');
+    const { token } = store.hooks.create(ben, { room: 'api/general', name: 'Gitea' });
+    const delivered = store.hooks.deliver(token, Buffer.from(JSON.stringify({ ...repo, ref: 'refs/heads/main', commits: [] })), gitea('push'))!;
+    assert.match(store.message(delivered.messageId).external!.source, /\(Gitea\)/);
+  });
+
   it('summarize plain payloads and limit deliveries', () => {
     assert.equal(summarize({ text: 'Disk 91% on db-1\nmore' }, '', {}), 'Disk 91% on db-1');
     assert.equal(summarize(undefined, 'plain body', {}), 'plain body');

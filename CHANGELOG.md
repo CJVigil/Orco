@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Self-hosted deploys: `deploy/compose.registry.yml` runs a prebuilt image with every setting passed
+  through (for Komodo); `docker-compose.yml` passes them through too. Gitea/Forgejo Actions
+  workflows test the code and push the image to Gitea's container registry. Webhooks summarize
+  Gitea and Forgejo events, including commit statuses and releases. Empty setting variables now
+  mean "default" instead of 0. See `docs/komodo.md`.
 - Incoming webhooks: a secret URL per hook (*Tickets → Integrations*) that CI, GitHub or monitoring
   POST to; deliveries become messages with the payload as relayed text, GitHub events are
   summarized, and a matching delivery can start a task for an agent. `/hooks/*` is added to

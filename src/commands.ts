@@ -41,8 +41,9 @@ const VERSION = (createRequire(import.meta.url)('../package.json') as { version:
 
 function limitsFromEnv(): Partial<Limits> {
   const read = (key: string) => {
-    const value = process.env[key];
-    if (value === undefined) return undefined;
+    const value = process.env[key]?.trim();
+    // Compose and Komodo pass unset variables as empty strings: treat those as unset, not as 0.
+    if (value === undefined || value === '') return undefined;
     const n = Number(value);
     if (!Number.isInteger(n) || n < 0) throw new OrcoError('invalid', `${key} must be a non-negative integer`);
     return n;

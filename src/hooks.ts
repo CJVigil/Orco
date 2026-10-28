@@ -63,31 +63,47 @@ type Json = Record<string, unknown>;
 const str = (v: unknown) => (typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '');
 const obj = (v: unknown): Json => (v && typeof v === 'object' ? (v as Json) : {});
 
-/** One line saying what happened, for common senders (GitHub) and payloads with a text field. */
+/** Which forge sent a delivery, from its event header. Gitea also sends GitHub's header, so it is checked first. */
+export function forgeOf(headers: Record<string, string | undefined>): { name: 'Gitea' | 'Forgejo' | 'GitHub'; event: string } | null {
+  if (headers['x-forgejo-event']) return { name: 'Forgejo', event: headers['x-forgejo-event'] };
+  if (headers['x-gitea-event']) return { name: 'Gitea', event: headers['x-gitea-event'] };
+  if (headers['x-github-event']) return { name: 'GitHub', event: headers['x-github-event'] };
+  return null;
+}
+
+/** One line saying what happened, for GitHub, Gitea and Forgejo events, and payloads with a text field. */
 export function summarize(payload: unknown, raw: string, headers: Record<string, string | undefined>): string {
   const body = obj(payload);
-  const github = headers['x-github-event'];
-  if (github) {
+  const forge = forgeOf(headers);
+  if (forge) {
+    const event = forge.event;
     const repo = str(obj(body.repository).full_name);
     const action = str(body.action);
     const where = repo ? ` in ${repo}` : '';
-    if (github === 'workflow_run') {
-      const run = obj(body.workflow_run);
+    if (event === 'workflow_run' || event === 'workflow_job') {
+      const run = obj(body[event]);
       return `CI ${str(run.name) || 'workflow'} ${str(run.conclusion) || str(run.status) || action} on ${str(run.head_branch) || '?'}${where}`;
     }
-    if (github === 'check_run' || github === 'check_suite') {
-      const check = obj(body[github]);
-      return `Check ${str(check.name) || github} ${str(check.conclusion) || str(check.status) || action}${where}`;
+    if (event === 'check_run' || event === 'check_suite') {
+      const check = obj(body[event]);
+      return `Check ${str(check.name) || event} ${str(check.conclusion) || str(check.status) || action}${where}`;
     }
-    if (github === 'push') {
+    if (event === 'status') {
+      // Commit statuses: what Gitea Actions, Woodpecker and Drone report CI results as.
+      return `Status ${str(body.context) || 'CI'} ${str(body.state)} for ${str(body.sha).slice(0, 7)}${str(body.description) ? `: ${str(body.description)}` : ''}${where}`;
+    }
+    if (event === 'push') {
       const commits = Array.isArray(body.commits) ? body.commits.length : 0;
       return `${commits} commit${commits === 1 ? '' : 's'} pushed to ${str(body.ref).replace('refs/heads/', '')}${where}`;
     }
-    if (github === 'pull_request' || github === 'issues') {
-      const item = obj(body[github === 'issues' ? 'issue' : 'pull_request']);
-      return `${github === 'issues' ? 'Issue' : 'PR'} #${str(item.number)} ${action}: ${str(item.title)}${where}`;
+    if (event === 'pull_request' || event === 'issues' || event.startsWith('pull_request_') || event === 'issue_comment') {
+      const issue = event === 'issues' || event === 'issue_comment';
+      const item = obj(body[issue ? 'issue' : 'pull_request']);
+      const what = event === 'issue_comment' ? 'Comment on' : issue ? 'Issue' : 'PR';
+      return `${what} #${str(item.number)} ${event === 'issue_comment' ? '' : `${action || event.replace('pull_request_', '')}: `}${str(item.title)}${where}`;
     }
-    return `GitHub ${github}${action ? ` ${action}` : ''}${where}`;
+    if (event === 'release') return `Release ${str(obj(body.release).tag_name)} ${action}${where}`;
+    return `${forge.name} ${event}${action ? ` ${action}` : ''}${where}`;
   }
   for (const key of ['text', 'message', 'title', 'summary', 'status']) {
     if (typeof body[key] === 'string' && body[key]) return (body[key] as string).split('\n')[0]!;
@@ -97,7 +113,7 @@ export function summarize(payload: unknown, raw: string, headers: Record<string,
 }
 
 /**
- * Incoming webhooks: a secret URL per hook that CI, GitHub or monitoring can POST to. Each delivery
+ * Incoming webhooks: a secret URL per hook that CI, GitHub, Gitea, Forgejo or monitoring can POST to. Each delivery
  * becomes a message in the hook's room, with the payload as relayed (untrusted) text, and can start a
  * task for an agent. The server only receives; it never calls out. People set hooks up.
  */
@@ -169,7 +185,7 @@ export class Hooks {
     const room = row.project ? `${row.project}/${row.room}` : row.room;
     const message = this.store.post(creator, room, `Webhook ${row.name}: ${title}`, undefined, {
       skipRateLimit: true,
-      external: { source: `webhook "${row.name}"${headers['x-github-event'] ? ' (GitHub)' : ''}`, text: details || '(empty body)' },
+      external: { source: `webhook "${row.name}"${forgeOf(headers) ? ` (${forgeOf(headers)!.name})` : ''}`, text: details || '(empty body)' },
     });
     let taskId: number | null = null;
     const matches = !row.wake_match || `${title}\n${details}`.toLowerCase().includes(row.wake_match.toLowerCase());

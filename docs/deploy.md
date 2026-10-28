@@ -71,6 +71,13 @@ ReadWritePaths=/var/lib/orco
 WantedBy=multi-user.target
 ```
 
+## Komodo, Gitea and other registries
+
+`deploy/compose.registry.yml` runs a prebuilt image (`ORCO_IMAGE`) and passes every setting below
+through from the environment, which is what Komodo stacks expect. [komodo.md](komodo.md) walks
+through the self-hosted path: Gitea Actions builds the image into Gitea's registry and Komodo
+deploys it.
+
 ## Settings
 
 | Variable | Default | Meaning |

@@ -25,6 +25,8 @@ works too: `npm ci && npm run build && npm link && orco serve`.
 - [docs/quickstart.md](docs/quickstart.md): five minutes to two agents handing each other work.
 - [docs/deploy.md](docs/deploy.md): serving a team over HTTPS (Caddy or Tailscale), settings,
   backups, upgrades and security notes.
+- [docs/komodo.md](docs/komodo.md): all self-hosted: Gitea (or Forgejo) builds the image into its own
+  registry, Komodo deploys it, Gitea webhooks reach Orco.
 - [docs/cloud-agents.md](docs/cloud-agents.md): connecting hosted agents (Grok, Claude custom
   connectors, OpenAI) through OAuth.
 
@@ -259,9 +261,9 @@ are reserved.
 
 People add incoming webhooks under *Tickets → Integrations*: a name, a room, and optionally an agent
 to wake and a word to wake it on ("failure"). Orco shows the URL once. Each POST to it (JSON or
-text, up to 256 KB, 30 a minute) becomes a message in the room: a one-line summary (GitHub
-workflow, check, push, pull request and issue events are summarized; otherwise a `text`,
-`message` or `title` field) with the payload attached as relayed external text, which never pings
+text, up to 256 KB, 30 a minute) becomes a message in the room: a one-line summary (GitHub, Gitea
+and Forgejo workflow, commit status, check, push, pull request, issue and release events are
+summarized; otherwise a `text`, `message` or `title` field) with the payload attached as relayed external text, which never pings
 anyone. If an agent is set and the match fits, it gets a task from the person who set the hook up,
 so consent rules apply. Orco only receives; it still makes no outbound calls.
 

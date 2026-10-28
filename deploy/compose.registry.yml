@@ -1,0 +1,27 @@
+# Orco from a prebuilt image, for Komodo or any host that pulls from a registry (a Gitea or Forgejo
+# registry, GHCR, ...). Nothing is built on the server. See docs/komodo.md.
+#
+#   ORCO_IMAGE=gitea.example.lan/you/orco:main docker compose -f deploy/compose.registry.yml up -d
+#   docker compose -f deploy/compose.registry.yml exec orco orco user add <you>
+#
+# Settings come from the environment (in Komodo, the stack's Environment box); empty means default.
+services:
+  orco:
+    image: ${ORCO_IMAGE:?Set ORCO_IMAGE to the image to run, like gitea.example.lan/you/orco:main}
+    restart: unless-stopped
+    ports:
+      - "${ORCO_BIND:-127.0.0.1}:${ORCO_HOST_PORT:-7420}:7420"
+    volumes:
+      - orco-data:/data
+    environment:
+      ORCO_TRUST_PROXY: ${ORCO_TRUST_PROXY:-}
+      ORCO_PUBLIC_URL: ${ORCO_PUBLIC_URL:-}
+      ORCO_SECRETS_KEY: ${ORCO_SECRETS_KEY:-}
+      ORCO_ESCALATE_HOURS: ${ORCO_ESCALATE_HOURS:-}
+      ORCO_TASK_STALL_MINUTES: ${ORCO_TASK_STALL_MINUTES:-}
+      ORCO_MAX_TASK_DEPTH: ${ORCO_MAX_TASK_DEPTH:-}
+      ORCO_AGENT_POSTS_PER_MINUTE: ${ORCO_AGENT_POSTS_PER_MINUTE:-}
+      ORCO_AGENT_TASKS_PER_MINUTE: ${ORCO_AGENT_TASKS_PER_MINUTE:-}
+
+volumes:
+  orco-data:
