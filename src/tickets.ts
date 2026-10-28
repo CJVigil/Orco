@@ -24,6 +24,7 @@ const MAX_TITLE = 200;
 const MAX_DESCRIPTION = 20_000;
 const MAX_COMMENT = 10_000;
 const MAX_HANDOFF = 4_000;
+const MAX_BLOCKED_REASON = 200;
 const MAX_CRITERIA = 50;
 
 type Change = { field: string; from: unknown; to: unknown };
@@ -88,6 +89,10 @@ export interface TicketSummary {
   task: { id: number; state: TaskState; since: string } | null;
   /** Unfinished tickets this one waits on. */
   blockedBy: string[];
+  /** Something outside the project this ticket waits on, like "waiting on the vendor". */
+  blockedReason: string | null;
+  /** Waiting on an unfinished ticket or on something outside. */
+  blocked: boolean;
   criteria: { done: number; total: number };
   sort: number;
   createdAt: string;
@@ -148,6 +153,8 @@ export interface TicketInput {
   criteriaRemove?: number[];
   blockedByAdd?: string[];
   blockedByRemove?: string[];
+  /** Mark the ticket blocked on something outside the project; empty clears it. */
+  blockedReason?: string;
 }
 
 export interface TicketFilter {
@@ -161,6 +168,8 @@ export interface TicketFilter {
   cycle?: number | 'current';
   priority?: Priority;
   parent?: string;
+  /** Only blocked tickets (true) or only unblocked ones (false). */
+  blocked?: boolean;
   query?: string;
   limit?: number;
 }
@@ -212,6 +221,7 @@ interface TicketRow {
   handoff: string;
   handoff_by: string | null;
   handoff_at: string | null;
+  blocked_reason: string;
   sort: number;
   created_at: string;
   updated_at: string;
@@ -227,7 +237,7 @@ const TICKET_SELECT = `
          t.cycle_id, cy.number AS cycle_number, t.task_id, tk.state AS task_state, tk.updated_at AS task_since,
          ap.state AS task_approval_state,
          (SELECT q.id FROM questions q WHERE q.task_id = t.task_id AND q.state = 'open') AS task_open_question,
-         t.handoff, hb.name AS handoff_by, t.handoff_at,
+         t.handoff, hb.name AS handoff_by, t.handoff_at, t.blocked_reason,
          t.sort, t.created_at, t.updated_at, t.started_at, t.completed_at
   FROM tickets t
   JOIN projects p ON p.id = t.project_id
@@ -346,7 +356,7 @@ export class Tickets {
 
   /* Tickets */
 
-  create(actor: Participant, project: string, input: TicketInput & { title: string }): Written {
+  create(actor: Participant, project: string, input: TicketInput & { title: string }, options: { dispatch?: boolean } = {}): Written {
     const proj = this.project(actor, project);
     this.store.checkRate(actor, 'post');
     const title = this.title(input.title);
@@ -365,6 +375,8 @@ export class Tickets {
     for (const text of criteria) if (text.length > 300) throw new OrcoError('invalid', 'A criterion can be at most 300 characters');
     const blockers = [...new Set(input.blockedByAdd ?? [])].map((ref) => this.byRef(actor, ref));
     const handoff = (input.handoff ?? '').trim();
+    const blockedReason = (input.blockedReason ?? '').trim().replace(/\s+/g, ' ');
+    if (blockedReason.length > MAX_BLOCKED_REASON) throw new OrcoError('invalid', `A blocked reason can be at most ${MAX_BLOCKED_REASON} characters`);
     if (handoff.length > MAX_HANDOFF) throw new OrcoError('invalid', `Handoff notes can be at most ${MAX_HANDOFF} characters`);
 
     this.store.db.exec('BEGIN');
@@ -393,6 +405,7 @@ export class Tickets {
       if (handoff) {
         this.store.db.prepare(`UPDATE tickets SET handoff = ?, handoff_by = ?, handoff_at = ${NOW_SQL} WHERE id = ?`).run(handoff, actor.id, id);
       }
+      if (blockedReason) this.store.db.prepare('UPDATE tickets SET blocked_reason = ? WHERE id = ?').run(blockedReason, id);
       this.activity(id, actor, 'created', null, null);
       this.store.db.exec('COMMIT');
     } catch (err) {
@@ -401,7 +414,8 @@ export class Tickets {
     }
     const created = this.row(id)!;
     this.store.audit.record(actor, 'ticket.create', { projectId: proj.id, subject: `ticket:${refOf(created)}`, detail: { title } });
-    const warning = assignee?.kind === 'agent' && assignee.id !== actor.id ? this.dispatch(actor, created) : undefined;
+    const dispatch = options.dispatch ?? true;
+    const warning = dispatch && assignee?.kind === 'agent' && assignee.id !== actor.id ? this.dispatch(actor, created) : undefined;
     this.changed(created);
     return { ticket: this.detail(id), ...(warning ? { warning } : {}) };
   }
@@ -508,6 +522,14 @@ export class Tickets {
         set('handoff_by', actor.id);
         sets.push(`handoff_at = ${NOW_SQL}`);
         changes.push({ field: 'handoff', from: null, to: null });
+      }
+    }
+    if (input.blockedReason !== undefined) {
+      const reason = input.blockedReason.trim().replace(/\s+/g, ' ');
+      if (reason.length > MAX_BLOCKED_REASON) throw new OrcoError('invalid', `A blocked reason can be at most ${MAX_BLOCKED_REASON} characters`);
+      if (reason !== row.blocked_reason) {
+        set('blocked_reason', reason);
+        changes.push({ field: 'blockedReason', from: row.blocked_reason || null, to: reason || null });
       }
     }
     const criteria = this.criteriaOps(actor, row.id, input);
@@ -721,6 +743,11 @@ export class Tickets {
       where.push('t.priority = ?');
       params.push(this.priority(filter.priority));
     }
+    if (filter.blocked !== undefined) {
+      const blocked = `(t.blocked_reason != '' OR EXISTS (SELECT 1 FROM ticket_links tl JOIN tickets b ON b.id = tl.blocker_id
+        JOIN ticket_statuses bs ON bs.id = b.status_id WHERE tl.blocked_id = t.id AND bs.category NOT IN ('completed', 'canceled')))`;
+      where.push(filter.blocked ? blocked : `NOT ${blocked}`);
+    }
     if (filter.parent) {
       const parent = this.byRef(actor, filter.parent);
       where.push('t.parent_id = ?');
@@ -820,8 +847,10 @@ export class Tickets {
     return this.workflowChanged(actor, proj, 'workflow.remove_status', { name: status.name, movedTo: target.name });
   }
 
+  /** Anyone in the project, agents included, may add a label; only people delete them. */
   createLabel(actor: Participant, project: string, name: string, color?: string): Label {
-    const proj = this.planner(actor, project);
+    const proj = this.project(actor, project);
+    this.store.checkRate(actor, 'post');
     const clean = name.trim();
     if (!LABEL_NAME.test(clean)) throw new OrcoError('invalid', 'Label names are 1-32 letters, digits, spaces or . _ / -');
     const chosen = color ?? LABEL_COLORS[this.labels(proj.id).length % LABEL_COLORS.length]!;
@@ -1143,6 +1172,8 @@ export class Tickets {
         parent: row.parent_number === null ? null : `${row.ticket_key}-${row.parent_number}`,
         task: row.task_id === null || state === null ? null : { id: row.task_id, state, since: row.task_since! },
         blockedBy: blockedBy.get(row.id) ?? [],
+        blockedReason: row.blocked_reason || null,
+        blocked: (blockedBy.get(row.id)?.length ?? 0) > 0 || row.blocked_reason !== '',
         criteria: criteria.get(row.id) ?? { done: 0, total: 0 },
         sort: row.sort,
         createdAt: row.created_at,

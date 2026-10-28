@@ -133,7 +133,8 @@ describe('workflow', () => {
 
   it('is set up by people, not agents', () => {
     assert.throws(() => store.tickets.addStatus(anaClaude, 'api', { name: 'QA', category: 'started' }), (e: OrcoError) => e.code === 'forbidden');
-    assert.throws(() => store.tickets.createLabel(anaClaude, 'api', 'bug'), (e: OrcoError) => e.code === 'forbidden');
+    const bug = store.tickets.createLabel(anaClaude, 'api', 'bug');
+    assert.throws(() => store.tickets.deleteLabel(anaClaude, 'api', bug.id), (e: OrcoError) => e.code === 'forbidden');
     assert.throws(() => store.tickets.createCycle(anaClaude, 'api'), (e: OrcoError) => e.code === 'forbidden');
   });
 });
@@ -343,3 +344,21 @@ describe('working notes on tickets', () => {
     assert.deepEqual([last.body, (last.detail as { state: string }).state, (last.detail as { by: string }).by], ['eu-west', 'answered', 'ana']);
   });
 });
+
+describe('blocked on something outside the project', () => {
+  it('marks a ticket blocked with a reason, filters on it, and clears it', () => {
+    store.tickets.create(ana, 'api', { title: 'Ship SSO', blockedReason: 'waiting on the vendor' });
+    store.tickets.create(ana, 'api', { title: 'infra' });
+    store.tickets.create(ana, 'api', { title: 'app', blockedByAdd: ['API-2'] });
+    store.tickets.create(ana, 'api', { title: 'free' });
+    const sso = store.tickets.get(ana, 'API-1');
+    assert.deepEqual([sso.blocked, sso.blockedReason, sso.blockedBy], [true, 'waiting on the vendor', []]);
+    assert.deepEqual(store.tickets.list(ana, { project: 'api', blocked: true }).map((t) => t.ref).sort(), ['API-1', 'API-3']);
+    assert.deepEqual(store.tickets.list(ana, { project: 'api', blocked: false }).map((t) => t.ref).sort(), ['API-2', 'API-4']);
+    store.tickets.update(anaClaude, 'API-1', { blockedReason: '' });
+    const cleared = store.tickets.get(ana, 'API-1');
+    assert.equal(cleared.blocked, false);
+    assert.ok(cleared.activity.some((a) => JSON.stringify(a.detail ?? '').includes('blockedReason')));
+  });
+});
+

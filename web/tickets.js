@@ -34,7 +34,12 @@ const TASK_EVENT = {
   cancelled: (d) => `task #${d.taskId} for ${d.agent} was cancelled`,
 };
 const OPEN_TASK = ['awaiting_approval', 'requested', 'accepted', 'needs_input'];
-const EMPTY_FILTERS = { q: '', assignee: '', label: '', priority: '', milestone: '', cycle: '' };
+const EMPTY_FILTERS = { q: '', assignee: '', label: '', priority: '', milestone: '', cycle: '', blocked: '' };
+
+/** Why a ticket is blocked, for tooltips: open blocking tickets and any outside reason. */
+function blockedWhy(ticket) {
+  return [ticket.blockedBy.length ? `Waiting on ${ticket.blockedBy.join(', ')}` : null, ticket.blockedReason].filter(Boolean).join('; ');
+}
 
 export function createTickets(ctx) {
   const { api, el, icon, avatar, richText, openPanel, closePanel, panel, jumpTo, me, $ } = ctx;
@@ -155,6 +160,7 @@ export function createTickets(ctx) {
     if (f.priority) params.set('priority', f.priority);
     if (f.milestone) params.set('milestone', f.milestone);
     if (f.cycle) params.set('cycle', f.cycle);
+    if (f.blocked) params.set('blocked', f.blocked);
     return api(`/tickets?${params}`);
   }
 
@@ -229,6 +235,7 @@ export function createTickets(ctx) {
             'aria-label': 'Cycle',
           })
         : null,
+      select(f.blocked, [['', 'Blocked or not'], ['1', 'Blocked'], ['0', 'Not blocked']], set('blocked'), { 'aria-label': 'Blocked' }),
       Object.values(f).some(Boolean)
         ? el('button', { class: 'ghost small', type: 'button', text: 'Clear', onclick: () => ((t.filters = { ...EMPTY_FILTERS }), renderShell(), void refreshTickets()) })
         : null,
@@ -290,7 +297,7 @@ export function createTickets(ctx) {
         'div',
         { class: 'ticket-meta' },
         ticket.priority !== 'none' ? priorityIcon(ticket.priority) : null,
-        ticket.blockedBy.length ? el('span', { class: 'meta-pill blocked', title: `Waiting on ${ticket.blockedBy.join(', ')}`, text: 'Blocked' }) : null,
+        ticket.blocked ? el('span', { class: 'meta-pill blocked', title: blockedWhy(ticket), text: 'Blocked' }) : null,
         taskBadge(ticket.task),
         ticket.criteria.total
           ? el('span', { class: `meta-pill${ticket.criteria.done === ticket.criteria.total ? ' met' : ''}`, title: 'Acceptance criteria met', text: `${ticket.criteria.done}/${ticket.criteria.total}` })
@@ -380,7 +387,7 @@ export function createTickets(ctx) {
             priorityIcon(ticket.priority),
             el('span', { class: 'ticket-ref', text: ticket.ref }),
             el('span', { class: 'list-title', text: ticket.title }),
-            el('span', { class: 'list-meta' }, taskBadge(ticket.task), ticket.labels.map(labelChip), ticket.estimate !== null ? el('span', { class: 'meta-pill', text: `${ticket.estimate} pt` }) : null, ticket.dueDate ? el('span', { class: 'meta-pill', text: shortDate(ticket.dueDate) }) : null),
+            el('span', { class: 'list-meta' }, ticket.blocked ? el('span', { class: 'meta-pill blocked', title: blockedWhy(ticket), text: 'Blocked' }) : null, taskBadge(ticket.task), ticket.labels.map(labelChip), ticket.estimate !== null ? el('span', { class: 'meta-pill', text: `${ticket.estimate} pt` }) : null, ticket.dueDate ? el('span', { class: 'meta-pill', text: shortDate(ticket.dueDate) }) : null),
             ticket.assignee ? avatar(ticket.assignee.name, ticket.assignee.kind) : el('span', { class: 'avatar-blank', title: 'Unassigned' }),
           ),
         ),
@@ -668,7 +675,23 @@ export function createTickets(ctx) {
         el('span', { class: 'list-title', text: link.title }),
         remove ? el('button', { class: 'ghost icon', type: 'button', 'aria-label': `Remove blocker ${link.ref}`, onclick: remove }, icon('x')) : null,
       );
-    const open = ticket.blockedBy.length;
+    const open = ticket.blockedBy.length + (ticket.blockedReason ? 1 : 0);
+    const reason = el('input', {
+      value: ticket.blockedReason ?? null,
+      placeholder: 'Blocked outside the project? Say on what, like “waiting on the vendor”',
+      'aria-label': 'Blocked on something outside the project',
+      maxlength: '200',
+    });
+    const saveReason = () => {
+      if (reason.value.trim() !== (ticket.blockedReason ?? '')) void save(ticket, { blockedReason: reason.value });
+    };
+    reason.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        saveReason();
+      }
+    });
+    reason.addEventListener('change', saveReason);
     return el(
       'section',
       { class: 'detail-section' },
@@ -676,13 +699,14 @@ export function createTickets(ctx) {
         'div',
         { class: 'section-head' },
         el('h3', { text: 'Dependencies' }),
-        open ? el('span', { class: 'meta-pill blocked', text: `Blocked by ${open}` }) : null,
+        open ? el('span', { class: 'meta-pill blocked', title: blockedWhy(ticket), text: 'Blocked' }) : null,
         el('span', { class: 'spacer' }),
       ),
       ticket.blockers.length ? el('p', { class: 'muted small link-label', text: 'Blocked by' }) : null,
       ticket.blockers.map((b) => row(b, () => void save(ticket, { blockedByRemove: [b.ref] }))),
       ticket.blocking.length ? el('p', { class: 'muted small link-label', text: 'Blocking' }) : null,
       ticket.blocking.map((b) => row(b, null)),
+      reason,
       add,
     );
   }
@@ -782,6 +806,8 @@ export function createTickets(ctx) {
         if (c.to.removed.length) parts.push(`removed ${c.to.removed.map((x) => `“${x}”`).join(', ')}`);
         return parts.join(', ') || 'edited the criteria';
       }
+      case 'blockedReason':
+        return c.to ? `marked it blocked: ${c.to}` : 'cleared the outside blocker';
       case 'blockedBy': {
         const parts = [];
         if (c.to.length) parts.push(`marked it blocked by ${c.to.join(', ')}`);
@@ -1274,7 +1300,7 @@ export function createTickets(ctx) {
       ),
       el('section', { class: 'settings-section' },
         el('h3', { text: 'Labels' }),
-        el('p', { class: 'muted small', text: 'Agents can put these labels on tickets but cannot create or delete them.' }),
+        el('p', { class: 'muted small', text: 'Agents can add labels and put them on tickets; only people delete them.' }),
         el(
           'div',
           { class: 'label-list' },

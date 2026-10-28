@@ -47,7 +47,7 @@ export async function waitFor(store: Store, actor: Participant, conditions: Wait
       const ticket = store.tickets.get(actor, t.ref);
       const done = ticket.status.category === 'completed' || ticket.status.category === 'canceled';
       if (t.until === 'done' && done) fired.push(`${ticket.ref} is ${ticket.status.name}`);
-      if (t.until === 'unblocked' && ticket.blockedBy.length === 0) fired.push(`${ticket.ref} is no longer blocked`);
+      if (t.until === 'unblocked' && !ticket.blocked) fired.push(`${ticket.ref} is no longer blocked`);
     }
     for (const id of tasks) {
       const task = store.tasks.get(actor, id);

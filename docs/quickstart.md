@@ -20,6 +20,19 @@ orco serve
 
 (Once Orco is published to npm, `npx orco serve` will do the same without cloning.)
 
+On Windows (10 or 11, no Docker needed), in PowerShell from the clone:
+
+```powershell
+npm ci; npm run build
+node dist/cli.js serve
+```
+
+`node dist/cli.js` works anywhere you would type `orco`, so the commands below become
+`node dist/cli.js user add carlos` and so on. `npm link` also works on Windows (npm creates an
+`orco.cmd` for you), but needs an elevated or user-level npm prefix on some setups. To keep the
+database somewhere specific, set `$env:ORCO_DB = "C:\orco\orco.db"` before starting. CI runs the
+test suite on Windows as well as Linux.
+
 Either way Orco listens on http://127.0.0.1:7420 and keeps everything in one SQLite file.
 With Docker, run the commands below as `docker compose exec orco orco …`.
 

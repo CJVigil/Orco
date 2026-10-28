@@ -1,6 +1,7 @@
 import { attachMentionAutocomplete } from './autocomplete.js';
 import { icon } from './icons.js';
 import { renderMarkdown } from './markdown.js';
+import * as notify from './notify.js';
 import { createTickets } from './tickets.js';
 
 const $ = (id) => document.getElementById(id);
@@ -1038,7 +1039,21 @@ const seen = new Set();
 function onMessage(message) {
   if (seen.has(message.id)) return;
   seen.add(message.id);
-  if (message.mentions.includes(state.me.name)) scheduleInbox();
+  if (message.mentions.includes(state.me.name)) {
+    scheduleInbox();
+    if (message.author !== state.me.name) {
+      void notify.show(
+        {
+          title: message.question ? `${message.author} asks you` : `${message.author} in #${message.room}`,
+          body: message.text,
+          tag: `message-${message.id}`,
+          hash: `#${message.room}`,
+          target: { id: message.id, room: message.room, threadId: message.threadId },
+        },
+        openFromNotification,
+      );
+    }
+  }
   const here = state.view === 'room' && state.room && message.room === state.room.ref;
   if (message.threadId === null) {
     if (here) {
@@ -1381,10 +1396,65 @@ function scheduleInbox() {
   inboxTimer = setTimeout(() => void refreshInbox(), 250);
 }
 
+// Flags and stalled tasks arrive without a mention, so new ones get a notification of their own.
+// The first Inbox load only records what is already there.
+let announced = null;
+
+function announceNew(inbox) {
+  const items = [
+    ...inbox.flags.map((f) => ({
+      key: `flag-${f.id}`,
+      title: `${f.flagger} flagged something`,
+      body: f.reason,
+      target: f.message ? { id: f.message.id, room: f.message.room, threadId: f.message.threadId } : null,
+    })),
+    ...inbox.stalled.map((t) => ({
+      key: `stalled-${t.id}`,
+      title: `Task #${t.id} has stalled`,
+      body: `No sign of life from ${t.assignee}: ${t.request}`,
+      target: { id: t.messageId, room: t.room, threadId: null },
+    })),
+  ];
+  if (announced) {
+    for (const item of items.filter((i) => !announced.has(i.key))) {
+      void notify.show({ title: item.title, body: item.body, tag: item.key, hash: '', target: item.target }, openFromNotification);
+    }
+  }
+  announced = new Set(items.map((i) => i.key));
+}
+
+function openFromNotification({ hash, target }) {
+  window.focus();
+  if (target) void jumpTo(target);
+  else if (hash) location.hash = hash;
+  else void showInbox();
+}
+
+function renderNotifyButton() {
+  const button = $('notify');
+  const on = notify.enabled();
+  button.hidden = !notify.supported() && !('serviceWorker' in navigator);
+  button.replaceChildren(icon(on ? 'bell' : 'bell-off'));
+  button.title = on ? 'Notifications on (click to turn off)' : 'Turn on notifications';
+  button.setAttribute('aria-label', button.title);
+  button.setAttribute('aria-pressed', String(on));
+}
+
+$('notify').addEventListener('click', async () => {
+  try {
+    await notify.toggle();
+  } catch (err) {
+    alert(err.message);
+  }
+  renderNotifyButton();
+});
+
 async function refreshInbox() {
   const inbox = await api('/inbox').catch(() => null);
   if (!inbox) return;
   const count = inbox.counts.approvals + inbox.counts.questions + inbox.counts.flags + inbox.counts.stalled + inbox.counts.unseenMentions;
+  notify.setBadge(count);
+  announceNew(inbox);
   const badge = $('inbox-badge');
   badge.hidden = count === 0;
   badge.textContent = String(count);
@@ -1647,6 +1717,8 @@ async function start() {
   await selectRoom();
   connect();
   void refreshInbox();
+  renderNotifyButton();
+  void notify.registerWorker(openFromNotification);
 }
 
 function showLogin() {

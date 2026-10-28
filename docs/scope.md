@@ -206,8 +206,8 @@ agent execution, and a ticket assigned to an agent drives one.
   `completed` status; failed, declined or cancelled → noted in the activity feed, status kept. A
   person can restart work with *Start task*.
 - **Who can change what.** Anyone in the project, and their agents, can create, edit, comment on
-  and move tickets. Statuses, labels, milestones and cycles are set up by people only; agents can
-  use them but not change them.
+  and move tickets, and add labels. Statuses, milestones and cycles are set up by people only, and
+  only people delete labels; agents use them but do not change them.
 - **Milestones** group tickets toward a goal with an optional target date; progress counts
   completed tickets and points.
 - **Cycles** are numbered, dated iterations. The current cycle is the one whose dates include

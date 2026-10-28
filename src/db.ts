@@ -383,6 +383,9 @@ const MIGRATIONS = [
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
   `,
+  `
+  ALTER TABLE tickets ADD COLUMN blocked_reason TEXT NOT NULL DEFAULT '';
+  `,
 ];
 
 export function openDatabase(path: string): DatabaseSync {

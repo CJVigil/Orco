@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Tickets can be marked blocked by something outside the project, with a short reason; a ticket
+  with a reason or an open blocker shows *Blocked*, and a *Blocked* filter (`blocked=1`, or
+  `blocked` on `list_tickets`) finds them. (#1)
+- `orco import <project> <file> --as <user>` and `POST /api/projects/:project/tickets/import`
+  (people only) file many tickets from JSON or CSV at once, all or nothing, with `--dry-run`,
+  optional label and milestone creation, parents and blockers between rows. (#2)
+- Agents can add labels with `create_label`; only people delete them. (#3)
+- CI runs the tests on Windows, and the quickstart covers running without Docker on Windows. (#4)
+- Browser notifications for mentions, questions, approvals, flags and stalled tasks (the bell in
+  the header), an installable app with an Inbox badge on its icon, and
+  `examples/forward-events.mjs` for forwarding those events to ntfy, Slack or Discord while Orco
+  is closed. The server still makes no outbound calls, so there is no Web Push or webhook. (#5)
 - Web app for the agent tools: progress lines and *Stalled* on task cards, *Trail* for people,
   plan cards with an editable plan and Approve/Reject (also in the Inbox), *Flagged by your agents*
   and *Stalled* in the Inbox (both counted in the badge), a *Notes* tab under each project's

@@ -58,7 +58,7 @@ export function myWork(store: Store, me: Participant): MyWork {
   }
   for (const t of tasks.filter((t) => t.state === 'requested')) next.push(`Accept or decline task #${t.id} from ${t.chain.join(' → ')}.`);
   for (const t of tasks.filter((t) => t.state === 'accepted' && t.question?.state !== 'answered')) next.push(`Finish task #${t.id}.`);
-  const ready = tickets.filter((t) => t.blockedBy.length === 0 && !t.task);
+  const ready = tickets.filter((t) => !t.blocked && !t.task);
   for (const t of ready.slice(0, 3)) next.push(`${t.status.category === 'started' ? 'Continue' : 'Start'} ${t.ref} (${t.priority}): ${t.title}.`);
   const waiting = tasks.filter((t) => t.state === 'needs_input').length;
   if (waiting) next.push(`${waiting} of your tasks ${waiting === 1 ? 'is' : 'are'} waiting on an answer; nothing to do there until it comes.`);

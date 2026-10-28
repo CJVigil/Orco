@@ -14,6 +14,7 @@ import type { Task, TaskState } from './tasks.js';
 import type { Approval } from './approvals.js';
 import type { Question, QuestionTarget } from './questions.js';
 import { byWorkOrder, type Priority, type StatusCategory, type TicketFilter, type TicketInput } from './tickets.js';
+import { importTickets, parseImport } from './import.js';
 import { myWork } from './work.js';
 
 declare module 'express-serve-static-core' {
@@ -139,6 +140,7 @@ function ticketInput(body: Record<string, unknown> | undefined): TicketInput {
     criteriaRemove: list(b.criteriaRemove, 'criteriaRemove', 'number'),
     blockedByAdd: list(b.blockedByAdd, 'blockedByAdd', 'string'),
     blockedByRemove: list(b.blockedByRemove, 'blockedByRemove', 'string'),
+    blockedReason: str(b.blockedReason, 'blockedReason'),
   };
 }
 
@@ -423,6 +425,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
       cycle,
       priority: text(q.priority) as Priority | undefined,
       parent: text(q.parent),
+      blocked: q.blocked === '1' ? true : q.blocked === '0' ? false : undefined,
       query: text(q.q),
       limit: optionalInt(q.limit),
     };
@@ -763,6 +766,19 @@ export function createApp(store: Store, options: AppOptions = {}) {
       res.status(201).json(store.attachments.upload(req.participant!, String(req.query.room ?? ''), data, name));
     },
   );
+
+  // Imports carry many tickets at once, so they get a larger body limit than the rest of the API.
+  app.post('/api/projects/:project/tickets/import', auth, express.json({ limit: '4mb' }), rejectCrossSite, (req, res) => {
+    const body = req.body ?? {};
+    const rows = typeof body.csv === 'string' ? parseImport(body.csv, 'csv') : body.tickets;
+    if (!Array.isArray(rows)) throw new OrcoError('invalid', 'Send tickets as a JSON array, or csv as text');
+    const result = importTickets(store, req.participant!, String(req.params.project), rows, {
+      createLabels: body.createLabels === true,
+      createMilestones: body.createMilestones === true,
+      dryRun: body.dryRun === true,
+    });
+    res.status(result.dryRun ? 200 : 201).json(result);
+  });
 
   app.use('/api', api);
 

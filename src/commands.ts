@@ -1,10 +1,12 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { extname } from 'node:path';
 import { createRequire } from 'node:module';
 import { parseArgs } from 'node:util';
 import { Bridge } from './bridge/bridge.js';
 import { loadBridgeConfig } from './bridge/config.js';
 import { openDatabase } from './db.js';
 import { createApp } from './http.js';
+import { importTickets, parseImport } from './import.js';
 import { type Limits, OrcoError, Store, type TaskPolicy } from './store.js';
 
 const USAGE = `Usage: orco <command> [options]
@@ -18,6 +20,8 @@ Server commands (run where the database lives):
   agent trust <agent> <user> Let a user's tasks reach the agent without asking (untrust to undo)
   audit export [--since N]   Print the audit log as JSON lines
   backup <file>              Write a consistent copy of the database, safe while serving
+  import <project> <file> --as <user> [--create-labels] [--create-milestones] [--dry-run]
+                             File tickets from a JSON or CSV file, as that person
   version                    Print the version
   list                       List users and agents
 
@@ -114,6 +118,10 @@ export function main(): void {
       port: { type: 'string', default: process.env.ORCO_PORT ?? '7420' },
       config: { type: 'string', default: process.env.ORCO_BRIDGE_CONFIG ?? './orco-bridge.json' },
       since: { type: 'string' },
+      as: { type: 'string' },
+      'create-labels': { type: 'boolean' },
+      'create-milestones': { type: 'boolean' },
+      'dry-run': { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
       version: { type: 'boolean', short: 'v' },
     },
@@ -139,7 +147,7 @@ export function main(): void {
   }
 
   const store = new Store(openDatabase(values.db), { limits: limitsFromEnv() });
-  const key = sub && !['serve', 'list', 'backup'].includes(command) ? `${command} ${sub}` : command;
+  const key = sub && !['serve', 'list', 'backup', 'import'].includes(command) ? `${command} ${sub}` : command;
 
   switch (key) {
     case 'serve': {
@@ -216,6 +224,25 @@ export function main(): void {
       if (existsSync(target)) throw new OrcoError('conflict', `${target} already exists; pick a new file name`);
       store.db.exec(`VACUUM INTO '${target.replace(/'/g, "''")}'`);
       console.log(`Backed up ${values.db} to ${target}`);
+      return;
+    }
+    case 'import': {
+      const [project, file] = [sub, ...args];
+      if (!project || !file || !values.as) {
+        throw new OrcoError('invalid', 'Usage: orco import <project> <file.json|file.csv> --as <user> [--create-labels] [--create-milestones] [--dry-run]');
+      }
+      const person = store.participantByName(values.as);
+      if (!person || person.kind !== 'user') throw new OrcoError('not_found', `No user named ${values.as}`);
+      const rows = parseImport(readFileSync(file, 'utf8'), extname(file).toLowerCase() === '.csv' ? 'csv' : 'json');
+      const result = importTickets(store, person, project, rows, {
+        createLabels: values['create-labels'],
+        createMilestones: values['create-milestones'],
+        dryRun: values['dry-run'],
+      });
+      if (result.labelsCreated.length) console.log(`${result.dryRun ? 'Would create' : 'Created'} labels: ${result.labelsCreated.join(', ')}`);
+      if (result.milestonesCreated.length) console.log(`${result.dryRun ? 'Would create' : 'Created'} milestones: ${result.milestonesCreated.join(', ')}`);
+      for (const t of result.created) console.log(`${t.ref ?? `row ${t.row}`}\t${t.title}`);
+      console.log(result.dryRun ? `Checked ${result.created.length} tickets; nothing was written (drop --dry-run to import).` : `Imported ${result.created.length} tickets into ${project}.`);
       return;
     }
     case 'audit export': {

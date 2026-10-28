@@ -8,7 +8,7 @@ import { type Message, OrcoError, type Participant, type Store } from './store.j
 import type { Task } from './tasks.js';
 import { waitFor } from './waits.js';
 import { myWork } from './work.js';
-import { PRIORITIES, STATUS_CATEGORIES, type Ticket, type TicketInput, type TicketSummary } from './tickets.js';
+import { LABEL_COLORS, PRIORITIES, STATUS_CATEGORIES, type Ticket, type TicketInput, type TicketSummary } from './tickets.js';
 
 const MAX_WAIT_SECONDS = 300;
 
@@ -113,7 +113,9 @@ function formatTicketSummary(t: TicketSummary) {
     cycle: t.cycle?.number ?? null,
     parent: t.parent,
     task: t.task,
+    blocked: t.blocked,
     blocked_by: t.blockedBy,
+    blocked_reason: t.blockedReason,
     criteria: t.criteria.total ? `${t.criteria.done}/${t.criteria.total}` : null,
   };
 }
@@ -161,6 +163,10 @@ const ticketFields = {
   criteria_remove: z.array(z.number().int()).optional().describe('People only'),
   blocked_by_add: z.array(z.string()).optional().describe('Tickets this one waits on, like API-4'),
   blocked_by_remove: z.array(z.string()).optional(),
+  blocked_reason: z
+    .string()
+    .optional()
+    .describe('Mark the ticket blocked on something outside the project ("waiting on the vendor"); empty clears it'),
 };
 
 type TicketArgs = { [K in keyof typeof ticketFields]?: z.infer<(typeof ticketFields)[K]> };
@@ -185,6 +191,7 @@ function ticketInput(args: TicketArgs): TicketInput {
     criteriaRemove: args.criteria_remove,
     blockedByAdd: args.blocked_by_add,
     blockedByRemove: args.blocked_by_remove,
+    blockedReason: args.blocked_reason,
   };
 }
 
@@ -643,6 +650,7 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         label: z.string().optional(),
         milestone: z.string().optional(),
         cycle: z.union([z.number().int(), z.literal('current')]).optional(),
+        blocked: z.boolean().optional().describe('Only blocked (true) or only unblocked (false) tickets'),
         query: z.string().optional().describe('Words in the title or description, or a ticket ref'),
         limit: z.number().int().min(1).max(500).optional(),
       }),
@@ -660,6 +668,7 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
             label: args.label,
             milestone: args.milestone,
             cycle: args.cycle,
+            blocked: args.blocked,
             query: args.query,
             limit: args.limit,
           })
@@ -724,6 +733,24 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
       run(() => {
         const t = store.tickets.comment(me, ticket, text);
         return `Commented on ${t.ref}`;
+      }),
+  );
+
+  server.registerTool(
+    'create_label',
+    {
+      annotations: annotate('create_label'),
+      description: 'Add a label to a project, so tickets can use it. Check project_plan first and reuse an existing label when one fits.',
+      inputSchema: z.object({
+        project: z.string(),
+        name: z.string().describe('1-32 characters, like "bug" or "billing"'),
+        color: z.enum(LABEL_COLORS as [string, ...string[]]).optional(),
+      }),
+    },
+    async ({ project, name, color }) =>
+      run(() => {
+        const label = store.tickets.createLabel(me, project, name, color);
+        return `Label ${label.name} is ready in ${project}.`;
       }),
   );
 
