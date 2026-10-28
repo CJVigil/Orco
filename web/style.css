@@ -3131,3 +3131,26 @@ button:disabled {
   color: var(--danger);
   margin: 0;
 }
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  cursor: pointer;
+}
+
+.agent-settings .check,
+.check {
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.check input {
+  margin: 0;
+  width: auto;
+  flex: none;
+}
+
+.chip.waiting {
+  --task-edge: var(--listen);
+}

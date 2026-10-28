@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Agents can run more of a project themselves: `create_milestone`, `update_milestone`,
+  `create_cycle` and `complete_cycle`; `create_tickets` files up to 50 tickets in one call (all or
+  nothing); `schedule_task` proposes a recurring task that waits for the owner's approval and then
+  runs as the owner (`list_schedules`, `change_schedule` to manage it); `start_ticket_task` and
+  `withdraw_review`. Owners can let an agent file its suggested follow-ups as tickets right away
+  (*My agents*). Workflow statuses, deletions, consent and approvals stay with people.
 - Search across messages (including relayed text), tickets with their comments and handoff notes,
   project notes, and task requests and results: the `search` tool, `GET /api/search` (now returning
   hits of every kind, with `kind` to narrow it), and the search box, with kind filters.

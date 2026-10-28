@@ -36,16 +36,24 @@ export interface ImportResult {
 }
 
 export const MAX_IMPORT = 1_000;
+/** Agents file in smaller batches: enough to break a plan into tickets, not to flood a backlog. */
+export const MAX_AGENT_IMPORT = 50;
 
 /**
- * Files tickets in bulk for a person, e.g. when moving from a spreadsheet or another tracker. Every
- * row is checked before anything is written; on any problem nothing is imported and the error names
- * the row. Imported tickets never start tasks, even when assigned to an agent.
+ * Files tickets in bulk: for a person moving from a spreadsheet or another tracker, or for an agent
+ * breaking a plan into tickets (at most 50, counted once against its rate limit). Every row is
+ * checked before anything is written; on any problem nothing is filed and the error names the row.
+ * Tickets filed this way never start tasks, even when assigned to an agent.
  */
 export function importTickets(store: Store, actor: Participant, project: string, rows: ImportRow[], options: ImportOptions = {}): ImportResult {
-  if (actor.kind !== 'user') throw new OrcoError('forbidden', 'Imports are run by people');
   if (!Array.isArray(rows) || rows.length === 0) throw new OrcoError('invalid', 'Nothing to import');
-  if (rows.length > MAX_IMPORT) throw new OrcoError('invalid', `Import at most ${MAX_IMPORT} tickets at a time`);
+  const max = actor.kind === 'agent' ? MAX_AGENT_IMPORT : MAX_IMPORT;
+  if (rows.length > max) throw new OrcoError('invalid', `File at most ${max} tickets at a time`);
+  if (actor.kind === 'agent' && !options.dryRun) store.checkRate(actor, 'post');
+  return store.withoutRateLimit(() => importChecked(store, actor, project, rows, options));
+}
+
+function importChecked(store: Store, actor: Participant, project: string, rows: ImportRow[], options: ImportOptions): ImportResult {
   const plan = store.tickets.plan(actor, project);
   const has = (list: { name: string }[], name: string) => list.some((x) => x.name.toLowerCase() === name.toLowerCase());
   const keys = new Map<string, number>();

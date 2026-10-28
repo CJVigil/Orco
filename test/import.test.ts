@@ -28,8 +28,10 @@ describe('ticket import', () => {
     assert.equal(result.created[44]!.ref, 'API-45');
   });
 
-  it('is for people, not agents', () => {
-    assert.throws(() => importTickets(store, anaClaude, 'api', rows(1)), (e: OrcoError) => e.code === 'forbidden');
+  it('lets agents file up to 50 at once, counted once against their rate limit', () => {
+    assert.throws(() => importTickets(store, anaClaude, 'api', rows(51)), (e: OrcoError) => e.code === 'invalid');
+    assert.equal(importTickets(store, anaClaude, 'api', rows(50)).created.length, 50);
+    assert.equal(importTickets(store, anaClaude, 'api', rows(50)).created.length, 50);
   });
 
   it('links parents and blockers by key, in any order, and creates labels and milestones when asked', () => {

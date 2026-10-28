@@ -3,6 +3,8 @@ import * as z from 'zod/v4';
 import type { Presence } from './presence.js';
 import { MAX_APPROVAL_TTL_SECONDS } from './approvals.js';
 import { MAX_ATTACHMENTS_PER_MESSAGE } from './attachments.js';
+import { type ImportRow, importTickets, MAX_AGENT_IMPORT } from './import.js';
+import type { Schedule } from './schedules.js';
 import type { Review } from './reviews.js';
 import { SEARCH_KINDS, searchAll } from './search.js';
 import { MAX_TTL_SECONDS, MIN_TTL_SECONDS } from './locks.js';
@@ -44,6 +46,7 @@ const READ_ONLY_TOOLS = new Set([
   'search',
   'read_file',
   'my_notes',
+  'list_schedules',
 ]);
 
 function annotate(tool: string): ToolAnnotations {
@@ -75,6 +78,24 @@ function formatMessage(message: Message) {
     images: message.attachments.filter((a) => a.mime !== 'text/plain').map((a) => ({ id: a.id, name: a.name, type: a.mime, bytes: a.size })),
     files: message.attachments.filter((a) => a.mime === 'text/plain').map((a) => ({ id: a.id, name: a.name, bytes: a.size })),
     at: message.createdAt,
+  };
+}
+
+function formatSchedule(s: Schedule) {
+  return {
+    id: s.id,
+    agent: s.agent,
+    room: s.room,
+    request: s.request,
+    cron: s.cron,
+    tz: s.tz,
+    enabled: s.enabled,
+    approval: s.approval,
+    runs_as: s.runAs,
+    next_run: s.enabled ? s.nextRun : null,
+    last_task_id: s.lastTaskId,
+    last_error: s.lastError,
+    set_up_by: s.creator,
   };
 }
 
@@ -579,6 +600,16 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
   );
 
   server.registerTool(
+    'withdraw_review',
+    {
+      annotations: annotate('withdraw_review'),
+      description: 'Take back a review you asked for (it is no longer needed); an agent reviewer\'s task is cancelled.',
+      inputSchema: z.object({ review_id: z.number().int() }),
+    },
+    async ({ review_id }) => run(() => formatReview(store.reviews.withdraw(me, review_id))),
+  );
+
+  server.registerTool(
     'submit_review',
     {
       annotations: annotate('submit_review'),
@@ -962,6 +993,185 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
       run(() => {
         const label = store.tickets.createLabel(me, project, name, color);
         return `Label ${label.name} is ready in ${project}.`;
+      }),
+  );
+
+  server.registerTool(
+    'create_tickets',
+    {
+      annotations: annotate('create_tickets'),
+      description:
+        `File up to ${MAX_AGENT_IMPORT} tickets in one call, for breaking a plan into work. All or nothing: every ticket is ` +
+        'checked first. Give tickets a key to point parent and blocked_by at each other. Tickets filed this way do not ' +
+        'start tasks; assign and start them when ready. Try dry_run first on a big batch.',
+      inputSchema: z.object({
+        project: z.string(),
+        tickets: z
+          .array(
+            z.object({
+              key: z.string().optional().describe('A name for this ticket within the call, like "api"'),
+              title: z.string(),
+              description: z.string().optional(),
+              status: z.string().optional(),
+              priority: z.enum(PRIORITIES).optional(),
+              estimate: z.number().int().min(0).max(100).optional(),
+              due_date: z.string().optional().describe('YYYY-MM-DD'),
+              assignee: z.string().optional(),
+              labels: z.array(z.string()).optional(),
+              milestone: z.string().optional(),
+              cycle: z.union([z.number().int(), z.literal('current')]).optional(),
+              parent: z.string().optional().describe('A key in this call, or an existing ticket like API-3'),
+              blocked_by: z.array(z.string()).optional().describe('Keys in this call or existing tickets'),
+              criteria: z.array(z.string()).optional().describe('Acceptance criteria'),
+            }),
+          )
+          .min(1)
+          .max(MAX_AGENT_IMPORT),
+        create_labels: z.boolean().optional().describe('Create labels that do not exist yet'),
+        create_milestones: z.boolean().optional().describe('Create milestones that do not exist yet'),
+        dry_run: z.boolean().optional(),
+      }),
+    },
+    async ({ project, tickets, create_labels, create_milestones, dry_run }) =>
+      run(() => {
+        const rows: ImportRow[] = tickets.map((t) => ({
+          key: t.key,
+          title: t.title,
+          description: t.description,
+          status: t.status,
+          priority: t.priority,
+          estimate: t.estimate,
+          dueDate: t.due_date,
+          assignee: t.assignee,
+          labels: t.labels,
+          milestone: t.milestone,
+          cycle: t.cycle,
+          parent: t.parent,
+          blockedBy: t.blocked_by,
+          criteria: t.criteria,
+        }));
+        const result = importTickets(store, me, project, rows, { createLabels: create_labels, createMilestones: create_milestones, dryRun: dry_run });
+        return {
+          dry_run: result.dryRun,
+          tickets: result.created.map((c) => ({ key: c.key, ref: c.ref, title: c.title })),
+          labels_created: result.labelsCreated,
+          milestones_created: result.milestonesCreated,
+        };
+      }),
+  );
+
+  server.registerTool(
+    'start_ticket_task',
+    {
+      annotations: annotate('start_ticket_task'),
+      description: "Start (or restart) the task for a ticket's assigned agent, for example after a fix was asked for.",
+      inputSchema: z.object({ ticket: z.string() }),
+    },
+    async ({ ticket }) => run(() => formatTicket(store.tickets.startTask(me, ticket).ticket)),
+  );
+
+  server.registerTool(
+    'create_milestone',
+    {
+      annotations: annotate('create_milestone'),
+      description: 'Add a milestone (a goal tickets work toward, with an optional target date) to a project.',
+      inputSchema: z.object({ project: z.string(), name: z.string(), description: z.string().optional(), target_date: z.string().optional().describe('YYYY-MM-DD') }),
+    },
+    async ({ project, name, description, target_date }) =>
+      run(() => store.tickets.createMilestone(me, project, { name, description, targetDate: target_date })),
+  );
+
+  server.registerTool(
+    'update_milestone',
+    {
+      annotations: annotate('update_milestone'),
+      description: "Rename a milestone or change its description or target date. Only people delete milestones.",
+      inputSchema: z.object({
+        project: z.string(),
+        milestone: z.string().describe('Its current name'),
+        name: z.string().optional(),
+        description: z.string().optional(),
+        target_date: z.string().nullable().optional().describe('YYYY-MM-DD, or null to clear'),
+      }),
+    },
+    async ({ project, milestone, name, description, target_date }) =>
+      run(() => {
+        const found = store.tickets.plan(me, project).milestones.find((m) => m.name.toLowerCase() === milestone.toLowerCase());
+        if (!found) throw new OrcoError('not_found', `No milestone ${milestone} in ${project}`);
+        return store.tickets.updateMilestone(me, project, found.id, { name, description, targetDate: target_date });
+      }),
+  );
+
+  server.registerTool(
+    'create_cycle',
+    {
+      annotations: annotate('create_cycle'),
+      description: 'Start the next cycle (sprint) in a project. By default it starts the day after the last cycle (or today) and runs two weeks.',
+      inputSchema: z.object({ project: z.string(), starts_on: z.string().optional(), ends_on: z.string().optional() }),
+    },
+    async ({ project, starts_on, ends_on }) => run(() => store.tickets.createCycle(me, project, { startsOn: starts_on, endsOn: ends_on })),
+  );
+
+  server.registerTool(
+    'complete_cycle',
+    {
+      annotations: annotate('complete_cycle'),
+      description: 'Close a cycle; its unfinished tickets move to the next cycle.',
+      inputSchema: z.object({ project: z.string(), cycle: z.union([z.number().int(), z.literal('current')]) }),
+    },
+    async ({ project, cycle }) =>
+      run(() => {
+        const cycles = store.tickets.plan(me, project).cycles;
+        const found = cycle === 'current' ? cycles.find((c) => c.current) : cycles.find((c) => c.number === cycle);
+        if (!found) throw new OrcoError('not_found', `No cycle ${cycle} in ${project}`);
+        return store.tickets.completeCycle(me, project, found.id);
+      }),
+  );
+
+  server.registerTool(
+    'schedule_task',
+    {
+      annotations: annotate('schedule_task'),
+      description:
+        'Propose a recurring task, for yourself or another agent ("weekdays at 9, triage new tickets"). It waits for your ' +
+        "owner's approval, then each run is created as your owner's request. A run is skipped while the last is still open.",
+      inputSchema: z.object({
+        room: z.string(),
+        agent: z.string().describe('Who does it each time; can be you'),
+        request: z.string(),
+        cron: z.string().describe('Five fields: minute hour day-of-month month day-of-week, like "0 9 * * 1-5", or @daily'),
+        tz: z.string().optional().describe('IANA time zone, like America/Chicago; default UTC'),
+        budget_minutes: z.number().int().min(1).max(MAX_BUDGET_MINUTES).optional(),
+      }),
+    },
+    async ({ room, agent, request, cron, tz, budget_minutes }) =>
+      run(() => formatSchedule(store.schedules.create(me, { room, agent, request, cron, tz, budgetMinutes: budget_minutes }))),
+  );
+
+  server.registerTool(
+    'list_schedules',
+    {
+      annotations: annotate('list_schedules'),
+      description: 'Recurring tasks in the projects you can see, with whether each is approved and when it runs next.',
+      inputSchema: z.object({ project: z.string().optional() }),
+    },
+    async ({ project }) => run(() => store.schedules.list(me, project).map(formatSchedule)),
+  );
+
+  server.registerTool(
+    'change_schedule',
+    {
+      annotations: annotate('change_schedule'),
+      description: 'Pause, resume or delete a schedule you proposed. To change what it asks, propose a new one.',
+      inputSchema: z.object({ schedule_id: z.number().int(), action: z.enum(['pause', 'resume', 'delete']) }),
+    },
+    async ({ schedule_id, action }) =>
+      run(() => {
+        if (action === 'delete') {
+          store.schedules.delete(me, schedule_id);
+          return `Deleted schedule ${schedule_id}.`;
+        }
+        return formatSchedule(store.schedules.update(me, schedule_id, { enabled: action === 'resume' }));
       }),
   );
 

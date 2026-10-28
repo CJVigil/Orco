@@ -1,3 +1,5 @@
+import type { ApprovalState } from './approvals.js';
+import { MAX_APPROVAL_TTL_SECONDS } from './approvals.js';
 import { checkTimeZone, nextRun, parseCron } from './cron.js';
 import { OrcoError } from './errors.js';
 import type { Participant, Store } from './store.js';
@@ -22,6 +24,10 @@ export interface Schedule {
   lastRun: string | null;
   lastTaskId: number | null;
   lastError: string | null;
+  /** For a schedule an agent proposed: its owner's decision. Null for schedules people set up. */
+  approval: ApprovalState | null;
+  /** Whose request each run is: the person who set it up, or who approved an agent's proposal. */
+  runAs: string | null;
   createdAt: string;
 }
 
@@ -43,6 +49,12 @@ interface ScheduleRow {
   project_id: number | null;
   creator_id: number;
   creator: string;
+  creator_kind: 'user' | 'agent';
+  creator_owner_id: number | null;
+  run_as_id: number | null;
+  run_as: string | null;
+  approval_id: number | null;
+  approval_state: ApprovalState | null;
   agent_id: number;
   agent: string;
   agent_owner_id: number | null;
@@ -61,6 +73,8 @@ interface ScheduleRow {
 
 const SELECT = `
   SELECT s.id, s.room_id, r.name AS room, p.name AS project, r.project_id, s.creator_id, c.name AS creator,
+         c.kind AS creator_kind, c.owner_id AS creator_owner_id, s.run_as_id, ra.name AS run_as,
+         s.approval_id, ap.state AS approval_state,
          s.agent_id, a.name AS agent, a.owner_id AS agent_owner_id, s.request, s.cron, s.tz, s.budget_minutes,
          s.budget_cents, s.enabled, s.next_run, s.last_run, s.last_task_id, s.last_error, s.created_at
   FROM schedules s
@@ -68,6 +82,8 @@ const SELECT = `
   LEFT JOIN projects p ON p.id = r.project_id
   JOIN participants c ON c.id = s.creator_id
   JOIN participants a ON a.id = s.agent_id
+  LEFT JOIN participants ra ON ra.id = s.run_as_id
+  LEFT JOIN approvals ap ON ap.id = s.approval_id
 `;
 
 function toSchedule(row: ScheduleRow): Schedule {
@@ -87,44 +103,86 @@ function toSchedule(row: ScheduleRow): Schedule {
     lastRun: row.last_run === null ? null : new Date(row.last_run).toISOString(),
     lastTaskId: row.last_task_id,
     lastError: row.last_error,
+    approval: row.approval_state,
+    runAs: row.run_as,
     createdAt: row.created_at,
   };
 }
 
 /**
- * Recurring tasks people set up ("every Monday at 9, triage new tickets"). The server only keeps the
- * schedule; when one is due it creates an ordinary task as the person who set it up, so consent rules
- * apply as usual and the bridge wakes the agent. A run is skipped while the previous one is still open.
+ * Recurring tasks ("every Monday at 9, triage new tickets"). The server only keeps the schedule; when
+ * one is due it creates an ordinary task as the person who set it up, so consent rules apply as usual
+ * and the bridge wakes the agent. A run is skipped while the previous one is still open. An agent can
+ * propose a schedule: it stays paused until the agent's owner approves, and then runs as the owner.
  */
 export class Schedules {
   constructor(private readonly store: Store) {}
 
   create(actor: Participant, input: ScheduleInput): Schedule {
-    if (actor.kind !== 'user') throw new OrcoError('forbidden', 'Only people set up schedules');
+    this.store.unscoped(actor, 'set up schedules');
     const { room, agent, request, cron, tz } = this.check(actor, input);
     const count = (this.store.db.prepare('SELECT count(*) AS n FROM schedules WHERE creator_id = ?').get(actor.id) as { n: number }).n;
     if (count >= MAX_PER_PERSON) throw new OrcoError('conflict', `You have ${MAX_PER_PERSON} schedules already`);
     const next = nextRun(parseCron(cron), this.store.now(), tz);
+    const proposed = actor.kind === 'agent';
     const { lastInsertRowid } = this.store.db
-      .prepare('INSERT INTO schedules (room_id, creator_id, agent_id, request, cron, tz, budget_minutes, budget_cents, next_run) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(room.id, actor.id, agent.id, request, cron, tz, input.budgetMinutes ?? null, input.budgetCents ?? null, next);
-    const schedule = this.byId(Number(lastInsertRowid))!;
-    this.store.audit.record(actor, 'schedule.create', { projectId: room.projectId, subject: `schedule:${schedule.id}`, detail: { agent: agent.name, room: room.ref, request, cron, tz } });
+      .prepare(
+        `INSERT INTO schedules (room_id, creator_id, agent_id, request, cron, tz, budget_minutes, budget_cents, next_run, enabled, run_as_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(room.id, actor.id, agent.id, request, cron, tz, input.budgetMinutes ?? null, input.budgetCents ?? null, next, proposed ? 0 : 1, proposed ? null : actor.id);
+    const id = Number(lastInsertRowid);
+    if (proposed) {
+      const approval = this.store.approvals.request(actor, {
+        room: room.ref,
+        summary: `Schedule a recurring task for ${agent.name} (${cron}, ${tz}): ${request}`.slice(0, 300),
+        details: `Each run is created as you, so it counts as your request. You can pause or delete it later under Tickets → Schedules.`,
+        approver: 'owner',
+        ttlSeconds: MAX_APPROVAL_TTL_SECONDS,
+      });
+      this.store.db.prepare('UPDATE schedules SET approval_id = ? WHERE id = ?').run(approval.id, id);
+    }
+    const schedule = this.byId(id)!;
+    this.store.audit.record(actor, 'schedule.create', { projectId: room.projectId, subject: `schedule:${id}`, detail: { agent: agent.name, room: room.ref, request, cron, tz, proposed } });
     this.changed(schedule);
     return schedule;
   }
 
-  /** The creator may change anything; the agent's owner may only pause or resume it. */
+  /** The owner's decision on an agent's proposed schedule. Called by Approvals. */
+  onApproval(approvalId: number, decision: 'approved' | 'denied', actor: Participant): void {
+    const row = this.store.db.prepare(`${SELECT} WHERE s.approval_id = ?`).get(approvalId) as ScheduleRow | undefined;
+    if (!row) return;
+    if (decision === 'approved') {
+      const next = nextRun(parseCron(row.cron), this.store.now(), row.tz);
+      this.store.db.prepare('UPDATE schedules SET enabled = 1, run_as_id = ?, next_run = ?, last_error = NULL WHERE id = ?').run(actor.id, next, row.id);
+    } else {
+      this.store.db.prepare('UPDATE schedules SET enabled = 0, last_error = ? WHERE id = ?').run(`Not approved by ${actor.name}.`, row.id);
+    }
+    this.changed(this.byId(row.id)!);
+  }
+
+  /**
+   * The person who set it up (or the owner of the agent that proposed it) may change anything; the
+   * proposing agent may pause or resume it once approved; the scheduled agent's owner may pause it.
+   */
   update(actor: Participant, id: number, input: Partial<ScheduleInput> & { enabled?: boolean }): Schedule {
     const row = this.visible(actor, id);
-    const isCreator = row.creator_id === actor.id;
+    const isManager = actor.kind === 'user' && (row.creator_id === actor.id || (row.creator_kind === 'agent' && row.creator_owner_id === actor.id));
+    const isProposer = actor.kind === 'agent' && row.creator_id === actor.id;
     const isOwner = row.agent_owner_id === actor.id;
     const onlyToggle = Object.keys(input).every((key) => key === 'enabled' || input[key as keyof typeof input] === undefined);
-    if (!isCreator && !(isOwner && onlyToggle)) {
-      throw new OrcoError('forbidden', isOwner ? `Only ${row.creator} can change what this schedule asks; you can pause it` : `Schedule ${id} is ${row.creator}'s`);
+    if (!isManager && !((isOwner || isProposer) && onlyToggle)) {
+      throw new OrcoError(
+        'forbidden',
+        isProposer ? 'Propose a new schedule instead of changing this one' : isOwner ? `Only ${row.creator} can change what this schedule asks; you can pause it` : `Schedule ${id} is ${row.creator}'s`,
+      );
     }
+    if (isProposer && input.enabled && row.run_as_id === null) throw new OrcoError('forbidden', 'This schedule is waiting for your owner\'s approval');
     const current = toSchedule(row);
-    const merged = isCreator && !onlyToggle ? this.check(actor, { ...current, ...stripUndefined(input) }) : null;
+    const merged = isManager && !onlyToggle ? this.check(actor, { ...current, ...stripUndefined(input) }) : null;
+    // A person who edits or turns on an agent's proposal takes it on: runs become their requests.
+    const runAs = isManager && (merged || input.enabled) ? actor.id : row.run_as_id;
+    if (input.enabled && runAs === null) throw new OrcoError('forbidden', 'This schedule is waiting for approval');
     const cron = merged?.cron ?? row.cron;
     const tz = merged?.tz ?? row.tz;
     const enabled = input.enabled ?? row.enabled === 1;
@@ -132,7 +190,7 @@ export class Schedules {
     this.store.db
       .prepare(
         `UPDATE schedules SET room_id = ?, agent_id = ?, request = ?, cron = ?, tz = ?, budget_minutes = ?, budget_cents = ?,
-           enabled = ?, next_run = ?, last_error = CASE WHEN ? THEN NULL ELSE last_error END WHERE id = ?`,
+           enabled = ?, next_run = ?, last_error = CASE WHEN ? THEN NULL ELSE last_error END, run_as_id = ? WHERE id = ?`,
       )
       .run(
         merged?.room.id ?? row.room_id,
@@ -145,6 +203,7 @@ export class Schedules {
         enabled ? 1 : 0,
         next,
         enabled && row.enabled === 0 ? 1 : 0,
+        runAs,
         id,
       );
     const schedule = this.byId(id)!;
@@ -155,7 +214,9 @@ export class Schedules {
 
   delete(actor: Participant, id: number): void {
     const row = this.visible(actor, id);
-    if (row.creator_id !== actor.id && row.agent_owner_id !== actor.id) throw new OrcoError('forbidden', `Schedule ${id} is ${row.creator}'s`);
+    const allowed = [row.creator_id, row.agent_owner_id, row.creator_kind === 'agent' ? row.creator_owner_id : null].includes(actor.id);
+    if (!allowed) throw new OrcoError('forbidden', `Schedule ${id} is ${row.creator}'s`);
+    if (row.approval_id !== null) this.store.approvals.withdraw(row.approval_id);
     this.store.db.prepare('DELETE FROM schedules WHERE id = ?').run(id);
     this.store.audit.record(actor, 'schedule.delete', { projectId: row.project_id, subject: `schedule:${id}`, detail: { request: row.request } });
     this.store.events.emit('schedule', { projectId: row.project_id });
@@ -172,7 +233,9 @@ export class Schedules {
   /** Creates the tasks that are due. Called once a minute by the server. */
   runDue(): Task[] {
     const now = this.store.now();
-    const due = this.store.db.prepare(`${SELECT} WHERE s.enabled = 1 AND s.next_run <= ? ORDER BY s.next_run`).all(now) as unknown as ScheduleRow[];
+    const due = this.store.db
+      .prepare(`${SELECT} WHERE s.enabled = 1 AND s.run_as_id IS NOT NULL AND s.next_run <= ? ORDER BY s.next_run`)
+      .all(now) as unknown as ScheduleRow[];
     const created: Task[] = [];
     for (const row of due) {
       let next: number;
@@ -189,7 +252,7 @@ export class Schedules {
         error = `Skipped a run: task #${previous.id} from the last run is still ${previous.state}.`;
       } else {
         try {
-          const creator = this.store.participantById(row.creator_id)!;
+          const creator = this.store.participantById(row.run_as_id ?? row.creator_id)!;
           const room = this.store.db.prepare('SELECT name FROM rooms WHERE id = ?').get(row.room_id) as { name: string };
           const task = this.store.tasks.create(creator, {
             agent: row.agent,
@@ -234,7 +297,6 @@ export class Schedules {
   }
 
   private visible(actor: Participant, id: number): ScheduleRow {
-    if (actor.kind !== 'user') throw new OrcoError('forbidden', 'Only people manage schedules');
     const row = this.store.db.prepare(`${SELECT} WHERE s.id = ?`).get(id) as ScheduleRow | undefined;
     if (!row || !this.store.canSee(actor, row.project_id)) throw new OrcoError('not_found', `No schedule ${id}`);
     return row;

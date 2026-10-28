@@ -137,6 +137,34 @@ describe('agent extras over MCP', () => {
   });
 });
 
+describe('agent project management over MCP', () => {
+  it('plans milestones and cycles, files tickets in bulk, and proposes a schedule', async () => {
+    const client = await connect(tokens['ana-claude']);
+    await call(client, 'create_milestone', { project: 'api', name: 'Launch', target_date: '2026-12-15' });
+    await call(client, 'update_milestone', { project: 'api', milestone: 'launch', description: 'Public beta' });
+    const { value: cycle } = await call(client, 'create_cycle', { project: 'api' });
+    const { value: filed } = await call(client, 'create_tickets', {
+      project: 'api',
+      tickets: [
+        { key: 'epic', title: 'Launch checklist', milestone: 'Launch', cycle: cycle.number },
+        { key: 'docs', title: 'Write the launch post', parent: 'epic', blocked_by: ['api'], labels: ['launch'] },
+        { key: 'api', title: 'Freeze the public API', parent: 'epic', priority: 'high' },
+      ],
+      create_labels: true,
+    });
+    assert.equal(filed.tickets.length, 3);
+    assert.deepEqual(filed.labels_created, ['launch']);
+    const docs = store.tickets.get(ana, filed.tickets.find((t: { key: string }) => t.key === 'docs').ref);
+    assert.equal(docs.blocked, true);
+    const { value: proposal } = await call(client, 'schedule_task', { room: 'api/general', agent: 'ana-claude', request: 'Weekly launch status', cron: '0 9 * * 1' });
+    assert.equal(proposal.approval, 'pending');
+    assert.equal((await call(client, 'list_schedules', { project: 'api' })).value.some((s: { id: number }) => s.id === proposal.id), true);
+    await call(client, 'change_schedule', { schedule_id: proposal.id, action: 'delete' });
+    const bad = await client.callTool({ name: 'complete_cycle', arguments: { project: 'api', cycle: 99 } });
+    assert.equal(bad.isError, true);
+  });
+});
+
 describe('agent extras over REST', () => {
   it('lets people file or dismiss suggested follow-ups', async () => {
     const task = store.tasks.create(ben, { agent: 'ana-claude', room: 'api/general', request: 'fix it' });
@@ -151,9 +179,10 @@ describe('agent extras over REST', () => {
     assert.equal(accepted.body.ticket.title, 'Test the empty-cart edge case');
   });
 
-  it('keeps schedules to people and shows agent spend to owners', async () => {
-    const denied = await api(tokens['ana-claude'], '/schedules', { room: 'api/general', agent: 'ana-claude', request: 'x', cron: '@daily' });
-    assert.equal(denied.status, 403);
+  it('holds agent-proposed schedules for approval and shows agent spend to owners', async () => {
+    const proposed = await api(tokens['ana-claude'], '/schedules', { room: 'api/general', agent: 'ana-claude', request: 'x', cron: '@daily' });
+    assert.equal(proposed.status, 201);
+    assert.deepEqual([proposed.body.enabled, proposed.body.approval], [false, 'pending']);
     const created = await api(tokens.ben, '/schedules', { room: 'api/general', agent: 'ana-claude', request: 'Weekly triage', cron: '0 9 * * 1', tz: 'Europe/Madrid' });
     assert.equal(created.status, 201);
     assert.equal(created.body.tz, 'Europe/Madrid');

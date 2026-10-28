@@ -69,10 +69,10 @@ describe('tickets over REST', () => {
     assert.equal((await api('ben', 'GET', '/tickets/API-1')).status, 404);
   });
 
-  it('keeps planning to people', async () => {
-    const res = await api('ana-claude', 'POST', '/projects/api/cycles', {});
-    assert.equal(res.status, 403);
-    assert.equal((await api('ana', 'POST', '/projects/api/cycles', {})).status, 201);
+  it('lets agents plan cycles but keeps workflow statuses to people', async () => {
+    assert.equal((await api('ana-claude', 'POST', '/projects/api/cycles', {})).status, 201);
+    assert.equal((await api('ana-claude', 'POST', '/projects/api/statuses', { name: 'QA', category: 'started' })).status, 403);
+    assert.equal((await api('ana', 'POST', '/projects/api/statuses', { name: 'QA', category: 'started' })).status, 201);
   });
 });
 

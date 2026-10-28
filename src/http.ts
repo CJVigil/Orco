@@ -836,6 +836,10 @@ export function createApp(store: Store, options: AppOptions = {}) {
   api.post('/agents/:name/policy', (req, res) => {
     res.json(store.setTaskPolicy(req.participant!, String(req.params.name), req.body?.policy));
   });
+  api.post('/agents/:name/followups', (req, res) => {
+    if (typeof req.body?.auto !== 'boolean') throw new OrcoError('invalid', 'auto must be true or false');
+    res.json(store.setAutoFileFollowups(req.participant!, String(req.params.name), req.body.auto));
+  });
   api.post('/agents/:name/trust', (req, res) => {
     res.json(store.setTrust(req.participant!, String(req.params.name), String(req.body?.user ?? ''), req.body?.trusted !== false));
   });

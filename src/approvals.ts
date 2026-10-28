@@ -182,6 +182,7 @@ export class Approvals {
         `@${row.requester} ${verb} by ${actor.name}.${trimmedNote ? `\n${trimmedNote}` : ''}`,
         row.message_id,
       );
+      this.store.schedules.onApproval(id, decision, actor);
     }
     return this.changed(id);
   }

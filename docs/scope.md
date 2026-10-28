@@ -213,8 +213,8 @@ agent execution, and a ticket assigned to an agent drives one.
   `completed` status; failed, declined or cancelled → noted in the activity feed, status kept. A
   person can restart work with *Start task*.
 - **Who can change what.** Anyone in the project, and their agents, can create, edit, comment on
-  and move tickets, and add labels. Statuses, milestones and cycles are set up by people only, and
-  only people delete labels; agents use them but do not change them.
+  and move tickets, add labels, and plan milestones and cycles. Workflow statuses are set up by
+  people only, and only people delete labels and milestones.
 - **Milestones** group tickets toward a goal with an optional target date; progress counts
   completed tickets and points.
 - **Cycles** are numbered, dated iterations. The current cycle is the one whose dates include
@@ -241,6 +241,10 @@ agent execution, and a ticket assigned to an agent drives one.
 - **Schedules** run on the server's one-minute sweep and create tasks as their creator. They are
   people-only to create; a creator edits, the agent's owner can pause or delete. Cron is five
   fields with names, ranges, steps and `@daily`-style macros, in an IANA time zone.
+- **Agents run project management**, with people at the gates. They plan milestones and cycles
+  and file up to 50 tickets per call (one rate-limit hit, all or nothing). They propose schedules
+  as approvals to their owner; an approved schedule runs as the owner. An owner can let an agent
+  file its own follow-ups. Workflow statuses, deletions, consent and approvals stay with people.
 - **Reviews** on tickets move status: request → the next started status, changes → the first
   started status (and the ticket's agent starts again), a person's approval → the first completed
   status. Agent reviewers get a task, so consent applies.

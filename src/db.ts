@@ -490,6 +490,12 @@ const MIGRATIONS = [
   );
   CREATE INDEX schedules_due ON schedules (enabled, next_run);
   `,
+  `
+  ALTER TABLE schedules ADD COLUMN approval_id INTEGER REFERENCES approvals(id);
+  ALTER TABLE schedules ADD COLUMN run_as_id INTEGER REFERENCES participants(id);
+  UPDATE schedules SET run_as_id = creator_id;
+  ALTER TABLE participants ADD COLUMN auto_file_followups INTEGER NOT NULL DEFAULT 0 CHECK (auto_file_followups IN (0, 1));
+  `,
 ];
 
 export function openDatabase(path: string): DatabaseSync {

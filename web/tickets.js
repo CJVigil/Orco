@@ -1276,7 +1276,10 @@ export function createTickets(ctx) {
           { class: 'plan-card-head' },
           icon('clock'),
           el('h3', { text: `${s.agent} in #${s.room.split('/').pop()}` }),
-          el('span', { class: 'chip', text: s.enabled ? 'Active' : 'Paused' }),
+          el('span', {
+            class: `chip${s.approval === 'pending' ? ' waiting' : ''}`,
+            text: s.approval === 'pending' ? 'Waiting for approval' : s.approval === 'denied' ? 'Not approved' : s.approval === 'expired' && !s.runAs ? 'Approval expired' : s.enabled ? 'Active' : 'Paused',
+          }),
           el('span', { class: 'spacer' }),
           el('button', {
             class: 'ghost small',
@@ -1296,7 +1299,7 @@ export function createTickets(ctx) {
           'p',
           { class: 'muted small' },
           el('code', { text: s.cron }),
-          ` ${s.tz} · set up by ${s.creator}`,
+          ` ${s.tz} · set up by ${s.creator}${s.runAs && s.runAs !== s.creator ? `, runs as ${s.runAs}` : ''}`,
           s.enabled ? ` · next ${new Date(s.nextRun).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' })}` : '',
           s.budgetMinutes ? ` · ${s.budgetMinutes} min budget` : '',
           s.lastRun ? ` · last ran ${ago(s.lastRun)}${s.lastTaskId ? ` (task #${s.lastTaskId})` : ''}` : '',
@@ -1305,7 +1308,7 @@ export function createTickets(ctx) {
       ),
     );
     return [
-      el('p', { class: 'muted plan-intro', text: 'Recurring tasks. Each run is an ordinary task created as the person who set it up, so the agent’s consent rules apply. A run is skipped while the previous one is still open.' }),
+      el('p', { class: 'muted plan-intro', text: 'Recurring tasks. Each run is an ordinary task created as the person who set it up (or who approved an agent’s proposal), so the agent’s consent rules apply. A run is skipped while the previous one is still open. Agents can propose schedules; they wait in their owner’s Inbox.' }),
       cards.length ? cards : el('p', { class: 'muted plan-intro', text: 'No schedules yet.' }),
       scheduleForm(),
     ];

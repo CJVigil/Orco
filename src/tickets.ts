@@ -878,7 +878,8 @@ export class Tickets {
   }
 
   createMilestone(actor: Participant, project: string, input: { name: string; description?: string; targetDate?: string | null }): Milestone {
-    const proj = this.planner(actor, project);
+    const proj = this.project(actor, project);
+    this.store.checkRate(actor, 'post');
     const name = input.name.trim();
     if (!name || name.length > 80) throw new OrcoError('invalid', 'Milestone names are 1-80 characters');
     const description = (input.description ?? '').trim().slice(0, 2000);
@@ -897,7 +898,8 @@ export class Tickets {
   }
 
   updateMilestone(actor: Participant, project: string, id: number, input: { name?: string; description?: string; targetDate?: string | null }): Milestone {
-    const proj = this.planner(actor, project);
+    const proj = this.project(actor, project);
+    this.store.checkRate(actor, 'post');
     const current = this.milestones(proj.id).find((m) => m.id === id);
     if (!current) throw new OrcoError('not_found', `No milestone ${id} in ${proj.name}`);
     const name = input.name === undefined ? current.name : input.name.trim();
@@ -926,7 +928,8 @@ export class Tickets {
   }
 
   createCycle(actor: Participant, project: string, input: { startsOn?: string; endsOn?: string } = {}): Cycle {
-    const proj = this.planner(actor, project);
+    const proj = this.project(actor, project);
+    this.store.checkRate(actor, 'post');
     const existing = this.cycles(proj.id);
     const last = existing.at(-1);
     const afterLast = last ? addDays(last.endsOn, 1) : null;
@@ -943,7 +946,8 @@ export class Tickets {
   }
 
   completeCycle(actor: Participant, project: string, id: number): { cycle: Cycle; movedTo: number | null; moved: number } {
-    const proj = this.planner(actor, project);
+    const proj = this.project(actor, project);
+    this.store.checkRate(actor, 'post');
     const list = this.cycles(proj.id);
     const cycle = list.find((c) => c.id === id);
     if (!cycle) throw new OrcoError('not_found', `No cycle ${id} in ${proj.name}`);
@@ -1124,7 +1128,7 @@ export class Tickets {
   }
 
   private planner(actor: Participant, name: string): Project {
-    if (actor.kind !== 'user') throw new OrcoError('forbidden', 'Only people can change workflows, labels, milestones and cycles');
+    if (actor.kind !== 'user') throw new OrcoError('forbidden', 'Only people change workflow statuses or delete labels and milestones');
     return this.project(actor, name);
   }
 

@@ -272,10 +272,9 @@ describe('cron', () => {
 });
 
 describe('schedules', () => {
-  it('start tasks as the person who set them up, skip while the last run is open, and stay people-only', () => {
+  it('start tasks as the person who set them up, and skip while the last run is open', () => {
     const schedule = store.schedules.create(ben, { room: 'api/general', agent: 'ana-claude', request: 'Triage new tickets', cron: '0 9 * * *', budgetMinutes: 20 });
     assert.equal(schedule.nextRun, '2026-11-03T09:00:00.000Z');
-    assert.equal(code(() => store.schedules.create(anaClaude, { room: 'api/general', agent: 'ben-codex', request: 'x', cron: '@daily' })), 'forbidden');
     assert.equal(code(() => store.schedules.create(ben, { room: 'api/general', agent: 'ana-claude', request: 'x', cron: '@daily', tz: 'Mars/Olympus' })), 'invalid');
     assert.deepEqual(store.schedules.runDue(), []);
     clock = Date.parse('2026-11-03T09:00:30Z');
@@ -295,6 +294,55 @@ describe('schedules', () => {
     assert.deepEqual(store.schedules.list(cara), []);
     store.schedules.delete(ben, schedule.id);
     assert.deepEqual(store.schedules.list(ben), []);
+  });
+});
+
+describe('agent-proposed schedules', () => {
+  it('wait for the owner, then run as the owner', () => {
+    const proposed = store.schedules.create(anaClaude, { room: 'api/general', agent: 'ana-claude', request: 'Triage new tickets', cron: '0 9 * * *' });
+    assert.equal(proposed.enabled, false);
+    assert.equal(proposed.approval, 'pending');
+    assert.equal(code(() => store.schedules.update(anaClaude, proposed.id, { enabled: true })), 'forbidden');
+    assert.equal(code(() => store.schedules.update(anaClaude, proposed.id, { request: 'something else' })), 'forbidden');
+    const [approval] = store.approvals.list(ana, { pending: true, forMe: true });
+    assert.match(approval!.summary, /Schedule a recurring task for ana-claude/);
+    clock = Date.parse('2026-11-03T09:00:30Z');
+    assert.deepEqual(store.schedules.runDue(), [], 'nothing runs before approval');
+    store.approvals.decide(ana, approval!.id, 'approved');
+    const approved = store.schedules.list(ana)[0]!;
+    assert.deepEqual([approved.enabled, approved.approval, approved.runAs], [true, 'approved', 'ana']);
+    clock = Date.parse('2026-11-04T09:00:30Z');
+    const [task] = store.schedules.runDue();
+    assert.equal(task?.requester, 'ana');
+    assert.equal(task?.state, 'requested', 'the owner asking their own agent needs no consent');
+    // The agent may pause and resume its approved schedule, and delete it.
+    assert.equal(store.schedules.update(anaClaude, proposed.id, { enabled: false }).enabled, false);
+    assert.equal(store.schedules.update(anaClaude, proposed.id, { enabled: true }).enabled, true);
+    store.schedules.delete(anaClaude, proposed.id);
+  });
+
+  it('stay off when the owner denies', () => {
+    const proposed = store.schedules.create(anaClaude, { room: 'api/general', agent: 'ben-codex', request: 'Nightly report', cron: '@daily' });
+    const [approval] = store.approvals.list(ana, { pending: true, forMe: true });
+    assert.equal(code(() => store.approvals.decide(ben, approval!.id, 'approved')), 'forbidden');
+    store.approvals.decide(ana, approval!.id, 'denied');
+    const denied = store.schedules.list(ana).find((s) => s.id === proposed.id)!;
+    assert.deepEqual([denied.enabled, denied.approval, denied.lastError], [false, 'denied', 'Not approved by ana.']);
+  });
+});
+
+describe('auto-filed follow-ups', () => {
+  it('are filed as tickets when the owner allows it, and only the owner can allow it', () => {
+    assert.equal(code(() => store.setAutoFileFollowups(anaClaude, 'ana-claude', true)), 'not_found');
+    assert.equal(code(() => store.setAutoFileFollowups(ben, 'ana-claude', true)), 'not_found');
+    assert.equal(store.setAutoFileFollowups(ana, 'ana-claude', true).autoFileFollowups, true);
+    const task = accepted();
+    const done = store.tasks.update(anaClaude, task.id, 'done', 'ok', { followups: [{ title: 'Document the new flag' }] });
+    assert.equal(done.followups[0]!.state, 'accepted');
+    const ticket = store.tickets.get(ben, done.followups[0]!.ticket!);
+    assert.equal(ticket.creator, 'ana-claude');
+    assert.match(ticket.description, /Filed by ana-claude while working task #/);
+    assert.deepEqual(store.suggestions.pendingFor(ben), []);
   });
 });
 

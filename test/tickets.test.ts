@@ -131,11 +131,15 @@ describe('workflow', () => {
     assert.throws(() => store.tickets.updateStatus(ana, 'api', done.id, { category: 'started' }), /completed/);
   });
 
-  it('is set up by people, not agents', () => {
+  it('lets agents plan milestones and cycles, but keeps statuses and deletions to people', () => {
     assert.throws(() => store.tickets.addStatus(anaClaude, 'api', { name: 'QA', category: 'started' }), (e: OrcoError) => e.code === 'forbidden');
     const bug = store.tickets.createLabel(anaClaude, 'api', 'bug');
     assert.throws(() => store.tickets.deleteLabel(anaClaude, 'api', bug.id), (e: OrcoError) => e.code === 'forbidden');
-    assert.throws(() => store.tickets.createCycle(anaClaude, 'api'), (e: OrcoError) => e.code === 'forbidden');
+    const cycle = store.tickets.createCycle(anaClaude, 'api');
+    const beta = store.tickets.createMilestone(anaClaude, 'api', { name: 'Beta' });
+    assert.equal(store.tickets.updateMilestone(anaClaude, 'api', beta.id, { targetDate: '2026-12-01' }).targetDate, '2026-12-01');
+    assert.throws(() => store.tickets.deleteMilestone(anaClaude, 'api', beta.id), (e: OrcoError) => e.code === 'forbidden');
+    assert.equal(store.tickets.completeCycle(anaClaude, 'api', cycle.id).cycle.number, 1);
   });
 });
 

@@ -73,13 +73,28 @@ export class Suggestions {
     if ((input.description ?? '').length > MAX_DESCRIPTION) throw new OrcoError('invalid', `Follow-up descriptions are at most ${MAX_DESCRIPTION} characters`);
   }
 
+  /** Records a suggestion; if the agent's owner lets it, files it as a ticket straight away. */
   create(actor: Participant, taskId: number, projectId: number, input: { title: string; description?: string }): void {
     this.check(input);
     const title = input.title.trim().replace(/\s+/g, ' ');
+    const description = (input.description ?? '').trim();
     const { lastInsertRowid } = this.store.db
       .prepare('INSERT INTO suggestions (task_id, project_id, author_id, title, description) VALUES (?, ?, ?, ?, ?)')
-      .run(taskId, projectId, actor.id, title, (input.description ?? '').trim());
-    this.store.audit.record(actor, 'suggestion.create', { projectId, subject: `suggestion:${lastInsertRowid}`, detail: { taskId, title } });
+      .run(taskId, projectId, actor.id, title, description);
+    const id = Number(lastInsertRowid);
+    this.store.audit.record(actor, 'suggestion.create', { projectId, subject: `suggestion:${id}`, detail: { taskId, title } });
+    if (actor.kind === 'agent' && this.store.autoFilesFollowups(actor)) {
+      const project = (this.store.db.prepare('SELECT name FROM projects WHERE id = ?').get(projectId) as { name: string }).name;
+      const footer = `Filed by ${actor.name} while working task #${taskId}.`;
+      // Bounded (ten follow-ups at most) and part of one task update, so it counts once.
+      const { ticket } = this.store.withoutRateLimit(() =>
+        this.store.tickets.create(actor, project, { title, description: description ? `${description}\n\n${footer}` : footer }),
+      );
+      this.store.db
+        .prepare("UPDATE suggestions SET state = 'accepted', ticket_id = ?, decided_by = ?, decided_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?")
+        .run(ticket.id, actor.id, id);
+      this.store.audit.record(actor, 'suggestion.accept', { projectId, subject: `suggestion:${id}`, detail: { taskId, ticket: ticket.ref, auto: true } });
+    }
     this.store.events.emit('suggestion', { projectId });
   }
 

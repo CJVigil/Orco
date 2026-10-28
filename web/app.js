@@ -802,6 +802,23 @@ async function showMyAgents() {
           : null,
         el('label', { class: 'small', text: 'Who may give it tasks' }),
         select,
+        el(
+          'label',
+          { class: 'check small', title: 'Otherwise its suggestions wait in your Inbox for you to file or dismiss' },
+          el('input', {
+            type: 'checkbox',
+            checked: agent.autoFileFollowups,
+            onchange: async (event) => {
+              try {
+                await api(`/agents/${encodeURIComponent(agent.name)}/followups`, { method: 'POST', body: { auto: event.target.checked } });
+              } catch (err) {
+                alert(err.message);
+              }
+              void showMyAgents();
+            },
+          }),
+          'File the follow-ups it suggests as tickets without asking me',
+        ),
         agent.taskPolicy === 'ask'
           ? el(
               'div',
