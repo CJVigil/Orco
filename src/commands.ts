@@ -5,6 +5,8 @@ import { parseArgs } from 'node:util';
 import { Backups, backupTo, networkFilesystemWarning, restore } from './backups.js';
 import { Bridge } from './bridge/bridge.js';
 import { loadBridgeConfig } from './bridge/config.js';
+import { doctor } from './bridge/doctor.js';
+import { GiteaSync, loadGiteaSyncConfig } from './sync/gitea.js';
 import { CLIENT_COMMANDS, CLIENT_USAGE, readStdin, runClient } from './client.js';
 import { openDatabase } from './db.js';
 import { createApp } from './http.js';
@@ -32,6 +34,8 @@ Server commands (run where the database lives):
 Bridge commands (run on each developer's machine):
   bridge                     Wake local agents when they are assigned tasks
   bridge example             Print an example bridge config
+  bridge doctor              Check each bridge agent: token, tool installed, flags, model API
+  sync gitea <config> [--once]   Keep Gitea/Forgejo issues and Orco tickets in step (see docs/gitea-sync.md)
 
 Options:
   --config <path> Bridge config (env ORCO_BRIDGE_CONFIG, default ./orco-bridge.json)
@@ -74,33 +78,12 @@ function limitsFromEnv(): Partial<Limits> {
 const EXAMPLE_BRIDGE_CONFIG = {
   server: 'https://orco.example.internal',
   agents: [
+    { name: 'carlos-claude', token_env: 'ORCO_TOKEN_CARLOS_CLAUDE', preset: 'claude', cwd: '~/code/my-repo', timeout_seconds: 1800 },
+    { name: 'carlos-codex', token_env: 'ORCO_TOKEN_CARLOS_CODEX', preset: 'codex', cwd: '~/code/my-repo' },
     {
-      name: 'carlos-claude',
-      token_env: 'ORCO_TOKEN_CARLOS_CLAUDE',
-      command: ['claude', '-p', '{prompt}', '--allowedTools', 'mcp__orco'],
-      cwd: '~/code/my-repo',
-      timeout_seconds: 1800,
-      max_concurrent: 1,
-    },
-    {
-      name: 'carlos-codex',
-      token_env: 'ORCO_TOKEN_CARLOS_CODEX',
-      command: [
-        'codex',
-        'exec',
-        '--sandbox',
-        'read-only',
-        '-c',
-        'mcp_servers.orco.url="https://orco.example.internal/mcp"',
-        '-c',
-        'mcp_servers.orco.bearer_token_env_var="ORCO_TOKEN_CARLOS_CODEX"',
-        '-c',
-        'mcp_servers.orco.enabled_tools=["whoami","read","post","get_task","list_tasks","update_task","acquire_lock","renew_lock","release_lock","list_locks","request_approval","get_approval","get_ticket","update_ticket","comment_ticket","my_work","ask_question","propose_plan","report_progress","wait_for","project_notes","flag_message","search","read_file","my_notes","remember","request_review","submit_review","catch_up","checkpoint","remind_me"]',
-        '-c',
-        'mcp_servers.orco.default_tools_approval_mode="approve"',
-        '{prompt}',
-      ],
-      cwd: '~/code/my-repo',
+      name: 'carlos-local',
+      token_env: 'ORCO_TOKEN_CARLOS_LOCAL',
+      model: { base_url: 'http://localhost:11434/v1', name: 'qwen3:14b' },
     },
   ],
 };
@@ -158,6 +141,7 @@ export function main(): void {
       'create-milestones': { type: 'boolean' },
       'dry-run': { type: 'boolean' },
       force: { type: 'boolean' },
+      once: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
       version: { type: 'boolean', short: 'v' },
     },
@@ -177,6 +161,14 @@ export function main(): void {
       process.stdout.write(`${JSON.stringify(EXAMPLE_BRIDGE_CONFIG, null, 2)}\n`);
       return;
     }
+    if (sub === 'doctor') {
+      const config = loadBridgeConfig(values.config);
+      void doctor(config, process.env).then((findings) => {
+        for (const f of findings) console.log(`${f.ok ? 'ok  ' : 'FAIL'} ${f.agent}: ${f.text}`);
+        if (findings.some((f) => !f.ok)) process.exitCode = 1;
+      });
+      return;
+    }
     if (sub !== undefined) throw new OrcoError('invalid', `Unknown bridge command ${sub}`);
     void runBridge(values.config);
     return;
@@ -187,6 +179,28 @@ export function main(): void {
     if (!sub) throw new OrcoError('invalid', 'Usage: orco restore <backup file> [--force]');
     const { replaced } = restore(sub, values.db, { force: values.force });
     console.log(`Restored ${values.db} from ${sub}.${replaced ? ` The database it replaced is at ${replaced}.` : ''}`);
+    return;
+  }
+
+  if (command === 'sync') {
+    if (sub !== 'gitea' || !args[0]) throw new OrcoError('invalid', 'Usage: orco sync gitea <config.json> [--once]');
+    const config = loadGiteaSyncConfig(args[0]);
+    const orcoToken = process.env[config.orco.token_env];
+    const giteaToken = process.env[config.gitea.token_env];
+    if (!orcoToken || !giteaToken) throw new OrcoError('invalid', `Set ${config.orco.token_env} and ${config.gitea.token_env} first`);
+    const sync = new GiteaSync(config, { orco: orcoToken, gitea: giteaToken }, (m) => console.log(`${new Date().toISOString()} ${m}`));
+    if (values.once) {
+      void sync.runOnce().catch((err: Error) => {
+        console.error(err.message);
+        process.exitCode = 1;
+      });
+      return;
+    }
+    const stop = new AbortController();
+    process.once('SIGINT', () => stop.abort());
+    process.once('SIGTERM', () => stop.abort());
+    console.log(`Syncing ${config.repos.map((r) => `${r.repo} ↔ ${r.project}`).join(', ')} every ${config.poll_seconds}s`);
+    void sync.run(stop.signal);
     return;
   }
 

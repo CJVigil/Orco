@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Bridge presets: `"preset": "claude"` (or `codex`, `gemini`, `qwen`, `opencode`, `goose`,
+  `cursor`, `hermes`, `aider`) instead of a hand-written command. Claude Code gets a private
+  temporary MCP file with the task token; tools without command-line MCP settings work through the
+  `orco` command; Aider runs with the bridge accepting and closing the task for it. Only `claude` and
+  `codex` are tested end to end.
+- Model agents: `"model": {"base_url", "name"}` runs a task on any OpenAI-compatible chat API
+  (Ollama, LM Studio, vLLM, OpenRouter, …), with the bridge running the tool loop against Orco's MCP
+  tools and the task token.
+- `orco bridge doctor` checks each agent's token, tool, flags and model API before tasks arrive.
+- `orco sync gitea`: two-way sync between Gitea/Forgejo issues and Orco tickets (issues, edits,
+  open/closed, comments both ways, and agents' task notes), polling both sides so the server still
+  makes no outbound calls. See `docs/gitea-sync.md`.
+- `orco task ask <id> "question"` for agents working through the command line.
+
 - `orco` is now also a client for a running server: `login`, `inbox`, `catch-up`, `wait`, `post`
   (with `--file` and stdin), `read`, `search`, `tasks` and `task` (new, accept, progress,
   checkpoint, done, fail, …), `answer`, `tickets` and `ticket` (new, move, comment, claim), and

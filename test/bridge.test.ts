@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
+import express from 'express';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { after, afterEach, before, describe, it } from 'node:test';
 import { Bridge, type Logger } from '../src/bridge/bridge.js';
 import { type BridgeAgentConfig, parseBridgeConfig } from '../src/bridge/config.js';
+import { doctor } from '../src/bridge/doctor.js';
 import { openDatabase } from '../src/db.js';
 import { createApp } from '../src/http.js';
 import { OrcoError, type Participant, Store } from '../src/store.js';
@@ -68,8 +71,9 @@ async function startBridge(mode: string, agent: Partial<BridgeAgentConfig> = {},
           timeout_seconds: 30,
           max_concurrent: 1,
           task_tokens: true,
+          lifecycle: 'agent',
           ...agent,
-        },
+        } as BridgeAgentConfig,
       ],
     },
     {
@@ -201,7 +205,7 @@ describe('bridge', () => {
 
   it('refuses a token that belongs to a different agent', async () => {
     const bridge = new Bridge(
-      { server: baseUrl, agents: [{ name: 'ana-bot', token_env: 'T', command: ['true'], timeout_seconds: 30, max_concurrent: 1, task_tokens: true }] },
+      { server: baseUrl, agents: [{ name: 'ana-bot', token_env: 'T', command: ['true'], timeout_seconds: 30, max_concurrent: 1, task_tokens: true, lifecycle: 'agent' }] },
       { env: { T: otherToken }, logger: quiet },
     );
     await assert.rejects(bridge.start(), /belongs to agent ana-other/);
@@ -236,5 +240,117 @@ describe('bridge config', () => {
         }),
       /lists agent a twice/,
     );
+  });
+});
+
+describe('bridge presets and lifecycles', () => {
+  it('resolves presets into commands, prompts and lifecycles', () => {
+    const config = parseBridgeConfig({
+      server: 'http://orco.test',
+      agents: [
+        { name: 'g', token_env: 'G', preset: 'gemini' },
+        { name: 'a', token_env: 'A', preset: 'aider' },
+        { name: 'c', token_env: 'C', preset: 'claude' },
+        { name: 'm', token_env: 'M', model: { base_url: 'http://localhost:11434/v1', name: 'qwen3' } },
+      ],
+    });
+    const [gemini, aider, claude, model] = config.agents;
+    assert.deepEqual(gemini!.command.slice(0, 3), ['gemini', '--approval-mode', 'yolo']);
+    assert.match(gemini!.prompt_template!, /orco task accept \{task_id\}/);
+    assert.equal(aider!.lifecycle, 'bridge');
+    assert.ok(claude!.command.includes('{mcp_config}'));
+    assert.equal(claude!.prompt_template, undefined, 'MCP presets use the default prompt');
+    assert.equal(model!.model?.max_turns, 40);
+    assert.throws(() => parseBridgeConfig({ server: 'http://x.test', agents: [{ name: 'x', token_env: 'X', preset: 'claude', command: ['y'] }] }), /exactly one of command, preset or model/);
+    assert.throws(() => parseBridgeConfig({ server: 'http://x.test', agents: [{ name: 'x', token_env: 'X' }] }), /exactly one/);
+  });
+
+  it('closes the task for tools that cannot reach Orco, from their output or exit code', async () => {
+    await startBridge('plain', { lifecycle: 'bridge' });
+    const ok = await settled(task('tidy up the imports').id);
+    assert.equal(ok.state, 'done');
+    assert.match(ok.note!, /Edited 2 files/);
+    await Promise.all(bridges.splice(0).map((bridge) => bridge.stop()));
+    await startBridge('plain-fail', { lifecycle: 'bridge' });
+    const failed = await settled(task('this will fail').id);
+    assert.equal(failed.state, 'failed');
+    assert.match(failed.note!, /code 4/);
+  });
+
+  it('writes a private MCP config holding the task token, and removes it after the run', async () => {
+    await startBridge('mcpconfig', { command: [process.execPath, FAKE_AGENT, '{prompt}', '{task_id}', '{mcp_config}'] });
+    const done = await settled(task('check the connection').id);
+    const seen = JSON.parse(done.note!) as { url: string; task: boolean; path: string; cli: boolean };
+    assert.equal(seen.url, `${baseUrl}/mcp`);
+    assert.equal(seen.task, true, 'the config carries a task token, not the agent token');
+    assert.equal(seen.cli, true, 'ORCO_TOKEN carries the same token for the orco command');
+    await waitFor(() => !existsSync(seen.path), 'the config file to be removed');
+  });
+});
+
+describe('bridge with a model', () => {
+  it('runs the tool loop against an OpenAI-compatible API until the task is closed', async () => {
+    const requests: { tools: { function: { name: string } }[]; messages: { role: string; content: string | null }[] }[] = [];
+    let taskId = 0;
+    const script = [
+      { tool_calls: [{ id: 'c1', type: 'function', function: { name: 'update_task', arguments: '' } }] },
+      { tool_calls: [{ id: 'c2', type: 'function', function: { name: 'report_progress', arguments: '' } }] },
+      { tool_calls: [{ id: 'c3', type: 'function', function: { name: 'update_task', arguments: '' } }] },
+      { content: 'All done.' },
+    ];
+    const args = [
+      () => ({ task_id: taskId, state: 'accepted' }),
+      () => ({ task_id: taskId, text: 'reading the logs', percent: 50 }),
+      () => ({ task_id: taskId, state: 'done', note: 'The cache key was wrong; fixed it.' }),
+    ];
+    const api = express();
+    api.use(express.json({ limit: '4mb' }));
+    api.post('/v1/chat/completions', (req, res) => {
+      requests.push(req.body);
+      const turn = requests.length - 1;
+      const step = structuredClone(script[turn] ?? { content: 'stop' }) as { content?: string; tool_calls?: { function: { arguments: string } }[] };
+      if (step.tool_calls) step.tool_calls[0]!.function.arguments = JSON.stringify(args[turn]!());
+      res.json({ choices: [{ message: { role: 'assistant', content: step.content ?? null, ...(step.tool_calls ? { tool_calls: step.tool_calls } : {}) } }] });
+    });
+    const server = api.listen(0, '127.0.0.1');
+    await new Promise((resolve) => server.once('listening', resolve));
+    const modelUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`;
+    try {
+      await startBridge('unused', { command: [], model: { base_url: modelUrl, name: 'fake-model', max_turns: 10 } });
+      taskId = task('why is the cache cold?').id;
+      const done = await settled(taskId);
+      assert.equal(done.state, 'done');
+      assert.equal(done.note, 'The cache key was wrong; fixed it.');
+      const offered = requests[0]!.tools.map((t) => t.function.name);
+      assert.ok(offered.includes('update_task') && offered.includes('read'));
+      assert.ok(!offered.includes('create_project') && !offered.includes('add_member'), 'only task tools by default');
+      assert.match(requests[0]!.messages[1]!.content!, new RegExp(`Task #${taskId}`));
+      await waitFor(() => requests.length === 4, 'the model to be told the task is closed');
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+});
+
+describe('bridge doctor', () => {
+  it('checks tokens, installed tools and their flags', async () => {
+    const config = parseBridgeConfig({
+      server: baseUrl,
+      agents: [
+        { name: 'ana-bot', token_env: 'BOT_TOKEN', preset: 'gemini' },
+        { name: 'ana-other', token_env: 'OTHER', command: ['missing-tool', '-p', '{prompt}'] },
+      ],
+    });
+    const probe = (command: string) => (command === 'gemini' ? 'Usage: gemini [options]\n  -p, --prompt\n  --approval-mode <mode>\n' : command === 'orco' ? '0.1.0' : null);
+    const findings = await doctor(config, { BOT_TOKEN: botToken, OTHER: otherToken }, probe);
+    const text = findings.map((f) => `${f.ok ? 'ok' : 'FAIL'} ${f.agent}: ${f.text}`).join('\n');
+    assert.match(text, /ok ana-bot: signs in/);
+    assert.match(text, /ok ana-bot: gemini is installed and accepts --approval-mode -p/);
+    assert.match(text, /ok ana-bot: orco is on PATH/);
+    assert.match(text, /FAIL ana-other: missing-tool is not installed/);
+    const strict = await doctor(config, { BOT_TOKEN: botToken, OTHER: otherToken }, (command) => (command === 'gemini' ? 'Usage: gemini -p' : null));
+    assert.ok(strict.some((f) => !f.ok && /does not mention --approval-mode/.test(f.text)));
+    assert.ok(strict.some((f) => !f.ok && /orco is not on PATH/.test(f.text)));
   });
 });

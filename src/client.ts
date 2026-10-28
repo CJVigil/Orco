@@ -39,6 +39,7 @@ export const CLIENT_USAGE = `Client commands (talk to a running server; set ORCO
   task accept|done|fail|decline|cancel <id> [note...] [--link URL]...
   task progress <id> <text...> [--percent N]
   task checkpoint <id> <text...>
+  task ask <id> <question...>   Ask the requester something you need; the task waits for the answer
   answer <question-id> <answer...>
   tickets [project] [--assignee NAME|me] [--status S] [--all]
   ticket <ref>
@@ -409,13 +410,19 @@ export async function runClient(argv: string[], io: ClientIO): Promise<number> {
           print(task, () => `Task #${task.id}: ${task.progress?.text}`);
           return 0;
         }
+        if (sub === 'ask') {
+          const id = int(need(args[0], 'task ask <id> <question...>'), 'The task id');
+          const question = (await call('POST', `/api/tasks/${id}/questions`, { question: await textArg(args.slice(1), 'task ask <id> <question...>') })) as Json;
+          print(question, () => `Asked ${question.target} (question ${question.id}); the task waits for the answer.`);
+          return 0;
+        }
         if (sub === 'checkpoint') {
           const id = int(need(args[0], 'task checkpoint <id> <text...>'), 'The task id');
           const task = (await call('POST', `/api/tasks/${id}/checkpoint`, { text: await textArg(args.slice(1), 'task checkpoint <id> <text...>') })) as Json;
           print(task, () => `Checkpoint saved on task #${task.id}.`);
           return 0;
         }
-        throw new ClientError('Usage: orco task <id> | new | accept | done | fail | decline | cancel | progress | checkpoint (orco --help)');
+        throw new ClientError('Usage: orco task <id> | new | accept | done | fail | decline | cancel | progress | checkpoint | ask (orco --help)');
       }
       case 'answer': {
         const id = int(need(rest[0], 'answer <question-id> <answer...>'), 'The question id');

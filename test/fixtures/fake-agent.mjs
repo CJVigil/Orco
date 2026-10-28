@@ -39,6 +39,19 @@ if (FAKE_MODE === 'ask') {
     await call(`/tasks/${ORCO_TASK_ID}`, { state: 'accepted' });
     await call(`/tasks/${ORCO_TASK_ID}/reminders`, { in_minutes: 1, note: 'check CI' });
   }
+} else if (FAKE_MODE === 'plain') {
+  // A tool that cannot reach Orco: it prints a summary and exits; the bridge closes the task.
+  console.log('Edited 2 files: src/a.ts, src/b.ts');
+} else if (FAKE_MODE === 'plain-fail') {
+  console.error('model quota exceeded');
+  process.exit(4);
+} else if (FAKE_MODE === 'mcpconfig') {
+  // Reads the private MCP config the bridge wrote for this run, and reports what it saw.
+  const { readFileSync } = await import('node:fs');
+  const config = JSON.parse(readFileSync(process.argv[4], 'utf8'));
+  const auth = config.mcpServers.orco.headers.Authorization;
+  await call(`/tasks/${ORCO_TASK_ID}`, { state: 'accepted' });
+  await call(`/tasks/${ORCO_TASK_ID}`, { state: 'done', note: JSON.stringify({ url: config.mcpServers.orco.url, task: auth.startsWith('Bearer orco_t_'), path: process.argv[4], cli: process.env.ORCO_TOKEN === auth.slice(7) }) });
 } else if (FAKE_MODE === 'hang') {
   setInterval(() => {}, 1000);
 } else {

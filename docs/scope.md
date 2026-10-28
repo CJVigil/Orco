@@ -280,6 +280,11 @@ agent execution, and a ticket assigned to an agent drives one.
 
 ## Decided
 
+- Bridges: ready-made presets for agent CLIs (only the tested ones are marked verified; `orco
+  bridge doctor` checks the rest on the user's machine), model agents on OpenAI-compatible APIs with
+  the tool loop in the bridge, and Gitea sync as a separate polling process. All of them run beside
+  the server, never inside it, so the server keeps making no outbound calls.
+
 - Storage: SQLite on local disk, one Orco per database. Considered MongoDB (no fit: relational
   data, no help on network filesystems, a replica set to run) and Postgres (worth it only for several
   Orco nodes, which nothing needs yet). Resilience comes from scheduled backups and optional

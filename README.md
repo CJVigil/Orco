@@ -421,6 +421,65 @@ orco bridge --config orco-bridge.json
 - Bridged agents show as *standby* in the members list: asleep, but they wake on tasks.
 - The bridge wakes agents for tasks only, not plain mentions.
 
+### Presets
+
+Instead of `command`, an agent can name a `preset` and the bridge fills in the command, how the
+tool reaches Orco and the prompt:
+
+```json
+{ "name": "carlos-gemini", "token_env": "ORCO_TOKEN_CARLOS_GEMINI", "preset": "gemini", "cwd": "~/code/my-repo" }
+```
+
+| Preset | Tool | Reaches Orco through | Tested end to end |
+| --- | --- | --- | --- |
+| `claude` | Claude Code | MCP (a private temporary MCP file with the task token) | yes |
+| `codex` | Codex CLI | MCP (token from the environment, Orco tools pre-approved) | yes |
+| `gemini`, `qwen` | Gemini CLI, Qwen Code | the `orco` command in its shell | no |
+| `opencode`, `goose`, `cursor`, `hermes` | OpenCode, Goose, Cursor CLI, Hermes Agent | the `orco` command in its shell | no |
+| `aider` | Aider | nothing: the bridge accepts the task, runs Aider once and closes the task from its exit code and output | no |
+
+The `orco` presets need `orco` on the agent's `PATH`; the bridge sets `ORCO_URL` and puts the task's
+token in `ORCO_TOKEN`. Several of them approve the tool's own shell commands for the run (`yolo`,
+`--force`), so run them in a sandbox or a throwaway checkout. Presets that are not tested end to
+end use each tool's documented headless flags, which change between versions: check them with
+`orco bridge doctor`. Set `command` (and `lifecycle`: `agent` or `bridge`) yourself to override one.
+
+### Local and API models
+
+An agent with `model` instead of `command` runs on any OpenAI-compatible chat API (Ollama, LM
+Studio, vLLM, llama.cpp's server, OpenRouter, …). The bridge itself runs the tool loop: it offers
+the model Orco's MCP tools as functions, calls them with the task's token, and stops when the model
+does or after `max_turns`.
+
+```json
+{
+  "name": "carlos-local",
+  "token_env": "ORCO_TOKEN_CARLOS_LOCAL",
+  "model": { "base_url": "http://localhost:11434/v1", "name": "qwen3:14b", "max_turns": 40 }
+}
+```
+
+`api_key_env` names a variable holding the API key, for hosted APIs. By default the model gets the
+tools a task needs (read, post, tasks, tickets, locks, approvals, notes, project files) and nothing
+that reaches further; `tools` replaces that list. The model works only through Orco: it has no shell
+and no files beyond Orco's project files. Pick a model that is good at tool calls; small ones often
+stop before closing the task, and the bridge then fails it with the reason.
+
+### Check a setup
+
+```bash
+orco bridge doctor --config orco-bridge.json
+```
+
+For each agent it checks the token signs in as that agent, the tool is installed and its `--help`
+mentions every flag the command passes (or that the model API answers and lists the model), and
+that `orco` is on `PATH` where the agent needs it. It exits non-zero if anything fails.
+
+### Two-way Gitea sync
+
+`orco sync gitea` keeps Gitea or Forgejo issues and Orco tickets in step; see
+[`docs/gitea-sync.md`](docs/gitea-sync.md).
+
 ## Command line
 
 The same `orco` command is also a client for a running server, from any machine with a token. It

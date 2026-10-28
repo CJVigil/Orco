@@ -127,3 +127,7 @@ Agents work on clones of your Gitea repositories as usual; point the bridge's `c
 Links they leave on finished tasks (a Gitea PR, a commit) work like any other link. If an agent needs
 a Gitea token, store it as an Orco secret (*Integrations → Secrets*) so it asks for it per task
 instead of keeping it in its config.
+
+To keep Gitea issues and Orco tickets in step both ways (issues filed in Gitea become tickets agents
+work, and their comments and closes flow back), run `orco sync gitea` as a second service on the
+same image; see [`gitea-sync.md`](gitea-sync.md).

@@ -1,7 +1,12 @@
 import { type ChildProcess, spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import { rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Task } from '../tasks.js';
 import type { BridgeAgentConfig, BridgeConfig } from './config.js';
 import { EventStream } from './events.js';
+import { runModel } from './model.js';
 
 export const DEFAULT_PROMPT = `You have a task from Orco, your team's agent chat.
 
@@ -63,7 +68,13 @@ export interface BridgeOptions {
   echoOutput?: boolean;
 }
 
-function fill(template: string, task: Task, prompt: string, note = ''): string {
+interface Connection {
+  mcp_url: string;
+  mcp_config: string;
+  token_env: string;
+}
+
+function fill(template: string, task: Task, prompt: string, note = '', connection?: Connection): string {
   const values: Record<string, string> = {
     prompt,
     task_id: String(task.id),
@@ -76,8 +87,14 @@ function fill(template: string, task: Task, prompt: string, note = ''): string {
     answer: task.question?.answer ?? '',
     answered_by: task.question?.answeredBy ?? '',
     note,
+    mcp_url: connection?.mcp_url ?? '',
+    mcp_config: connection?.mcp_config ?? '',
+    token_env: connection?.token_env ?? '',
   };
-  return template.replace(/\{(prompt|task_id|room|thread_id|requester|via|request|question|answer|answered_by|note)\}/g, (_, key: string) => values[key]!);
+  return template.replace(
+    /\{(prompt|task_id|room|thread_id|requester|via|request|question|answer|answered_by|note|mcp_url|mcp_config|token_env)\}/g,
+    (_, key: string) => values[key]!,
+  );
 }
 
 interface Job {
@@ -93,6 +110,8 @@ class AgentRunner {
   /** Running agents by task; null while the bridge is still getting a task token. */
   private readonly running = new Map<number, ChildProcess | null>();
   private readonly stopping = new Set<number>();
+  /** Model runs, which have no process to kill: aborting one stops its tool loop. */
+  private readonly aborts = new Map<number, AbortController>();
   private stream: EventStream | null = null;
   private stopped = false;
 
@@ -161,6 +180,7 @@ class AgentRunner {
       this.stopping.add(task.id);
       const child = this.running.get(task.id);
       this.log.info(`[${this.config.name}] task #${task.id} was cancelled; stopping the agent`);
+      this.aborts.get(task.id)?.abort();
       if (child) {
         child.kill('SIGTERM');
         setTimeout(() => child.kill('SIGKILL'), KILL_GRACE_MS).unref();
@@ -244,9 +264,27 @@ class AgentRunner {
     const template = mode === 'resume' ? RESUME_PROMPT : mode === 'reminder' ? REMINDER_PROMPT : (this.config.prompt_template ?? DEFAULT_PROMPT);
     const checkpoint = task.checkpoint ? `\n\nYour last checkpoint on this task (${task.checkpoint.at}):\n${task.checkpoint.text}` : '';
     const prompt = fill(template, task, '', note) + checkpoint;
-    const [command, ...args] = this.config.command.map((part) => fill(part, task, prompt));
     const what = { start: 'starting', resume: 'resuming with the answer', reminder: 'waking for a reminder' }[mode];
+    if (this.config.model) {
+      this.log.info(`[${this.config.name}] task #${task.id} from ${task.requester}: ${what} model ${this.config.model.name}`);
+      void this.runModelJob(task, token, prompt);
+      return;
+    }
+    // Tools that take their MCP settings from a file get a private one for this run, holding the task's token.
+    const mcpConfig = this.config.command.some((part) => part.includes('{mcp_config}'))
+      ? join(tmpdir(), `orco-mcp-${randomBytes(8).toString('hex')}.json`)
+      : '';
+    if (mcpConfig) {
+      writeFileSync(
+        mcpConfig,
+        JSON.stringify({ mcpServers: { orco: { type: 'http', url: `${this.server}/mcp`, headers: { Authorization: `Bearer ${token}` } } } }),
+        { mode: 0o600 },
+      );
+    }
+    const connection: Connection = { mcp_url: `${this.server}/mcp`, mcp_config: mcpConfig, token_env: this.config.token_env };
+    const [command, ...args] = this.config.command.map((part) => fill(part, task, prompt, note, connection));
     this.log.info(`[${this.config.name}] task #${task.id} from ${task.requester}: ${what} ${command}`);
+    if (this.config.lifecycle === 'bridge' && task.state === 'requested') void this.api(`/tasks/${task.id}`, { state: 'accepted' }).catch(() => {});
     const started = Date.now();
     let tail = '';
     let timedOut = false;
@@ -259,6 +297,8 @@ class AgentRunner {
           ...this.config.env,
           // The agent's MCP config reads its token from this variable; with task tokens it only reaches this task's project.
           [this.config.token_env]: token,
+          // So the orco command line works in the agent's shell, with the same (task) token.
+          ORCO_TOKEN: token,
           ORCO_URL: this.server,
           ORCO_AGENT: this.config.name,
           ORCO_TASK_ID: String(task.id),
@@ -270,6 +310,7 @@ class AgentRunner {
       });
     } catch (err) {
       this.running.delete(task.id);
+      if (mcpConfig) rmSync(mcpConfig, { force: true });
       void this.finish(task, `The bridge could not start the agent: ${(err as Error).message}`).finally(() => this.pump());
       return;
     }
@@ -308,12 +349,22 @@ class AgentRunner {
       settled = true;
       clearTimeout(timer);
       flush();
+      if (mcpConfig) rmSync(mcpConfig, { force: true });
       this.running.delete(task.id);
       this.stopping.delete(task.id);
       const seconds = Math.round((Date.now() - started) / 1000);
       this.log.info(`[${this.config.name}] task #${task.id} agent exited after ${seconds}s (${reason})`);
       if (!this.stopped && tail.trim() && reason !== 'code 0') {
         this.log.error(`[${this.config.name}] last output of task #${task.id}:\n${tail.trimEnd()}`);
+      }
+      if (this.config.lifecycle === 'bridge' && reason === 'code 0' && !timedOut) {
+        // The tool cannot report back, so its own summary becomes the result.
+        const summary = tail.replace(/\u001b\[[0-9;]*[A-Za-z]/g, '').trim().slice(-1500) || 'Finished.';
+        void this.api(`/tasks/${task.id}`, { state: 'done', note: summary })
+          .then(() => this.log.info(`[${this.config.name}] marked task #${task.id} done`))
+          .catch((err: Error) => this.log.error(`[${this.config.name}] could not close task #${task.id}: ${err.message}`))
+          .finally(() => this.pump());
+        return;
       }
       const note = timedOut
         ? `The agent was stopped after ${this.config.timeout_seconds}s without finishing the task.`
@@ -322,6 +373,43 @@ class AgentRunner {
     };
     child.on('error', (err) => done(`could not start: ${err.message}`));
     child.on('exit', (code, signal) => done(signal ? `signal ${signal}` : `code ${code}`));
+  }
+
+  /** Runs the task with a model behind an OpenAI-compatible API; the bridge drives the tool loop. */
+  private async runModelJob(task: Task, token: string, prompt: string): Promise<void> {
+    const model = this.config.model!;
+    const abort = new AbortController();
+    this.aborts.set(task.id, abort);
+    const timer = setTimeout(() => abort.abort(), this.config.timeout_seconds * 1000);
+    const started = Date.now();
+    let note: string;
+    try {
+      const run = await runModel({
+        server: this.server,
+        token,
+        agent: this.config.name,
+        prompt,
+        model,
+        apiKey: model.api_key_env ? this.env[model.api_key_env] : undefined,
+        signal: abort.signal,
+        log: (message) => this.log.info(`[${this.config.name} #${task.id}] ${message}`),
+      });
+      this.log.info(`[${this.config.name}] task #${task.id} model stopped after ${run.turns} turns in ${Math.round((Date.now() - started) / 1000)}s`);
+      note = run.ended
+        ? `The model stopped without closing the task.${run.lastText ? ` Its last words: ${run.lastText.slice(0, 500)}` : ''}`
+        : `The model used its ${model.max_turns} turns without closing the task.`;
+    } catch (err) {
+      const message = abort.signal.aborted ? `stopped after ${this.config.timeout_seconds}s or cancelled` : (err as Error).message;
+      this.log.error(`[${this.config.name}] task #${task.id} model run failed: ${message}`);
+      note = `The model run failed: ${message}`;
+    } finally {
+      clearTimeout(timer);
+      this.aborts.delete(task.id);
+      this.running.delete(task.id);
+      this.stopping.delete(task.id);
+    }
+    await this.finish(task, note);
+    this.pump();
   }
 
   private async finish(task: Task, note: string): Promise<void> {
