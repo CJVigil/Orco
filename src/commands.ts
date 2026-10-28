@@ -1,7 +1,8 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { extname } from 'node:path';
 import { createRequire } from 'node:module';
 import { parseArgs } from 'node:util';
+import { Backups, backupTo, networkFilesystemWarning, restore } from './backups.js';
 import { Bridge } from './bridge/bridge.js';
 import { loadBridgeConfig } from './bridge/config.js';
 import { openDatabase } from './db.js';
@@ -21,6 +22,7 @@ Server commands (run where the database lives):
   agent trust <agent> <user> Let a user's tasks reach the agent without asking (untrust to undo)
   audit export [--since N]   Print the audit log as JSON lines
   backup <file>              Write a consistent copy of the database, safe while serving
+  restore <file> [--force]   Replace the database with a backup (stop the server first)
   import <project> <file> --as <user> [--create-labels] [--create-milestones] [--dry-run]
                              File tickets from a JSON or CSV file, as that person
   version                    Print the version
@@ -38,6 +40,16 @@ Options:
 `;
 
 const VERSION = (createRequire(import.meta.url)('../package.json') as { version: string }).version;
+
+function backupsFromEnv(store: Store): Backups | null {
+  const dir = process.env.ORCO_BACKUP_DIR?.trim();
+  if (!dir) return null;
+  const number = (key: string, fallback: number) => {
+    const raw = process.env[key]?.trim();
+    return raw ? Number(raw) : fallback;
+  };
+  return new Backups(store.db, { dir, everyHours: number('ORCO_BACKUP_HOURS', 24), keep: number('ORCO_BACKUP_KEEP', 14), log: (m) => console.log(m) });
+}
 
 function limitsFromEnv(): Partial<Limits> {
   const read = (key: string) => {
@@ -125,6 +137,7 @@ export function main(): void {
       'create-labels': { type: 'boolean' },
       'create-milestones': { type: 'boolean' },
       'dry-run': { type: 'boolean' },
+      force: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
       version: { type: 'boolean', short: 'v' },
     },
@@ -149,6 +162,14 @@ export function main(): void {
     return;
   }
 
+  // Restoring replaces the database file, so it runs before anything opens it.
+  if (command === 'restore') {
+    if (!sub) throw new OrcoError('invalid', 'Usage: orco restore <backup file> [--force]');
+    const { replaced } = restore(sub, values.db, { force: values.force });
+    console.log(`Restored ${values.db} from ${sub}.${replaced ? ` The database it replaced is at ${replaced}.` : ''}`);
+    return;
+  }
+
   const store = new Store(openDatabase(values.db), { limits: limitsFromEnv(), secretsKey: parseSecretsKey(process.env.ORCO_SECRETS_KEY) });
   const key = sub && !['serve', 'list', 'backup', 'import'].includes(command) ? `${command} ${sub}` : command;
 
@@ -156,6 +177,26 @@ export function main(): void {
     case 'serve': {
       const publicUrl = process.env.ORCO_PUBLIC_URL || undefined;
       const { app, close, oauth } = createApp(store, { publicUrl });
+      const warning = networkFilesystemWarning(values.db);
+      if (warning) console.error(warning);
+      const backups = backupsFromEnv(store);
+      const backupTimer = backups
+        ? setInterval(() => {
+            try {
+              backups.runIfDue();
+            } catch (err) {
+              console.error(`Scheduled backup failed: ${(err as Error).message}`);
+            }
+          }, 3600_000)
+        : null;
+      backupTimer?.unref();
+      if (backups) {
+        try {
+          backups.runIfDue();
+        } catch (err) {
+          console.error(`Scheduled backup failed: ${(err as Error).message}`);
+        }
+      }
       if (process.env.ORCO_TRUST_PROXY) app.set('trust proxy', process.env.ORCO_TRUST_PROXY);
       const port = Number(values.port);
       if (!Number.isInteger(port) || port < 1 || port > 65535) throw new OrcoError('invalid', `Invalid port ${values.port}`);
@@ -164,6 +205,7 @@ export function main(): void {
         console.log(`  MCP endpoint: http://${values.host}:${port}/mcp`);
         console.log(`  Database: ${values.db}`);
         if (oauth) console.log(`  OAuth for cloud agents: on, issuer ${oauth.issuer}`);
+        if (backups) console.log(`  Backups: every ${process.env.ORCO_BACKUP_HOURS || 24}h to ${process.env.ORCO_BACKUP_DIR}`);
         if (values.host !== '127.0.0.1' && values.host !== 'localhost') {
           console.log('  Not bound to localhost: put TLS in front of this (see docs/deploy.md).');
         }
@@ -174,6 +216,7 @@ export function main(): void {
       });
       const shutdown = (signal: string) => {
         console.log(`${signal} received, shutting down`);
+        if (backupTimer) clearInterval(backupTimer);
         server.close();
         server.closeAllConnections();
         void close().finally(() => {
@@ -224,8 +267,7 @@ export function main(): void {
     case 'backup': {
       const target = sub;
       if (!target) throw new OrcoError('invalid', 'Usage: orco backup <file>');
-      if (existsSync(target)) throw new OrcoError('conflict', `${target} already exists; pick a new file name`);
-      store.db.exec(`VACUUM INTO '${target.replace(/'/g, "''")}'`);
+      backupTo(store.db, target);
       console.log(`Backed up ${values.db} to ${target}`);
       return;
     }

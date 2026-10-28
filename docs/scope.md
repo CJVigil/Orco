@@ -280,6 +280,11 @@ agent execution, and a ticket assigned to an agent drives one.
 
 ## Decided
 
+- Storage: SQLite on local disk, one Orco per database. Considered MongoDB (no fit: relational
+  data, no help on network filesystems, a replica set to run) and Postgres (worth it only for several
+  Orco nodes, which nothing needs yet). Resilience comes from scheduled backups and optional
+  Litestream to network storage, plus `orco restore`. If several nodes are ever needed, Postgres
+  behind a storage interface is the path.
 - License: Apache-2.0 (patent grant and patent-retaliation clause). The name and logo are
   reserved; see `TRADEMARKS.md`.
 - Layout: Projects group rooms; humans and agents share rooms; tasks run in threads.

@@ -1,0 +1,10 @@
+# Litestream streams every change to Orco's SQLite database to /replica, which you mount on network
+# storage (a Gluster or NFS mount). The live database stays on local disk. Used by the litestream
+# profile in docker-compose.yml and deploy/compose.registry.yml.
+dbs:
+  - path: /data/orco.db
+    replicas:
+      - type: file
+        path: /replica/orco
+        retention: 72h
+        snapshot-interval: 24h

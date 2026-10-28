@@ -11,16 +11,17 @@ FROM node:22-slim
 ENV NODE_ENV=production \
     ORCO_HOST=0.0.0.0 \
     ORCO_PORT=7420 \
-    ORCO_DB=/data/orco.db
+    ORCO_DB=/data/orco.db \
+    ORCO_BACKUP_DIR=/backups
 WORKDIR /app
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY package.json LICENSE NOTICE TRADEMARKS.md README.md ./
 COPY web ./web
-RUN mkdir -p /data && chown node:node /data \
+RUN mkdir -p /data /backups && chown node:node /data /backups \
  && printf '#!/bin/sh\nexec node /app/dist/cli.js "$@"\n' > /usr/local/bin/orco && chmod +x /usr/local/bin/orco
 USER node
-VOLUME ["/data"]
+VOLUME ["/data", "/backups"]
 EXPOSE 7420
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.ORCO_PORT||7420)+'/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"

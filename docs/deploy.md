@@ -92,6 +92,11 @@ deploys it.
 | `ORCO_AGENT_TASKS_PER_MINUTE` | `10` | Per-agent task-creation limit |
 | `ORCO_TASK_STALL_MINUTES` | `15` | An accepted task with no sign of life for this long shows as stalled |
 | `ORCO_ESCALATE_HOURS` | `4` | Unanswered questions open to the whole project, and pending approvals are re-sent once, after this long; `0` turns it off |
+| `ORCO_BACKUP_DIR` | unset (`/backups` in Docker) | Where scheduled backups go; unset turns them off |
+| `ORCO_BACKUP_HOURS` | `24` | Hours between scheduled backups |
+| `ORCO_BACKUP_KEEP` | `14` | How many scheduled backups to keep |
+| `ORCO_BACKUP_PATH` | `orco-backups` volume | Compose only: host path (a Gluster or NFS mount) mounted at `/backups` |
+| `ORCO_REPLICA_PATH` | `orco-replica` volume | Compose only: host path for Litestream's replica |
 | `ORCO_SECRETS_KEY` | unset | 32 bytes (`openssl rand -hex 32`) that encrypt stored secrets; without it the credentials broker is off. Keep it out of the database backups' reach: a backup plus this key reveals every secret, and losing the key loses them |
 
 ## Accounts
@@ -108,11 +113,49 @@ orco list
 Tokens are shown once and stored only as SHA-256 hashes. Give each person their user token over
 a private channel; each person gives their agent tokens to their own agents.
 
+## Storage
+
+Orco keeps everything (messages, tickets, files, attachments) in one SQLite file. Keep that file
+on the host's **local disk**: SQLite's locking is not reliable on network filesystems (Gluster,
+NFS, SMB, Ceph FUSE mounts), and a database there can be corrupted without any error. Orco logs a
+warning at start when it finds its database on one.
+
+Use network storage for copies instead:
+
+- **Scheduled backups** (on by default in Docker): every `ORCO_BACKUP_HOURS` (24) Orco writes a
+  consistent copy to `ORCO_BACKUP_DIR` (`/backups` in the image) and keeps the newest
+  `ORCO_BACKUP_KEEP` (14). Point the backups volume at your Gluster or NFS mount with
+  `ORCO_BACKUP_PATH=/mnt/gluster/orco-backups` (it must be writable by uid 1000). Backups are
+  written under a temporary name and renamed when complete, so a half-written file never looks
+  like a backup.
+- **Litestream** (optional, seconds instead of hours): `docker compose --profile litestream up -d`
+  runs [Litestream](https://litestream.io) beside Orco, streaming every change to `/replica`; point
+  it at network storage with `ORCO_REPLICA_PATH`. Configuration: `deploy/litestream.yml`.
+
+Run one Orco per database. Presence, rate limits and live event streams are in memory, so Orco is
+not built to run as several replicas.
+
+### Moving to another host
+
+1. Stop Orco (or lose the host).
+2. On the new host, with Orco stopped:
+
+   ```bash
+   docker compose run --rm orco restore /backups/orco-20261028-030000.db
+   # or, from Litestream's replica (with no orco.db in the volume yet):
+   docker compose run --rm litestream restore /data/orco.db
+   ```
+
+   `orco restore` checks the backup (integrity and that it is an Orco database), keeps any database
+   it replaces beside it, and refuses while the server still has the database open (`--force`
+   overrides that after a crash).
+3. Start Orco. Tokens, settings and history come with the database; with the secrets broker, set
+   the same `ORCO_SECRETS_KEY`.
+
 ## Backups and upgrades
 
 ```bash
-orco backup /backups/orco-$(date +%F).db       # consistent copy, safe while the server runs
-docker compose exec orco orco backup /data/backup-$(date +%F).db
+docker compose exec orco orco backup /backups/manual-$(date +%F).db   # consistent copy, safe while serving
 ```
 
 Upgrades apply database migrations automatically on start. Take a backup first. Migrations only

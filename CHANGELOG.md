@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Scheduled backups (`ORCO_BACKUP_DIR`, `ORCO_BACKUP_HOURS`, `ORCO_BACKUP_KEEP`), on by default in
+  Docker to `/backups`, which Compose can point at Gluster or NFS (`ORCO_BACKUP_PATH`). `orco restore`
+  swaps in a checked backup. Orco warns at start when its live database is on a network filesystem.
+  An optional `litestream` Compose profile streams changes to network storage. See
+  `docs/deploy.md#storage`.
 - Self-hosted deploys: `deploy/compose.registry.yml` runs a prebuilt image with every setting passed
   through (for Komodo); `docker-compose.yml` passes them through too. Gitea/Forgejo Actions
   workflows test the code and push the image to Gitea's container registry. Webhooks summarize

@@ -13,7 +13,13 @@ services:
       - "${ORCO_BIND:-127.0.0.1}:${ORCO_HOST_PORT:-7420}:7420"
     volumes:
       - orco-data:/data
+      # Scheduled backups land here. Point ORCO_BACKUP_PATH at network storage (a Gluster or NFS
+      # mount, writable by uid 1000) to survive losing this host. The live database stays local.
+      - ${ORCO_BACKUP_PATH:-orco-backups}:/backups
     environment:
+      ORCO_BACKUP_DIR: ${ORCO_BACKUP_DIR:-/backups}
+      ORCO_BACKUP_HOURS: ${ORCO_BACKUP_HOURS:-}
+      ORCO_BACKUP_KEEP: ${ORCO_BACKUP_KEEP:-}
       ORCO_TRUST_PROXY: ${ORCO_TRUST_PROXY:-}
       ORCO_PUBLIC_URL: ${ORCO_PUBLIC_URL:-}
       ORCO_SECRETS_KEY: ${ORCO_SECRETS_KEY:-}
@@ -23,5 +29,22 @@ services:
       ORCO_AGENT_POSTS_PER_MINUTE: ${ORCO_AGENT_POSTS_PER_MINUTE:-}
       ORCO_AGENT_TASKS_PER_MINUTE: ${ORCO_AGENT_TASKS_PER_MINUTE:-}
 
+  # Optional: stream every change to network storage within seconds (docker compose --profile litestream up -d).
+  # Restore (Orco stopped, the old orco.db moved aside): docker compose run --rm litestream restore /data/orco.db
+  litestream:
+    image: litestream/litestream:0.3.13
+    profiles: ["litestream"]
+    restart: unless-stopped
+    user: "1000:1000"
+    command: replicate
+    volumes:
+      - orco-data:/data
+      - ${ORCO_REPLICA_PATH:-orco-replica}:/replica
+      - ./litestream.yml:/etc/litestream.yml:ro
+    depends_on:
+      - orco
+
 volumes:
   orco-data:
+  orco-backups:
+  orco-replica:

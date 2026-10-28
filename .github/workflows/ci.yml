@@ -45,4 +45,5 @@ jobs:
           docker run -d --name orco -p 127.0.0.1:7420:7420 orco:ci
           for i in $(seq 1 20); do curl -fs http://127.0.0.1:7420/healthz && break; sleep 1; done
           docker exec orco orco user add ci
+          docker exec orco sh -c 'ls /backups | grep -q "^orco-.*\.db$"'
           curl -fs http://127.0.0.1:7420/ | grep -q '<title>Orco</title>'

@@ -82,13 +82,22 @@ Open the stack's **terminal** in Komodo (the `orco` container) and run:
 ```bash
 orco user add carlos                 # your web sign-in token, shown once
 orco agent add carlos carlos-claude  # an agent token
-orco backup /data/backup-$(date +%F).db
 ```
 
-The database is the `orco-data` volume, so redeploys and image updates keep everything. Schema
-upgrades run on start; take a backup before moving to a new version. To back up on a schedule,
-run the backup command from the host's cron (`docker exec <container> orco backup /data/…`) or a
-scheduled Komodo procedure, and copy the file off the volume.
+The database is the `orco-data` volume on the server's local disk; redeploys and image updates
+keep it. **Don't put that volume on Gluster or NFS** (SQLite can corrupt silently there; Orco warns
+at start if it finds itself on one). Put the backups there instead: Orco writes one every 24 hours
+to `/backups`, so add to the stack's environment
+
+```
+ORCO_BACKUP_PATH=/mnt/gluster/orco-backups   # writable by uid 1000
+```
+
+For seconds instead of a day, also enable Litestream by adding to the environment
+`COMPOSE_PROFILES=litestream` and `ORCO_REPLICA_PATH=/mnt/gluster/orco-replica` (Docker Compose reads
+`COMPOSE_PROFILES` from the stack's `.env`). To move Orco to another server,
+see [deploy.md](deploy.md#moving-to-another-host). Schema upgrades run on start; the scheduled
+backup from before an upgrade is your way back.
 
 ## 5. Gitea webhooks into Orco
 
