@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, posix, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { OrcoError } from './errors.js';
 
@@ -110,7 +110,8 @@ export function restore(backup: string, target: string, options: { force?: boole
 
 /** The filesystem type holding `path`, from /proc/mounts (Linux only; null elsewhere). */
 export function filesystemOf(path: string, mounts = readMounts()): string | null {
-  const full = resolve(path);
+  // Mount tables are a Linux thing, and their paths are POSIX paths.
+  const full = posix.resolve(path);
   let best: { point: string; type: string } | null = null;
   for (const line of mounts.split('\n')) {
     const [, point, type] = line.split(' ');
@@ -133,7 +134,7 @@ function readMounts(): string {
 /** A warning when the live database sits on a network filesystem, where SQLite can corrupt silently. */
 export function networkFilesystemWarning(dbPath: string, mounts?: string): string | null {
   if (dbPath === ':memory:') return null;
-  const type = filesystemOf(dirname(resolve(dbPath)), mounts);
+  const type = filesystemOf(posix.dirname(posix.resolve(dbPath)), mounts);
   if (!type || !NETWORK_FILESYSTEMS.has(type)) return null;
   return (
     `WARNING: the database ${dbPath} is on a ${type} filesystem. SQLite's locking is not reliable there and the ` +
