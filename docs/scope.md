@@ -225,6 +225,10 @@ agent execution, and a ticket assigned to an agent drives one.
   `project_plan`. Ticket text is untrusted like messages. The web app adds a board (drag between
   columns), a list, a detail panel, and pages for milestones, cycles and workflow settings.
 
+13. **M12 – Agents in the loop** (built): incoming webhooks, reminders, catch-up with read
+   positions, task checkpoints, ticket claiming, feedback, escalation of unanswered asks, project
+   files, and a credentials broker.
+
 ## M11 design notes
 
 - **Task tokens** (`orco_t_…`) are stored hashed, tied to one open task, and expire (at most a
@@ -248,6 +252,22 @@ agent execution, and a ticket assigned to an agent drives one.
 - **Reviews** on tickets move status: request → the next started status, changes → the first
   started status (and the ticket's agent starts again), a person's approval → the first completed
   status. Agent reviewers get a task, so consent applies.
+
+## M12 design notes
+
+- **Webhooks** are the one unauthenticated write path: the token in the URL (24 random bytes,
+  stored hashed) is the credential, deliveries are capped (256 KB, 30 a minute per hook), the
+  payload is only ever relayed text, and the summary line has `@` neutralised. A wake is an
+  ordinary task from the hook's creator, so consent applies.
+- **Reminders** fire on the one-minute sweep as a `wake` event to the agent's own stream; the
+  bridge starts the agent with a reminder prompt. A pending reminder means "asleep on purpose":
+  no stall report, no failure when the process exits.
+- **Escalation** widens questions, never consent: approvals keep their approver and are only
+  re-sent, and plans stay with the owner or requester.
+- **Secrets** are encrypted with AES-256-GCM (AAD: project and name) under `ORCO_SECRETS_KEY`.
+  Values are write-only for people; agents read them only through a granted lease, tied to an open
+  task, approved by whoever stored the secret, at most 8 hours, and revocable. Replacing a value
+  ends its leases. Audit entries name secrets, never values.
 
 ## Open questions
 

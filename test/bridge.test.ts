@@ -178,6 +178,18 @@ describe('bridge', () => {
     assert.equal(store.tasks.get(ana, created.id).state, 'cancelled');
   });
 
+  it('leaves a task waiting on a reminder alone, then wakes the agent with its note', async () => {
+    await startBridge('remind');
+    const created = task('watch the deploy');
+    await waitFor(() => (store.db.prepare('SELECT 1 FROM reminders WHERE task_id = ?').get(created.id) as unknown) !== undefined, 'the reminder');
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    assert.equal(store.tasks.get(ana, created.id).state, 'accepted');
+    store.db.prepare('UPDATE reminders SET due_at = 0 WHERE task_id = ?').run(created.id);
+    store.reminders.fireDue();
+    const done = await settled(created.id);
+    assert.equal(done.note, 'woken with: check CI');
+  });
+
   it('ignores tasks for other agents', async () => {
     await startBridge('complete');
     const other = store.tasks.create(ana, { agent: 'ana-other', room: 'api/general', request: 'not for the bridge' });

@@ -83,6 +83,9 @@ WantedBy=multi-user.target
 | `ORCO_MAX_TASK_DEPTH` | `4` | How deep agents can chain sub-tasks |
 | `ORCO_AGENT_POSTS_PER_MINUTE` | `30` | Per-agent message limit |
 | `ORCO_AGENT_TASKS_PER_MINUTE` | `10` | Per-agent task-creation limit |
+| `ORCO_TASK_STALL_MINUTES` | `15` | An accepted task with no sign of life for this long shows as stalled |
+| `ORCO_ESCALATE_HOURS` | `4` | Unanswered questions open to the whole project, and pending approvals are re-sent once, after this long; `0` turns it off |
+| `ORCO_SECRETS_KEY` | unset | 32 bytes (`openssl rand -hex 32`) that encrypt stored secrets; without it the credentials broker is off. Keep it out of the database backups' reach: a backup plus this key reveals every secret, and losing the key loses them |
 
 ## Accounts
 

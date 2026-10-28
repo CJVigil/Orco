@@ -50,8 +50,9 @@ nothing below is served. `http://` is accepted only for `localhost` testing.
 Vendors connect from their own clouds, so the MCP endpoint has to be public. Expose only what they
 need and keep the web app on your private network.
 
-**Caddy** (`deploy/Caddyfile.public`): serves `/mcp`, `/oauth/*`, the two discovery documents and
-the sign-in page's stylesheet and icon, and answers 404 for everything else.
+**Caddy** (`deploy/Caddyfile.public`): serves `/mcp`, `/oauth/*`, the two discovery documents,
+incoming webhooks (`/hooks/*`, each URL carrying its own secret, so GitHub and CI can reach them),
+and the sign-in page's stylesheet and icon, and answers 404 for everything else.
 
 ```bash
 ORCO_PUBLIC_DOMAIN=orco.example.com caddy run --config deploy/Caddyfile.public

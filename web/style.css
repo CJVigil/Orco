@@ -3154,3 +3154,90 @@ button:disabled {
 .chip.waiting {
   --task-edge: var(--listen);
 }
+
+/* Files and integrations */
+
+.file-list {
+  display: grid;
+  gap: 0;
+  padding: 0;
+}
+
+.file-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.45rem 0.7rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.86rem;
+}
+
+.file-row:last-child {
+  border-bottom: 0;
+}
+
+.file-row .spacer,
+.file-card .spacer {
+  flex: 1;
+}
+
+.file-row .svg-icon {
+  color: var(--muted);
+}
+
+.file-content {
+  margin: 0.4rem 0;
+  padding: 0.6rem;
+  max-height: 32rem;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.file-history ul {
+  list-style: none;
+  margin: 0.3rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.15rem;
+}
+
+.file-viewer:empty {
+  display: none;
+}
+
+.hook-reveal:empty {
+  display: none;
+}
+
+.hook-reveal {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0.5rem 0;
+}
+
+.chip.lease-granted {
+  --task-edge: var(--ok);
+}
+
+.chip.lease-pending {
+  --task-edge: var(--listen);
+}
+
+.chip.lease-denied,
+.chip.lease-revoked {
+  --task-edge: var(--idle);
+}
+
+.task-feedback {
+  display: inline-flex;
+  gap: 0.1rem;
+}
+
+.hook-reveal button {
+  justify-self: start;
+}

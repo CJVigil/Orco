@@ -57,6 +57,23 @@ export interface TaskSummary {
   budget: TaskBudget | null;
   links: TaskLink[];
   followups: TaskFollowup[];
+  /** Thumbs from people on a finished task. */
+  feedback: { up: number; down: number };
+}
+
+export interface TaskCheckpoint {
+  text: string;
+  at: string;
+}
+
+export interface Feedback {
+  taskId: number;
+  request: string;
+  room: string;
+  by: string;
+  rating: 'up' | 'down';
+  note: string;
+  at: string;
 }
 
 export interface TaskResult {
@@ -74,6 +91,8 @@ export const MAX_BUDGET_MINUTES = 7 * 24 * 60;
 export const MAX_BUDGET_CENTS = 1_000_000;
 const MAX_LINKS = 10;
 const MAX_FOLLOWUPS = 10;
+const MAX_CHECKPOINT = 4_000;
+const MAX_FEEDBACK_NOTE = 500;
 const DEFAULT_TOKEN_TTL_SECONDS = 2 * 3600;
 const MAX_TOKEN_TTL_SECONDS = 24 * 3600;
 
@@ -114,6 +133,9 @@ export interface Task {
   links: TaskLink[];
   /** Follow-up work the assignee suggested; people turn each into a ticket or dismiss it. */
   followups: TaskFollowup[];
+  feedback: { up: number; down: number };
+  /** Where the assignee left off, for its next session or whoever takes the task over. */
+  checkpoint: TaskCheckpoint | null;
   scheduleId: number | null;
 }
 
@@ -153,6 +175,9 @@ interface TaskRow {
   over_budget_notified: number;
   links: string;
   schedule_id: number | null;
+  checkpoint: string | null;
+  checkpoint_at: string | null;
+  reminder_due: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -165,7 +190,9 @@ const TASK_SELECT = `
          (SELECT q.id FROM questions q WHERE q.task_id = t.id AND q.state = 'open') AS open_question,
          t.progress, t.progress_pct, t.progress_at, t.heartbeat_at, t.stall_notified,
          t.seen_at, t.accepted_at, t.budget_minutes, t.budget_cents, t.spent_cents, t.spent_tokens,
-         t.over_budget_notified, t.links, t.schedule_id, t.created_at, t.updated_at
+         t.over_budget_notified, t.links, t.schedule_id, t.checkpoint, t.checkpoint_at,
+         (SELECT min(rm.due_at) FROM reminders rm WHERE rm.task_id = t.id AND rm.fired_at IS NULL) AS reminder_due,
+         t.created_at, t.updated_at
   FROM tasks t
   LEFT JOIN approvals ap ON ap.id = t.approval_id
   JOIN rooms r ON r.id = t.room_id
@@ -226,7 +253,7 @@ function checkLinks(links: TaskResult['links']): TaskLink[] {
   });
 }
 
-function baseTask(row: TaskRow): Omit<Task, 'chain' | 'question' | 'progress' | 'stalled' | 'seenAt' | 'budget' | 'links' | 'followups'> {
+function baseTask(row: TaskRow): Omit<Task, 'chain' | 'question' | 'progress' | 'stalled' | 'seenAt' | 'budget' | 'links' | 'followups' | 'feedback'> {
   return {
     id: row.id,
     room: row.project ? `${row.project}/${row.room}` : row.room,
@@ -243,6 +270,7 @@ function baseTask(row: TaskRow): Omit<Task, 'chain' | 'question' | 'progress' | 
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     scheduleId: row.schedule_id,
+    checkpoint: row.checkpoint === null ? null : { text: row.checkpoint, at: row.checkpoint_at! },
   };
 }
 
@@ -487,6 +515,78 @@ export class Tasks {
     this.store.audit.record(null, 'task.over_budget', { projectId: row.project_id, subject: `task:${id}`, detail: budget });
   }
 
+  /** Saves where the assignee left off; replaces the last checkpoint. */
+  checkpoint(actor: Participant, id: number, text: string): Task {
+    const row = this.row(id);
+    if (!row || !this.store.canSeeRoomId(actor, row.room_id)) throw new OrcoError('not_found', `No task ${id}`);
+    if (row.assignee_id !== actor.id) throw new OrcoError('forbidden', `Only ${row.assignee} can checkpoint task ${id}`);
+    if (!OPEN_STATES.includes(row.state)) throw new OrcoError('conflict', `Task ${id} is ${row.state}`);
+    const value = text.trim();
+    if (!value) throw new OrcoError('invalid', 'The checkpoint is empty');
+    if (value.length > MAX_CHECKPOINT) throw new OrcoError('invalid', `Checkpoints are at most ${MAX_CHECKPOINT} characters`);
+    this.store.db
+      .prepare("UPDATE tasks SET checkpoint = ?, checkpoint_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), heartbeat_at = ?, stall_notified = 0 WHERE id = ?")
+      .run(value, this.store.now(), id);
+    this.store.audit.record(actor, 'task.checkpoint', { projectId: row.project_id, subject: `task:${id}`, detail: { length: value.length } });
+    const task = this.byId(id)!;
+    this.store.events.emit('task', task);
+    return task;
+  }
+
+  /** A person rates a finished task, once (a second rating replaces the first). */
+  rate(actor: Participant, id: number, rating: 'up' | 'down', note = ''): Task {
+    if (actor.kind !== 'user') throw new OrcoError('forbidden', 'Only people rate task results');
+    const row = this.row(id);
+    if (!row || !this.store.canSeeRoomId(actor, row.room_id)) throw new OrcoError('not_found', `No task ${id}`);
+    if (row.state !== 'done' && row.state !== 'failed') throw new OrcoError('conflict', 'Rate a task once it is done or failed');
+    if (rating !== 'up' && rating !== 'down') throw new OrcoError('invalid', 'Rating is up or down');
+    const text = note.trim();
+    if (text.length > MAX_FEEDBACK_NOTE) throw new OrcoError('invalid', `Keep the note under ${MAX_FEEDBACK_NOTE} characters`);
+    this.store.db
+      .prepare(
+        `INSERT INTO task_feedback (task_id, author_id, rating, note) VALUES (?, ?, ?, ?)
+         ON CONFLICT (task_id, author_id) DO UPDATE SET rating = excluded.rating, note = excluded.note, created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`,
+      )
+      .run(id, actor.id, rating, text);
+    this.store.audit.record(actor, 'task.feedback', { projectId: row.project_id, subject: `task:${id}`, detail: { rating, note: text } });
+    const task = this.byId(id)!;
+    this.store.events.emit('task', task);
+    return task;
+  }
+
+  /** Feedback people left on an agent's tasks, newest first. The agent's own, or its owner's view. */
+  feedbackFor(actor: Participant, agentName?: string, limit = 20): Feedback[] {
+    const agent = agentName && agentName !== actor.name ? this.store.participantByName(agentName) : actor;
+    if (!agent || agent.kind !== 'agent' || (agent.id !== actor.id && agent.ownerId !== actor.id)) throw new OrcoError('not_found', `No agent ${agentName ?? ''} of yours`);
+    const rows = this.store.db
+      .prepare(
+        `SELECT f.task_id, t.request, r.project_id, coalesce(p.name || '/', '') || r.name AS room, u.name AS by, f.rating, f.note, f.created_at
+         FROM task_feedback f JOIN tasks t ON t.id = f.task_id JOIN rooms r ON r.id = t.room_id LEFT JOIN projects p ON p.id = r.project_id
+         JOIN participants u ON u.id = f.author_id
+         WHERE t.assignee_id = ? ORDER BY f.created_at DESC LIMIT ?`,
+      )
+      .all(agent.id, Math.min(Math.max(limit, 1), 100)) as unknown as {
+      task_id: number;
+      request: string;
+      project_id: number | null;
+      room: string;
+      by: string;
+      rating: 'up' | 'down';
+      note: string;
+      created_at: string;
+    }[];
+    return rows
+      .filter((r) => this.store.canSee(actor, r.project_id))
+      .map((r) => ({ taskId: r.task_id, request: r.request, room: r.room, by: r.by, rating: r.rating, note: r.note, at: r.created_at }));
+  }
+
+  private feedbackCounts(taskId: number): { up: number; down: number } {
+    const row = this.store.db
+      .prepare("SELECT sum(rating = 'up') AS up, sum(rating = 'down') AS down FROM task_feedback WHERE task_id = ?")
+      .get(taskId) as { up: number | null; down: number | null };
+    return { up: row.up ?? 0, down: row.down ?? 0 };
+  }
+
   /** Records that the assignee has looked at these tasks; the first look only. */
   markSeen(actor: Participant, ids: number[]): void {
     if (actor.kind !== 'agent' || ids.length === 0) return;
@@ -597,6 +697,9 @@ export class Tasks {
     const request = `${row.request}\n\nHanded over by ${actor.name}${why ? `: ${why}` : '.'}`.slice(0, MAX_REQUEST);
     const room = this.toTask(row).room;
     const to = this.create(actor, { agent: agentName, room, request, parentId: id });
+    if (row.checkpoint !== null) {
+      this.store.db.prepare('UPDATE tasks SET checkpoint = ?, checkpoint_at = ? WHERE id = ?').run(row.checkpoint, row.checkpoint_at, to.id);
+    }
     const from = this.transition(actor, this.row(id)!, 'declined', `Handed over to ${to.assignee} as task #${to.id}${why ? `: ${why}` : '.'}`, {
       handedTo: to.id,
     });
@@ -634,7 +737,7 @@ export class Tasks {
       .all(cutoff) as unknown as TaskRow[];
     const stalled: Task[] = [];
     for (const row of rows) {
-      if (row.open_question !== null) continue;
+      if (row.open_question !== null || row.reminder_due !== null) continue;
       this.store.db.prepare('UPDATE tasks SET stall_notified = 1 WHERE id = ?').run(row.id);
       const task = this.byId(row.id)!;
       this.store.audit.record(null, 'task.stalled', { projectId: task.projectId, subject: `task:${task.id}`, detail: { assignee: task.assignee } });
@@ -652,8 +755,9 @@ export class Tasks {
     return rows.filter((row) => this.isStalled(row) && this.store.canSee(actor, row.project_id)).map((row) => this.toTask(row));
   }
 
-  private isStalled(row: { state: TaskState; heartbeat_at: number | null; open_question?: number | null }): boolean {
-    if (row.state !== 'accepted' || row.heartbeat_at === null || row.open_question) return false;
+  private isStalled(row: { state: TaskState; heartbeat_at: number | null; open_question?: number | null; reminder_due?: number | null }): boolean {
+    // Waiting on a person, or asleep until a reminder the agent set, is not stalling.
+    if (row.state !== 'accepted' || row.heartbeat_at === null || row.open_question || row.reminder_due) return false;
     return this.store.now() - row.heartbeat_at > this.store.limits.taskStallMinutes * 60_000;
   }
 
@@ -720,6 +824,7 @@ export class Tasks {
       budget: this.budgetOf(row),
       links: JSON.parse(row.links) as TaskLink[],
       followups: this.store.suggestions.forTask(row.id),
+      feedback: this.feedbackCounts(row.id),
     };
   }
 
@@ -750,6 +855,7 @@ export class Tasks {
       budget: this.budgetOf(row),
       links: JSON.parse(row.links) as TaskLink[],
       followups: this.store.suggestions.forTask(row.id),
+      feedback: this.feedbackCounts(row.id),
     };
   }
 

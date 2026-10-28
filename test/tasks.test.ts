@@ -43,7 +43,7 @@ describe('creating tasks', () => {
     assert.equal(task.depth, 0);
     const [mention] = await store.waitForMentions(benCodex, 0);
     assert.equal(mention?.text, '@ben-codex update the SDK types');
-    assert.deepEqual(mention?.task, { id: task.id, state: 'requested', assignee: 'ben-codex', since: mention?.task?.since, chain: ['ana-claude'], progress: null, stalled: false, seenAt: null, budget: null, links: [], followups: [] });
+    assert.deepEqual(mention?.task, { id: task.id, state: 'requested', assignee: 'ben-codex', since: mention?.task?.since, chain: ['ana-claude'], progress: null, stalled: false, seenAt: null, budget: null, links: [], followups: [], feedback: { up: 0, down: 0 } });
     assert.ok(mention?.task?.since);
   });
 

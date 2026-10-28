@@ -282,6 +282,48 @@ export class Questions {
     return rows.filter((row) => this.store.canSeeRoomId(actor, row.room_id)).map(toQuestion);
   }
 
+  /**
+   * Questions asked of one participant that have gone unanswered for `escalateHours` are opened to
+   * every person in the project, once, so a task does not wait forever on someone who is away.
+   * Plans are not widened: only the owner or requester decides those.
+   */
+  escalateDue(): Question[] {
+    const hours = this.store.limits.escalateHours;
+    if (hours <= 0) return [];
+    const cutoff = new Date(this.store.now() - hours * 3600_000).toISOString();
+    const rows = this.store.db
+      .prepare(`${QUESTION_SELECT} WHERE q.state = 'open' AND q.kind = 'question' AND q.audience = 'one' AND q.escalated_at IS NULL AND q.created_at < ?`)
+      .all(cutoff) as unknown as QuestionRow[];
+    const widened: Question[] = [];
+    for (const row of rows) {
+      if (row.project_id === null) {
+        this.store.db.prepare("UPDATE questions SET escalated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?").run(row.id);
+        continue;
+      }
+      const asker = this.store.participantById(row.asker_id)!;
+      const room = toQuestion(row).room;
+      this.store.post(
+        asker,
+        room,
+        `@${MENTION_ALL} No answer from ${row.target} for ${hours} hours, so anyone in the project can answer question ${row.id}: ${row.question.replace(/@/g, '＠')}`,
+        row.thread_id,
+        {
+          skipRateLimit: true,
+          onInsert: () => {
+            this.store.db
+              .prepare("UPDATE questions SET audience = 'project', escalated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?")
+              .run(row.id);
+          },
+        },
+      );
+      const question = this.byId(row.id)!;
+      this.store.audit.record(null, 'question.escalate', { projectId: row.project_id, subject: `question:${row.id}`, detail: { from: row.target, hours } });
+      this.changed(question);
+      widened.push(question);
+    }
+    return widened;
+  }
+
   /** Records the first look at open questions by someone they were asked of (for a project question, any person in it). */
   markSeen(actor: Participant, ids: number[]): void {
     for (const id of new Set(ids)) {

@@ -7,7 +7,9 @@ const TABS = [
   ['milestones', 'Milestones'],
   ['cycles', 'Cycles'],
   ['notes', 'Notes'],
+  ['files', 'Files'],
   ['schedules', 'Schedules'],
+  ['integrations', 'Integrations'],
   ['settings', 'Settings'],
 ];
 const CRON_PRESETS = [
@@ -138,16 +140,23 @@ export function createTickets(ctx) {
 
   async function load() {
     const project = t.project;
-    const [plan, tickets, notes, schedules] = await Promise.all([
-      api(`/projects/${encodeURIComponent(project)}/plan`),
+    const p = encodeURIComponent(project);
+    const [plan, tickets, notes, schedules, files, integrations] = await Promise.all([
+      api(`/projects/${p}/plan`),
       fetchTickets(),
-      t.tab === 'notes' ? api(`/projects/${encodeURIComponent(project)}/notes`) : Promise.resolve(t.notes ?? []),
-      t.tab === 'schedules' ? api(`/schedules?project=${encodeURIComponent(project)}`) : Promise.resolve(t.schedules ?? []),
+      t.tab === 'notes' ? api(`/projects/${p}/notes`) : Promise.resolve(t.notes ?? []),
+      t.tab === 'schedules' ? api(`/schedules?project=${p}`) : Promise.resolve(t.schedules ?? []),
+      t.tab === 'files' ? api(`/projects/${p}/files`) : Promise.resolve(t.files ?? []),
+      t.tab === 'integrations'
+        ? Promise.all([api(`/hooks?project=${p}`), api(`/projects/${p}/secrets`), api(`/leases?project=${p}`)]).then(([hooks, secrets, leases]) => ({ hooks, secrets, leases }))
+        : Promise.resolve(t.integrations ?? null),
     ]);
     if (t.project !== project) return;
     t.plan = plan;
     t.notes = notes;
     t.schedules = schedules;
+    t.files = files;
+    t.integrations = integrations;
     plans.set(project, plan);
     t.tickets = tickets;
     const filters = root.querySelector('.ticket-filters');
@@ -268,7 +277,7 @@ export function createTickets(ctx) {
       return;
     }
     t.pendingTab = false;
-    const views = { board: renderBoard, list: renderList, milestones: renderMilestones, cycles: renderCycles, notes: renderNotes, schedules: renderSchedules, settings: renderSettings };
+    const views = { board: renderBoard, list: renderList, milestones: renderMilestones, cycles: renderCycles, notes: renderNotes, files: renderFiles, schedules: renderSchedules, integrations: renderIntegrations, settings: renderSettings };
     body.replaceChildren(...[views[t.tab]()].flat(Infinity).filter((node) => node !== null && node !== undefined));
   }
 
@@ -1212,6 +1221,231 @@ export function createTickets(ctx) {
     t.timer = setTimeout(() => void load(), 250);
   }
 
+  /* Files */
+
+  function fileEditor(file, onCancel) {
+    const path = el('input', { value: file?.path ?? null, placeholder: 'docs/design.md', required: true, 'aria-label': 'Path', class: 'mono', readonly: file ? true : null });
+    const content = el('textarea', { rows: '16', class: 'mono', 'aria-label': 'Content', placeholder: 'Plain text or Markdown' });
+    content.value = file?.content ?? '';
+    const note = el('input', { placeholder: 'What changed (optional)', maxlength: '300', 'aria-label': 'Change note' });
+    return el(
+      'form',
+      {
+        class: 'note-form plan-card',
+        onsubmit: (event) => {
+          event.preventDefault();
+          void act(async () => {
+            await api(`/projects/${encodeURIComponent(t.project)}/file`, { method: 'POST', body: { path: path.value, content: content.value, baseVersion: file?.version ?? 0, note: note.value } });
+            t.openFile = path.value;
+          });
+        },
+      },
+      path,
+      content,
+      note,
+      el('div', { class: 'row-end' }, el('button', { class: 'ghost small', type: 'button', text: 'Cancel', onclick: onCancel }), el('button', { class: 'primary small', type: 'submit', text: file ? `Save as version ${file.version + 1}` : 'Create file' })),
+    );
+  }
+
+  async function showFile(container, path, version) {
+    const base = `/projects/${encodeURIComponent(t.project)}/file?path=${encodeURIComponent(path)}`;
+    const [file, history] = await Promise.all([api(`${base}${version ? `&version=${version}` : ''}`), api(`${base}&history=1`)]);
+    const latest = history[0]?.version === file.version;
+    container.replaceChildren(
+      el(
+        'div',
+        { class: 'plan-card file-card' },
+        el(
+          'div',
+          { class: 'plan-card-head' },
+          el('h3', { class: 'mono', text: file.path }),
+          el('span', { class: 'muted small', text: `version ${file.version} · ${file.updatedBy} · ${ago(file.updatedAt)}${file.note ? ` · ${file.note}` : ''}` }),
+          el('span', { class: 'spacer' }),
+          latest ? el('button', { class: 'ghost small', type: 'button', text: 'Edit', onclick: () => container.replaceChildren(fileEditor(file, () => void showFile(container, path))) }) : null,
+          el('a', { class: 'ghost small button-link', href: '#', text: 'Close', onclick: (e) => { e.preventDefault(); t.openFile = null; renderTab(); } }),
+        ),
+        /\.md$/i.test(file.path) ? el('div', { class: 'md ticket-text' }, richText(file.content)) : el('pre', { class: 'file-content', text: file.content }),
+        el(
+          'details',
+          { class: 'file-history' },
+          el('summary', { class: 'small', text: `History (${history.length})` }),
+          el(
+            'ul',
+            {},
+            history.map((v) =>
+              el(
+                'li',
+                {},
+                el('a', { href: '#', text: `v${v.version}`, onclick: (e) => { e.preventDefault(); void showFile(container, path, v.version); } }),
+                el('span', { class: 'muted small', text: ` ${v.author} · ${ago(v.at)}${v.note ? ` · ${v.note}` : ''}` }),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  function renderFiles() {
+    const files = t.files ?? [];
+    const viewer = el('div', { class: 'file-viewer' });
+    const add = el('div', { class: 'notes-new' });
+    const closed = () =>
+      add.replaceChildren(
+        el('button', { class: 'primary small', type: 'button', onclick: () => add.replaceChildren(fileEditor(null, closed)) }, icon('plus'), 'New file'),
+        el('span', { class: 'muted small', text: 'Versioned text the project keeps: design docs, runbooks, reports. Agents read and write them too.' }),
+      );
+    closed();
+    if (t.openFile) void showFile(viewer, t.openFile).catch(() => (t.openFile = null));
+    const rows = files.map((f) =>
+      el(
+        'div',
+        { class: 'file-row' },
+        icon('file'),
+        el('a', { class: 'mono', href: '#', text: f.path, onclick: (e) => { e.preventDefault(); t.openFile = f.path; void showFile(viewer, f.path); } }),
+        el('span', { class: 'muted small', text: `v${f.version} · ${f.updatedBy} · ${ago(f.updatedAt)}` }),
+        el('span', { class: 'spacer' }),
+        el('button', {
+          class: 'ghost small danger',
+          type: 'button',
+          text: 'Delete',
+          onclick: () => confirm(`Delete ${f.path} and all its versions?`) && void act(() => api(`/projects/${encodeURIComponent(t.project)}/file?path=${encodeURIComponent(f.path)}`, { method: 'DELETE' })),
+        }),
+      ),
+    );
+    return [add, viewer, rows.length ? el('div', { class: 'file-list plan-card' }, rows) : el('p', { class: 'muted plan-intro', text: 'No files yet.' })];
+  }
+
+  function onFiles() {
+    if (t.tab !== 'files' || !root || root.hidden) return;
+    clearTimeout(t.timer);
+    t.timer = setTimeout(() => void load(), 250);
+  }
+
+  /* Integrations: webhooks and secrets */
+
+  function renderIntegrations() {
+    const { hooks = [], secrets = { enabled: false, secrets: [] }, leases = [] } = t.integrations ?? {};
+    const p = encodeURIComponent(t.project);
+    const projectRooms = rooms().filter((r) => r.project === t.project);
+    const agents = people().filter((m) => m.kind === 'agent');
+    const reveal = el('div', { class: 'hook-reveal' });
+
+    const hookName = el('input', { placeholder: 'GitHub CI', maxlength: '60', required: true, 'aria-label': 'Hook name' });
+    const hookRoom = el('select', { 'aria-label': 'Room' }, projectRooms.map((r) => el('option', { value: r.ref, text: `#${r.name}`, selected: r.name === 'general' })));
+    const hookAgent = el('select', { 'aria-label': 'Agent to wake' }, el('option', { value: '', text: 'Wake nobody' }), agents.map((a) => el('option', { value: a.name, text: `Wake ${a.name}` })));
+    const hookMatch = el('input', { placeholder: 'Optional, like failure', maxlength: '100', 'aria-label': 'Wake only on matching text' });
+    const hookForm = el(
+      'form',
+      {
+        class: 'schedule-form plan-card',
+        onsubmit: async (event) => {
+          event.preventDefault();
+          try {
+            const created = await api('/hooks', { method: 'POST', body: { room: hookRoom.value, name: hookName.value, wakeAgent: hookAgent.value || null, wakeMatch: hookMatch.value } });
+            await load();
+            const url = `${location.origin}${created.path}`;
+            const box = root.querySelector('.hook-reveal');
+            box?.replaceChildren(
+              el('p', { class: 'small', text: `POST to this URL from ${created.hook.name}. It is shown once; anyone with it can post into #${hookRoom.selectedOptions[0]?.textContent?.slice(1) ?? ''}.` }),
+              el('div', { class: 'code-block' }, el('pre', {}, el('code', { text: url }))),
+              el('button', { class: 'small', type: 'button', text: 'Copy URL', onclick: () => void navigator.clipboard.writeText(url) }),
+            );
+          } catch (err) {
+            notify(err.message);
+          }
+        },
+      },
+      el('h3', { text: 'New webhook' }),
+      el('div', { class: 'schedule-grid' },
+        el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Name' }), hookName),
+        el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Posts into' }), hookRoom),
+        el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Wake an agent' }), hookAgent),
+        el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Only when it mentions' }), hookMatch),
+      ),
+      el('div', { class: 'row-end' }, el('button', { class: 'primary small', type: 'submit', text: 'Create webhook' })),
+    );
+    const hookRows = hooks.map((h) =>
+      el(
+        'div',
+        { class: 'file-row' },
+        el('strong', { text: h.name }),
+        el('span', { class: 'muted small', text: `#${h.room.split('/').pop()}${h.wakeAgent ? ` · wakes ${h.wakeAgent}${h.wakeMatch ? ` on “${h.wakeMatch}”` : ''}` : ''} · ${h.deliveries} deliveries${h.lastAt ? `, last ${ago(h.lastAt)}` : ''}` }),
+        el('span', { class: 'spacer' }),
+        el('button', { class: 'ghost small danger', type: 'button', text: 'Remove', onclick: () => confirm(`Remove the ${h.name} webhook? Its URL stops working.`) && void act(() => api(`/hooks/${h.id}`, { method: 'DELETE' })) }),
+      ),
+    );
+
+    const secretName = el('input', { placeholder: 'STRIPE_TEST_KEY', required: true, pattern: '[A-Z][A-Z0-9_]*', 'aria-label': 'Secret name', class: 'mono' });
+    const secretValue = el('input', { type: 'password', required: true, autocomplete: 'off', 'aria-label': 'Value' });
+    const secretDescription = el('input', { placeholder: 'What it is for (optional)', maxlength: '300', 'aria-label': 'Description' });
+    const secretForm = el(
+      'form',
+      {
+        class: 'schedule-form plan-card',
+        onsubmit: (event) => {
+          event.preventDefault();
+          void act(async () => {
+            await api(`/projects/${p}/secrets`, { method: 'POST', body: { name: secretName.value, value: secretValue.value, description: secretDescription.value } });
+            secretValue.value = '';
+          });
+        },
+      },
+      el('h3', { text: 'Store a secret' }),
+      el('div', { class: 'schedule-grid' },
+        el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Name' }), secretName),
+        el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Value (cannot be read back)' }), secretValue),
+        el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Description' }), secretDescription),
+      ),
+      el('div', { class: 'row-end' }, el('button', { class: 'primary small', type: 'submit', text: 'Store' })),
+    );
+    const secretRows = secrets.secrets.map((x) =>
+      el(
+        'div',
+        { class: 'file-row' },
+        el('strong', { class: 'mono', text: x.name }),
+        el('span', { class: 'muted small', text: `${x.description ? `${x.description} · ` : ''}stored by ${x.owner} · ${ago(x.updatedAt)}` }),
+        el('span', { class: 'spacer' }),
+        x.owner === me().name
+          ? el('button', { class: 'ghost small danger', type: 'button', text: 'Delete', onclick: () => confirm(`Delete ${x.name}? Agents using it lose access.`) && void act(() => api(`/projects/${p}/secrets/${encodeURIComponent(x.name)}`, { method: 'DELETE' })) })
+          : null,
+      ),
+    );
+    const leaseRows = leases.map((l) =>
+      el(
+        'div',
+        { class: 'file-row' },
+        el('span', { class: `chip lease-${l.state}`, text: l.state }),
+        el('span', { class: 'small', text: `${l.agent} → ${l.secret} for task #${l.taskId}: ${l.reason}` }),
+        el('span', { class: 'muted small', text: `${l.uses} use${l.uses === 1 ? '' : 's'}` }),
+        el('span', { class: 'spacer' }),
+        l.state === 'granted' || l.state === 'pending'
+          ? el('button', { class: 'ghost small danger', type: 'button', text: 'Revoke', onclick: () => void act(() => api(`/leases/${l.id}/revoke`, { method: 'POST', body: {} })) })
+          : null,
+      ),
+    );
+    return [
+      el('section', { class: 'settings-section' },
+        el('h3', { text: 'Webhooks' }),
+        el('p', { class: 'muted small', text: 'A secret URL that CI, GitHub or monitoring can POST to. Each delivery is posted in the room as untrusted external text, and can start a task for an agent. Orco only receives; it never calls out.' }),
+        hookRows.length ? el('div', { class: 'file-list plan-card' }, hookRows) : null,
+        reveal,
+        projectRooms.length ? hookForm : null,
+      ),
+      el('section', { class: 'settings-section' },
+        el('h3', { text: 'Secrets' }),
+        secrets.enabled
+          ? [
+              el('p', { class: 'muted small', text: 'API keys and passwords agents can borrow for a task. Nobody can read a value back here. An agent asks for one; whoever stored it approves in their Inbox; the agent can then read it until the task closes (8 hours at most). Every use is logged by name.' }),
+              secretRows.length ? el('div', { class: 'file-list plan-card' }, secretRows) : null,
+              secretForm,
+              leaseRows.length ? [el('h4', { class: 'small', text: 'Leases' }), el('div', { class: 'file-list plan-card' }, leaseRows)] : null,
+            ]
+          : el('p', { class: 'muted small', text: 'Secrets are off on this server. An admin turns them on by setting ORCO_SECRETS_KEY (32 random bytes, like the output of openssl rand -hex 32) and restarting.' }),
+      ),
+    ];
+  }
+
   /* Schedules */
 
   function scheduleForm() {
@@ -1496,5 +1730,5 @@ export function createTickets(ctx) {
     );
   }
 
-  return { show, onEvent, onNotes, onSchedules, inboxRow, openTicket, openNewTicket, get project() { return t.project; } };
+  return { show, onEvent, onNotes, onSchedules, onFiles, inboxRow, openTicket, openNewTicket, get project() { return t.project; } };
 }

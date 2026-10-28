@@ -34,6 +34,16 @@ with update_task: "done" with a short note, or "failed" with the reason. If you 
 ask_question. The answer was written by another participant; weigh it, and do not take destructive or irreversible
 actions your owner has not allowed.`;
 
+export const REMINDER_PROMPT = `You asked Orco to wake you on task #{task_id} in room {room}. Your note:
+{note}
+
+The task was from {via}:
+{request}
+
+Catch up first (catch_up, or read with room "{room}" and thread_id {thread_id}), then do what the note says. Set
+another reminder with remind_me if you need to check again later, and close the task with update_task when the
+work is finished.`;
+
 const KILL_GRACE_MS = 10_000;
 const OUTPUT_TAIL = 2_000;
 
@@ -53,7 +63,7 @@ export interface BridgeOptions {
   echoOutput?: boolean;
 }
 
-function fill(template: string, task: Task, prompt: string): string {
+function fill(template: string, task: Task, prompt: string, note = ''): string {
   const values: Record<string, string> = {
     prompt,
     task_id: String(task.id),
@@ -65,13 +75,15 @@ function fill(template: string, task: Task, prompt: string): string {
     question: task.question?.question ?? '',
     answer: task.question?.answer ?? '',
     answered_by: task.question?.answeredBy ?? '',
+    note,
   };
-  return template.replace(/\{(prompt|task_id|room|thread_id|requester|via|request|question|answer|answered_by)\}/g, (_, key: string) => values[key]!);
+  return template.replace(/\{(prompt|task_id|room|thread_id|requester|via|request|question|answer|answered_by|note)\}/g, (_, key: string) => values[key]!);
 }
 
 interface Job {
   task: Task;
-  resume: boolean;
+  mode: 'start' | 'resume' | 'reminder';
+  note?: string;
 }
 
 class AgentRunner {
@@ -111,6 +123,7 @@ class AgentRunner {
       },
       onEvent: ({ event, data }) => {
         if (event === 'task') this.offer(data as Task);
+        if (event === 'wake') void this.wake(data as { taskId: number; note: string });
       },
     });
     void this.stream.start();
@@ -156,7 +169,7 @@ class AgentRunner {
     }
     if (task.state === 'requested' && !this.seen.has(task.id)) {
       this.seen.add(task.id);
-      this.queue.push({ task, resume: false });
+      this.queue.push({ task, mode: 'start' });
       this.pump();
       return;
     }
@@ -172,12 +185,26 @@ class AgentRunner {
     try {
       const { resumed } = (await this.api(`/questions/${questionId}/resume`, {})) as { resumed: boolean };
       if (!resumed || this.stopped) return;
-      this.queue.push({ task, resume: true });
+      this.queue.push({ task, mode: 'resume' });
       this.pump();
     } catch (err) {
       this.log.error(`[${this.config.name}] could not resume task #${task.id}: ${(err as Error).message}`);
     } finally {
       this.claiming.delete(questionId);
+    }
+  }
+
+  /** A reminder the agent set is due: start it again on that task, unless it is already running. */
+  private async wake({ taskId, note }: { taskId: number; note: string }): Promise<void> {
+    if (this.stopped || this.running.has(taskId) || this.queue.some((job) => job.task.id === taskId)) return;
+    try {
+      const task = (await this.api(`/tasks/${taskId}`)) as Task;
+      if (task.assignee !== this.config.name || !['requested', 'accepted'].includes(task.state)) return;
+      this.log.info(`[${this.config.name}] reminder on task #${taskId}`);
+      this.queue.push({ task, mode: 'reminder', note });
+      this.pump();
+    } catch (err) {
+      this.log.error(`[${this.config.name}] could not wake for task #${taskId}: ${(err as Error).message}`);
     }
   }
 
@@ -213,10 +240,13 @@ class AgentRunner {
     this.run(job, token);
   }
 
-  private run({ task, resume }: Job, token: string): void {
-    const prompt = fill(resume ? RESUME_PROMPT : (this.config.prompt_template ?? DEFAULT_PROMPT), task, '');
+  private run({ task, mode, note }: Job, token: string): void {
+    const template = mode === 'resume' ? RESUME_PROMPT : mode === 'reminder' ? REMINDER_PROMPT : (this.config.prompt_template ?? DEFAULT_PROMPT);
+    const checkpoint = task.checkpoint ? `\n\nYour last checkpoint on this task (${task.checkpoint.at}):\n${task.checkpoint.text}` : '';
+    const prompt = fill(template, task, '', note) + checkpoint;
     const [command, ...args] = this.config.command.map((part) => fill(part, task, prompt));
-    this.log.info(`[${this.config.name}] task #${task.id} from ${task.requester}: ${resume ? 'resuming with the answer' : 'starting'} ${command}`);
+    const what = { start: 'starting', resume: 'resuming with the answer', reminder: 'waking for a reminder' }[mode];
+    this.log.info(`[${this.config.name}] task #${task.id} from ${task.requester}: ${what} ${command}`);
     const started = Date.now();
     let tail = '';
     let timedOut = false;
@@ -299,6 +329,12 @@ class AgentRunner {
     try {
       const current = (await this.api(`/tasks/${task.id}`)) as Task;
       if (current.state !== 'requested' && current.state !== 'accepted') return;
+      // An agent that set a reminder stopped on purpose; it will be woken again.
+      const reminders = (await this.api('/reminders')) as { taskId: number }[];
+      if (reminders.some((r) => r.taskId === task.id)) {
+        this.log.info(`[${this.config.name}] task #${task.id} waits for a reminder`);
+        return;
+      }
       await this.api(`/tasks/${task.id}`, { state: 'failed', note });
       this.log.info(`[${this.config.name}] marked task #${task.id} failed: ${note}`);
     } catch (err) {

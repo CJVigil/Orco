@@ -676,6 +676,38 @@ export class Tickets {
     return this.detail(row.id);
   }
 
+  /**
+   * Takes an unassigned ticket for yourself, atomically: two agents claiming the same ticket at once
+   * cannot both win. Moves it to the first started status unless `start` is false. No task starts.
+   */
+  claim(actor: Participant, ref: string, options: { start?: boolean } = {}): Ticket {
+    const row = this.byRef(actor, ref);
+    this.assignable(row.project_id, actor.name);
+    const statuses = this.statuses(row.project_id);
+    const current = statuses.find((s) => s.id === row.status_id)!;
+    if (current.category === 'completed' || current.category === 'canceled') throw new OrcoError('conflict', `${refOf(row)} is ${current.name}`);
+    const started = statuses.find((s) => s.category === 'started');
+    const move = options.start !== false && started && (current.category === 'backlog' || current.category === 'unstarted') ? started : null;
+    const claimed = this.store.db
+      .prepare(
+        `UPDATE tickets SET assignee_id = ?, updated_at = ${NOW_SQL},
+           status_id = coalesce(?, status_id), sort = CASE WHEN ? IS NULL THEN sort ELSE ? END,
+           started_at = CASE WHEN ? IS NULL THEN started_at ELSE coalesce(started_at, ${NOW_SQL}) END
+         WHERE id = ? AND assignee_id IS NULL`,
+      )
+      .run(actor.id, move?.id ?? null, move?.id ?? null, move ? this.topSort(move.id) : 0, move?.id ?? null, row.id);
+    if (Number(claimed.changes) === 0) {
+      const now = this.row(row.id)!;
+      throw new OrcoError('conflict', `${refOf(row)} is already assigned to ${now.assignee}`);
+    }
+    const changes: { field: string; from: string | null; to: string }[] = [{ field: 'assignee', from: null, to: actor.name }];
+    if (move) changes.push({ field: 'status', from: current.name, to: move.name });
+    this.activity(row.id, actor, 'change', null, { changes, claimed: true });
+    this.store.audit.record(actor, 'ticket.claim', { projectId: row.project_id, subject: `ticket:${refOf(row)}`, detail: { changes } });
+    this.changed(row);
+    return this.detail(row.id);
+  }
+
   startTask(actor: Participant, ref: string): Written {
     const row = this.byRef(actor, ref);
     if (row.assignee_kind !== 'agent') throw new OrcoError('invalid', `Assign ${refOf(row)} to an agent first`);

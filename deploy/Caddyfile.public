@@ -1,9 +1,9 @@
 # Public entry point for cloud agents (Grok Bot, Claude, OpenAI).
-# Exposes only the MCP endpoint, the OAuth pages and discovery documents, and the two files the
-# sign-in page needs. The web app and REST API stay reachable only on your private address.
+# Exposes only the MCP endpoint, the OAuth pages and discovery documents, incoming webhooks (each
+# URL carries its own secret), and the two files the sign-in page needs. The web app and REST API stay reachable only on your private address.
 # Set ORCO_PUBLIC_DOMAIN to the public name, and run Orco with ORCO_PUBLIC_URL=https://<that name>.
 {$ORCO_PUBLIC_DOMAIN} {
-	@cloud path /mcp /oauth/* /.well-known/oauth-protected-resource /.well-known/oauth-protected-resource/mcp /.well-known/oauth-authorization-server /style.css /favicon.svg
+	@cloud path /mcp /oauth/* /hooks/* /.well-known/oauth-protected-resource /.well-known/oauth-protected-resource/mcp /.well-known/oauth-authorization-server /style.css /favicon.svg
 	handle @cloud {
 		reverse_proxy orco:7420 {
 			flush_interval -1

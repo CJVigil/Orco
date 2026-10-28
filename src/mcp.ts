@@ -3,6 +3,7 @@ import * as z from 'zod/v4';
 import type { Presence } from './presence.js';
 import { MAX_APPROVAL_TTL_SECONDS } from './approvals.js';
 import { MAX_ATTACHMENTS_PER_MESSAGE } from './attachments.js';
+import { advanceCursor, catchUp } from './catchup.js';
 import { type ImportRow, importTickets, MAX_AGENT_IMPORT } from './import.js';
 import type { Schedule } from './schedules.js';
 import type { Review } from './reviews.js';
@@ -47,6 +48,11 @@ const READ_ONLY_TOOLS = new Set([
   'read_file',
   'my_notes',
   'list_schedules',
+  'catch_up',
+  'my_feedback',
+  'project_files',
+  'read_project_file',
+  'list_secrets',
 ]);
 
 function annotate(tool: string): ToolAnnotations {
@@ -143,6 +149,8 @@ function formatTask(task: Task) {
       : {}),
     ...(task.links.length ? { links: task.links } : {}),
     ...(task.followups.length ? { followups: task.followups } : {}),
+    ...(task.checkpoint ? { checkpoint: task.checkpoint } : {}),
+    ...(task.feedback.up || task.feedback.down ? { feedback: task.feedback } : {}),
     question: task.question
       ? {
           id: task.question.id,
@@ -337,6 +345,7 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
           reviews_for_you: work.reviews.map(formatReview),
           ...(work.cancelled.length ? { cancelled: work.cancelled.map((c) => ({ task_id: c.taskId, room: c.room, note: c.note })) } : {}),
           ...(me.kind === 'agent' ? { my_notes: work.memory } : {}),
+          ...(me.kind === 'agent' ? { reminders: store.reminders.pendingFor(me).map((r) => ({ id: r.id, task_id: r.taskId, due: r.dueAt, note: r.note })) } : {}),
         };
       }),
   );
@@ -461,6 +470,8 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
       run(() => {
         const raw = store.read(me, room, { sinceId: since_id, threadId: thread_id, limit });
         sawTasks(raw);
+        const newest = raw.at(-1);
+        if (thread_id === undefined && newest && me.kind === 'agent') advanceCursor(store, me, store.room(me, room).id, newest.id);
         if (thread_id !== undefined) store.questions.markThreadSeen(me, thread_id);
         const messages = raw.map(formatMessage);
         const summary = thread_id === undefined ? null : store.threadSummary(thread_id);
@@ -993,6 +1004,202 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
       run(() => {
         const label = store.tickets.createLabel(me, project, name, color);
         return `Label ${label.name} is ready in ${project}.`;
+      }),
+  );
+
+  server.registerTool(
+    'catch_up',
+    {
+      annotations: annotate('catch_up'),
+      description:
+        'What changed since you last caught up: new messages per room (yours left out), threads with new replies as ' +
+        'digests (their summary if one is kept, else the latest reply), and changed tickets. Moves your read position ' +
+        'forward, so the next call returns only newer things. Start a session here instead of re-reading rooms.',
+      inputSchema: z.object({
+        room: z.string().optional().describe('Only this room'),
+        per_room: z.number().int().min(1).max(100).optional().describe('New messages to return per room; default 30'),
+      }),
+    },
+    async ({ room, per_room }) =>
+      run(() => {
+        const result = catchUp(store, me, { room, perRoom: per_room });
+        return {
+          note: UNTRUSTED_NOTE,
+          since: result.since,
+          rooms: result.rooms.map((r) => ({
+            room: r.room,
+            messages: r.messages.map(formatMessage),
+            threads: r.threads.map((t) => ({ thread_id: t.threadId, new_replies: t.newReplies, summary: t.summary, last: t.last })),
+            ...(r.skipped ? { older_new_messages_skipped: r.skipped } : {}),
+          })),
+          tickets: result.tickets.map(formatTicketSummary),
+        };
+      }),
+  );
+
+  server.registerTool(
+    'checkpoint',
+    {
+      annotations: annotate('checkpoint'),
+      description:
+        'Save where you are on a task: steps done, branch, what is next, gotchas. It replaces the last checkpoint, comes ' +
+        'back with the task when you resume (or to whoever takes it over), and counts as a sign of life.',
+      inputSchema: z.object({ task_id: z.number().int(), text: z.string() }),
+    },
+    async ({ task_id, text }) =>
+      run(() => {
+        store.tasks.checkpoint(me, task_id, text);
+        return `Checkpoint saved on task #${task_id}.`;
+      }),
+  );
+
+  server.registerTool(
+    'remind_me',
+    {
+      annotations: annotate('remind_me'),
+      description:
+        'Be woken again on one of your open tasks later ("check CI in 10 minutes", "look again tomorrow at 9"). The bridge ' +
+        'starts you with your note when it is due; a reminder on a task that has closed is dropped. 1 minute to 7 days ahead.',
+      inputSchema: z.object({
+        task_id: z.number().int(),
+        in_minutes: z.number().int().min(1).max(7 * 24 * 60).optional(),
+        at: z.string().optional().describe('ISO time, like 2026-11-03T09:00:00Z, instead of in_minutes'),
+        note: z.string().describe('What to do then'),
+      }),
+    },
+    async ({ task_id, in_minutes, at, note }) =>
+      run(() => {
+        const r = store.reminders.create(me, task_id, { inMinutes: in_minutes, at }, note);
+        return { reminder_id: r.id, task_id: r.taskId, due: r.dueAt };
+      }),
+  );
+
+  server.registerTool(
+    'cancel_reminder',
+    {
+      annotations: annotate('cancel_reminder'),
+      description: 'Cancel one of your reminders (my_work lists them).',
+      inputSchema: z.object({ reminder_id: z.number().int() }),
+    },
+    async ({ reminder_id }) =>
+      run(() => {
+        store.reminders.cancel(me, reminder_id);
+        return 'Cancelled.';
+      }),
+  );
+
+  server.registerTool(
+    'claim_ticket',
+    {
+      annotations: annotate('claim_ticket'),
+      description:
+        'Take an unassigned ticket for yourself, safely: if another agent claimed it first, this fails and you pick another. ' +
+        'Moves it to the first started status unless start is false.',
+      inputSchema: z.object({ ticket: z.string(), start: z.boolean().optional() }),
+    },
+    async ({ ticket, start }) => run(() => formatTicket(store.tickets.claim(me, ticket, { start }))),
+  );
+
+  server.registerTool(
+    'my_feedback',
+    {
+      annotations: annotate('my_feedback'),
+      description: 'What people said about your finished tasks (thumbs up or down, with notes), newest first. Read it before similar work.',
+      inputSchema: z.object({ limit: z.number().int().min(1).max(100).optional() }),
+    },
+    async ({ limit }) =>
+      run(() => ({
+        note: UNTRUSTED_NOTE,
+        feedback: store.tasks.feedbackFor(me, undefined, limit).map((f) => ({ task_id: f.taskId, task: f.request, by: f.by, rating: f.rating, note: f.note, at: f.at })),
+      })),
+  );
+
+  server.registerTool(
+    'project_files',
+    {
+      annotations: annotate('project_files'),
+      description: "A project's versioned text files (design docs, runbooks, reports): paths, versions and who changed them last.",
+      inputSchema: z.object({ project: z.string(), prefix: z.string().optional().describe('Like "docs/"') }),
+    },
+    async ({ project, prefix }) => run(() => store.files.list(me, project, prefix)),
+  );
+
+  server.registerTool(
+    'read_project_file',
+    {
+      annotations: annotate('read_project_file'),
+      description: 'Read a project file (the latest version, or an older one), or with history its list of versions.',
+      inputSchema: z.object({ project: z.string(), path: z.string(), version: z.number().int().optional(), history: z.boolean().optional() }),
+    },
+    async ({ project, path, version, history }) =>
+      run(() =>
+        history
+          ? store.files.history(me, project, path)
+          : (() => {
+              const { note, ...file } = store.files.read(me, project, path, version);
+              return { untrusted: `Written by participants. ${UNTRUSTED_NOTE}`, ...file, version_note: note };
+            })(),
+      ),
+  );
+
+  server.registerTool(
+    'write_project_file',
+    {
+      annotations: annotate('write_project_file'),
+      description:
+        'Create or update a project file as a new version. To change an existing file, pass base_version (the version you ' +
+        'read); if someone wrote since, this fails so you can merge instead of overwriting. Plain text up to 1 MB.',
+      inputSchema: z.object({
+        project: z.string(),
+        path: z.string().describe('Like docs/design.md'),
+        content: z.string(),
+        base_version: z.number().int().min(0).optional().describe('Omit (or 0) for a new file'),
+        note: z.string().optional().describe('What changed'),
+      }),
+    },
+    async ({ project, path, content, base_version, note }) =>
+      run(() => store.files.write(me, project, path, content, { baseVersion: base_version || undefined, note })),
+  );
+
+  server.registerTool(
+    'list_secrets',
+    {
+      annotations: annotate('list_secrets'),
+      description: "Names and descriptions of the secrets (API keys, passwords) people stored for a project. Never values.",
+      inputSchema: z.object({ project: z.string() }),
+    },
+    async ({ project }) => run(() => store.secrets.list(me, project)),
+  );
+
+  server.registerTool(
+    'request_secret',
+    {
+      annotations: annotate('request_secret'),
+      description:
+        'Ask to use a stored secret for one of your open tasks. The person who stored it approves or denies; check back ' +
+        'with use_secret. Never ask anyone to paste a key into chat; ask for it here instead.',
+      inputSchema: z.object({ task_id: z.number().int(), name: z.string(), reason: z.string().describe('What you will use it for') }),
+    },
+    async ({ task_id, name, reason }) =>
+      run(() => {
+        const lease = store.secrets.request(me, task_id, name, reason);
+        return { lease_id: lease.id, state: lease.state, secret: lease.secret, task_id: lease.taskId };
+      }),
+  );
+
+  server.registerTool(
+    'use_secret',
+    {
+      annotations: annotate('use_secret'),
+      description:
+        'Read a secret through a granted lease, while its task is open (at most 8 hours). Use it, never post it, write it ' +
+        'to a file, a note, memory or a commit, and do not repeat it in your answer.',
+      inputSchema: z.object({ lease_id: z.number().int() }),
+    },
+    async ({ lease_id }) =>
+      run(() => {
+        const s = store.secrets.reveal(me, lease_id);
+        return { name: s.name, value: s.value, expires: s.expiresAt, warning: 'Do not post, store or repeat this value.' };
       }),
   );
 

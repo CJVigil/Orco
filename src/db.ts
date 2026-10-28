@@ -496,6 +496,99 @@ const MIGRATIONS = [
   UPDATE schedules SET run_as_id = creator_id;
   ALTER TABLE participants ADD COLUMN auto_file_followups INTEGER NOT NULL DEFAULT 0 CHECK (auto_file_followups IN (0, 1));
   `,
+  `
+  CREATE TABLE hooks (
+    id INTEGER PRIMARY KEY,
+    room_id INTEGER NOT NULL REFERENCES rooms(id),
+    name TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    created_by INTEGER NOT NULL REFERENCES participants(id),
+    wake_agent_id INTEGER REFERENCES participants(id),
+    wake_match TEXT NOT NULL DEFAULT '',
+    last_at TEXT,
+    deliveries INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+
+  CREATE TABLE reminders (
+    id INTEGER PRIMARY KEY,
+    task_id INTEGER NOT NULL REFERENCES tasks(id),
+    agent_id INTEGER NOT NULL REFERENCES participants(id),
+    due_at INTEGER NOT NULL,
+    note TEXT NOT NULL,
+    fired_at INTEGER
+  );
+  CREATE INDEX reminders_due ON reminders (fired_at, due_at);
+
+  CREATE TABLE read_cursors (
+    participant_id INTEGER NOT NULL REFERENCES participants(id),
+    room_id INTEGER NOT NULL REFERENCES rooms(id),
+    last_id INTEGER NOT NULL,
+    PRIMARY KEY (participant_id, room_id)
+  );
+  ALTER TABLE participants ADD COLUMN caught_up_at TEXT;
+
+  ALTER TABLE tasks ADD COLUMN checkpoint TEXT;
+  ALTER TABLE tasks ADD COLUMN checkpoint_at TEXT;
+
+  CREATE TABLE task_feedback (
+    task_id INTEGER NOT NULL REFERENCES tasks(id),
+    author_id INTEGER NOT NULL REFERENCES participants(id),
+    rating TEXT NOT NULL CHECK (rating IN ('up', 'down')),
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    PRIMARY KEY (task_id, author_id)
+  );
+
+  ALTER TABLE questions ADD COLUMN escalated_at TEXT;
+  ALTER TABLE approvals ADD COLUMN reminded_at INTEGER;
+
+  CREATE TABLE files (
+    id INTEGER PRIMARY KEY,
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    path TEXT NOT NULL,
+    created_by INTEGER NOT NULL REFERENCES participants(id),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE (project_id, path)
+  );
+  CREATE TABLE file_versions (
+    id INTEGER PRIMARY KEY,
+    file_id INTEGER NOT NULL REFERENCES files(id),
+    version INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    author_id INTEGER NOT NULL REFERENCES participants(id),
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE (file_id, version)
+  );
+
+  CREATE TABLE secrets (
+    id INTEGER PRIMARY KEY,
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    ciphertext BLOB NOT NULL,
+    iv BLOB NOT NULL,
+    tag BLOB NOT NULL,
+    owner_id INTEGER NOT NULL REFERENCES participants(id),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE (project_id, name)
+  );
+  CREATE TABLE secret_leases (
+    id INTEGER PRIMARY KEY,
+    secret_id INTEGER NOT NULL REFERENCES secrets(id),
+    task_id INTEGER NOT NULL REFERENCES tasks(id),
+    agent_id INTEGER NOT NULL REFERENCES participants(id),
+    approval_id INTEGER NOT NULL REFERENCES approvals(id),
+    reason TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'granted', 'denied', 'revoked')),
+    expires_at INTEGER NOT NULL,
+    uses INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+  `,
 ];
 
 export function openDatabase(path: string): DatabaseSync {

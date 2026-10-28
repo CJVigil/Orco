@@ -29,6 +29,16 @@ if (FAKE_MODE === 'ask') {
   await call(`/tasks/${ORCO_TASK_ID}`, { state: 'accepted' });
   const projects = (await call('/projects')).map((p) => p.name);
   await call(`/tasks/${ORCO_TASK_ID}`, { state: 'done', note: JSON.stringify({ prefix: BOT_TOKEN.slice(0, 7), projects }) });
+} else if (FAKE_MODE === 'remind') {
+  // First run: accept and ask to be woken. Second run (the reminder): finish with the note it got.
+  const prompt = process.argv[2] ?? '';
+  const note = /Your note:\n(.*)/.exec(prompt)?.[1];
+  if (note) {
+    await call(`/tasks/${ORCO_TASK_ID}`, { state: 'done', note: `woken with: ${note}` });
+  } else {
+    await call(`/tasks/${ORCO_TASK_ID}`, { state: 'accepted' });
+    await call(`/tasks/${ORCO_TASK_ID}/reminders`, { in_minutes: 1, note: 'check CI' });
+  }
 } else if (FAKE_MODE === 'hang') {
   setInterval(() => {}, 1000);
 } else {

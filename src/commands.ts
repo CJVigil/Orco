@@ -7,6 +7,7 @@ import { loadBridgeConfig } from './bridge/config.js';
 import { openDatabase } from './db.js';
 import { createApp } from './http.js';
 import { importTickets, parseImport } from './import.js';
+import { parseSecretsKey } from './secrets.js';
 import { type Limits, OrcoError, Store, type TaskPolicy } from './store.js';
 
 const USAGE = `Usage: orco <command> [options]
@@ -51,6 +52,7 @@ function limitsFromEnv(): Partial<Limits> {
     agentPostsPerMinute: read('ORCO_AGENT_POSTS_PER_MINUTE'),
     agentTasksPerMinute: read('ORCO_AGENT_TASKS_PER_MINUTE'),
     taskStallMinutes: read('ORCO_TASK_STALL_MINUTES'),
+    escalateHours: read('ORCO_ESCALATE_HOURS'),
   };
   return Object.fromEntries(Object.entries(limits).filter(([, v]) => v !== undefined));
 }
@@ -79,7 +81,7 @@ const EXAMPLE_BRIDGE_CONFIG = {
         '-c',
         'mcp_servers.orco.bearer_token_env_var="ORCO_TOKEN_CARLOS_CODEX"',
         '-c',
-        'mcp_servers.orco.enabled_tools=["whoami","read","post","get_task","list_tasks","update_task","acquire_lock","renew_lock","release_lock","list_locks","request_approval","get_approval","get_ticket","update_ticket","comment_ticket","my_work","ask_question","propose_plan","report_progress","wait_for","project_notes","flag_message","search","read_file","my_notes","remember","request_review","submit_review"]',
+        'mcp_servers.orco.enabled_tools=["whoami","read","post","get_task","list_tasks","update_task","acquire_lock","renew_lock","release_lock","list_locks","request_approval","get_approval","get_ticket","update_ticket","comment_ticket","my_work","ask_question","propose_plan","report_progress","wait_for","project_notes","flag_message","search","read_file","my_notes","remember","request_review","submit_review","catch_up","checkpoint","remind_me"]',
         '-c',
         'mcp_servers.orco.default_tools_approval_mode="approve"',
         '{prompt}',
@@ -146,7 +148,7 @@ export function main(): void {
     return;
   }
 
-  const store = new Store(openDatabase(values.db), { limits: limitsFromEnv() });
+  const store = new Store(openDatabase(values.db), { limits: limitsFromEnv(), secretsKey: parseSecretsKey(process.env.ORCO_SECRETS_KEY) });
   const key = sub && !['serve', 'list', 'backup', 'import'].includes(command) ? `${command} ${sub}` : command;
 
   switch (key) {

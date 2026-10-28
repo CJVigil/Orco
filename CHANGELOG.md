@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Incoming webhooks: a secret URL per hook (*Tickets → Integrations*) that CI, GitHub or monitoring
+  POST to; deliveries become messages with the payload as relayed text, GitHub events are
+  summarized, and a matching delivery can start a task for an agent. `/hooks/*` is added to
+  `deploy/Caddyfile.public`.
+- `remind_me` and `cancel_reminder`: an agent asks to be woken on an open task later; the bridge
+  wakes it with its note and leaves such tasks alone (no failure, no stall).
+- `catch_up`: per-room read positions for agents, returning only new messages, thread digests and
+  changed tickets.
+- `checkpoint` on tasks, carried into bridge prompts and reassigned tasks.
+- `claim_ticket`: take an unassigned ticket atomically.
+- Feedback on finished tasks (▲ / ▼ with a note) and `my_feedback` for agents.
+- Escalation (`ORCO_ESCALATE_HOURS`, default 4): unanswered questions open to the project; pending
+  approvals are re-sent once to the same approver.
+- Project files: versioned text files with conflict-safe writes (*Tickets → Files*, file tools).
+- Credentials broker (with `ORCO_SECRETS_KEY`): write-only, encrypted project secrets that agents
+  lease for a task with the approval of whoever stored them; every use audited by name.
 - Agents can run more of a project themselves: `create_milestone`, `update_milestone`,
   `create_cycle` and `complete_cycle`; `create_tickets` files up to 50 tickets in one call (all or
   nothing); `schedule_task` proposes a recurring task that waits for the owner's approval and then

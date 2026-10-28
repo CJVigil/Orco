@@ -304,6 +304,19 @@ function budgetLine(budget) {
   return el('span', { class: `chip budget${budget.over ? ' over' : ''}`, title: budget.over ? 'Over budget: the agent was asked to stop and check with the requester' : 'Budget and spend so far', text: `${budget.over ? 'Over budget · ' : ''}${parts.join(' · ')}` });
 }
 
+async function rateTask(id, rating) {
+  let note = '';
+  if (rating === 'down') {
+    note = prompt('What should the agent do differently next time? (it reads this)');
+    if (note === null) return;
+  }
+  try {
+    await api(`/tasks/${id}/feedback`, { method: 'POST', body: { rating, note } });
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
 async function decideSuggestion(id, action) {
   try {
     if (action === 'accept') {
@@ -438,7 +451,7 @@ setInterval(() => {
 }, 30_000);
 
 function taskCard(message) {
-  const { id, state: taskState, assignee, since, chain = [], progress = null, stalled = false, seenAt = null, budget = null, links = [], followups = [] } = message.task;
+  const { id, state: taskState, assignee, since, chain = [], progress = null, stalled = false, seenAt = null, budget = null, links = [], followups = [], feedback = { up: 0, down: 0 } } = message.task;
   const open = ['awaiting_approval', 'requested', 'accepted', 'needs_input'].includes(taskState);
   const mine = message.author === state.me.name || message.owner === state.me.name;
   const extras = [
@@ -472,6 +485,14 @@ function taskCard(message) {
       ? el('span', { class: 'task-progress', title: `Updated ${formatTime(progress.at)}` }, progress.percent !== null ? progressMeter(progress.percent) : null, progress.text)
       : null,
     extras,
+    (taskState === 'done' || taskState === 'failed') && state.me.kind === 'user'
+      ? el(
+          'span',
+          { class: 'task-feedback', role: 'group', 'aria-label': 'Rate the result' },
+          el('button', { class: 'ghost small', type: 'button', title: 'Good result', text: `▲ ${feedback.up || ''}`.trim(), onclick: () => void rateTask(id, 'up') }),
+          el('button', { class: 'ghost small', type: 'button', title: 'Not good: tell the agent why', text: `▼ ${feedback.down || ''}`.trim(), onclick: () => void rateTask(id, 'down') }),
+        )
+      : null,
     state.me.kind === 'user'
       ? el('button', { class: 'ghost small', type: 'button', text: 'Trail', title: 'What the agent did on this task', onclick: () => void showTrail(id) })
       : null,
@@ -863,6 +884,7 @@ function onTask(task) {
           budget: task.budget,
           links: task.links,
           followups: task.followups,
+          feedback: task.feedback,
         };
         touched = true;
       }
@@ -1402,6 +1424,7 @@ function connect() {
   events.addEventListener('review', (event) => onReview(JSON.parse(event.data)));
   events.addEventListener('suggestion', () => scheduleInbox());
   events.addEventListener('schedule', (event) => tickets.onSchedules(JSON.parse(event.data)));
+  events.addEventListener('files', (event) => tickets.onFiles(JSON.parse(event.data)));
   events.addEventListener('flag', () => scheduleInbox());
   events.addEventListener('notes', (event) => tickets.onNotes(JSON.parse(event.data)));
   events.addEventListener('summary', (event) => {

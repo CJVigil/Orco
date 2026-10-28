@@ -137,6 +137,21 @@ export class Approvals {
     return this.changed(id);
   }
 
+  /** An approval only one named person can decide, posted in a room (used for leases on secrets). */
+  requestFrom(actor: Participant, roomRef: string, approver: Participant, summary: string, details: string | null, ttlSeconds: number): Approval {
+    if (approver.kind !== 'user') throw new OrcoError('invalid', 'Only a person can be asked to approve');
+    const room = this.store.room(actor, roomRef);
+    let id = 0;
+    this.store.post(actor, room.ref, `@${approver.name} Approval needed: ${summary}${details ? `\n${details}` : ''}`, undefined, {
+      skipRateLimit: true,
+      onInsert: (messageId) => {
+        id = this.insert('action', room, messageId, actor, approver.id, summary.slice(0, MAX_SUMMARY), details, ttlSeconds * 1000);
+      },
+    });
+    this.store.audit.record(actor, 'approval.request', { projectId: room.projectId, subject: `approval:${id}`, detail: { room: room.ref, summary, approver: approver.name } });
+    return this.changed(id);
+  }
+
   createForTask(actor: Participant, room: Room, messageId: number, approver: Participant, summary: string): number {
     return this.insert('task', room, messageId, actor, approver.id, summary, null, TASK_APPROVAL_TTL_MS);
   }
@@ -183,6 +198,7 @@ export class Approvals {
         row.message_id,
       );
       this.store.schedules.onApproval(id, decision, actor);
+      this.store.secrets.onApproval(id, decision, actor);
     }
     return this.changed(id);
   }
@@ -248,6 +264,39 @@ export class Approvals {
     if (!row) return null;
     const state = row.state === 'pending' && row.expires_at <= this.store.now() ? 'expired' : row.state;
     return { id: row.id, kind: row.kind, state, approver: row.approver };
+  }
+
+  /**
+   * Re-sends a pending approval once after `escalateHours`. The approver never changes: consent stays
+   * with whoever it belonged to.
+   */
+  remindDue(): number {
+    const hours = this.store.limits.escalateHours;
+    if (hours <= 0) return 0;
+    const now = this.store.now();
+    const rows = this.store.db
+      .prepare(`${APPROVAL_SELECT} WHERE ap.state = 'pending' AND ap.reminded_at IS NULL AND ap.created_at < ? AND ap.expires_at > ?`)
+      .all(now - hours * 3600_000, now) as unknown as ApprovalRow[];
+    for (const row of rows) {
+      this.store.db.prepare('UPDATE approvals SET reminded_at = ? WHERE id = ?').run(now, row.id);
+      const room = this.store.db.prepare('SELECT r.id, r.project_id, p.name AS project, r.name FROM rooms r LEFT JOIN projects p ON p.id = r.project_id WHERE r.id = ?').get(row.room_id) as {
+        id: number;
+        project_id: number | null;
+        project: string | null;
+        name: string;
+      };
+      const requester = this.store.participantById(row.requester_id)!;
+      const roomRef = room.project ? `${room.project}/${room.name}` : room.name;
+      const who = row.approver
+        ? [row.approver]
+        : this.deciders(requester, { id: room.id, projectId: room.project_id, project: room.project, name: room.name, ref: roomRef }).map((p) => p.name);
+      if (who.length === 0) continue;
+      this.store.post(requester, roomRef, `${who.map((n) => `@${n}`).join(' ')} Still waiting for a decision on this (asked ${hours} hours ago).`, row.message_id, {
+        skipRateLimit: true,
+      });
+      this.store.audit.record(null, 'approval.remind', { projectId: room.project_id, subject: `approval:${row.id}`, detail: { hours } });
+    }
+    return rows.length;
   }
 
   expireDue(): void {
