@@ -26,6 +26,8 @@ export interface Question {
   answer: string | null;
   answeredBy: string | null;
   state: QuestionState;
+  /** When the person (or agent) it was asked of first looked at it. */
+  seenAt: string | null;
   createdAt: string;
   answeredAt: string | null;
 }
@@ -42,6 +44,7 @@ export interface QuestionSummary {
   question: string;
   answer: string | null;
   answeredBy: string | null;
+  seenAt: string | null;
 }
 
 interface QuestionRow {
@@ -66,6 +69,7 @@ interface QuestionRow {
   answer: string | null;
   answered_by: string | null;
   state: QuestionState;
+  seen_at: string | null;
   created_at: string;
   answered_at: string | null;
 }
@@ -74,7 +78,7 @@ const QUESTION_SELECT = `
   SELECT q.id, q.task_id, t.room_id, r.project_id, p.name AS project, r.name AS room, q.message_id, t.message_id AS thread_id,
          q.asker_id, ak.name AS asker, q.target_id, tg.name AS target, tg.owner_id AS target_owner_id,
          ak.owner_id AS assignee_owner_id, q.audience, q.kind, q.verdict, q.question, q.answer, ab.name AS answered_by, q.state,
-         q.created_at, q.answered_at
+         q.seen_at, q.created_at, q.answered_at
   FROM questions q
   JOIN tasks t ON t.id = q.task_id
   JOIN rooms r ON r.id = t.room_id
@@ -104,6 +108,7 @@ function toQuestion(row: QuestionRow): Question {
     answer: row.answer,
     answeredBy: row.answered_by,
     state: row.state,
+    seenAt: row.seen_at,
     createdAt: row.created_at,
     answeredAt: row.answered_at,
   };
@@ -122,6 +127,7 @@ function toSummary(q: Question): QuestionSummary {
     question: q.question,
     answer: q.answer,
     answeredBy: q.answeredBy,
+    seenAt: q.seenAt,
   };
 }
 
@@ -274,6 +280,26 @@ export class Questions {
       )
       .all(actor.id, actor.id, actor.kind) as unknown as QuestionRow[];
     return rows.filter((row) => this.store.canSeeRoomId(actor, row.room_id)).map(toQuestion);
+  }
+
+  /** Records the first look at open questions by someone they were asked of (for a project question, any person in it). */
+  markSeen(actor: Participant, ids: number[]): void {
+    for (const id of new Set(ids)) {
+      const row = this.row(id);
+      if (!row || row.state !== 'open' || row.seen_at !== null || !this.store.canSeeRoomId(actor, row.room_id)) continue;
+      const askedOf = row.target_id === actor.id || (row.audience === 'project' && actor.kind === 'user' && actor.id !== row.asker_id);
+      if (!askedOf) continue;
+      this.store.db.prepare("UPDATE questions SET seen_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND seen_at IS NULL").run(id);
+      this.changed(this.byId(id)!);
+    }
+  }
+
+  /** Marks open questions in a thread seen, when someone they were asked of opens it. */
+  markThreadSeen(actor: Participant, threadId: number): void {
+    const ids = this.store.db
+      .prepare("SELECT q.id FROM questions q JOIN tasks t ON t.id = q.task_id WHERE t.message_id = ? AND q.state = 'open' AND q.seen_at IS NULL")
+      .all(threadId) as unknown as { id: number }[];
+    if (ids.length) this.markSeen(actor, ids.map((r) => r.id));
   }
 
   latestForTask(taskId: number): QuestionSummary | null {

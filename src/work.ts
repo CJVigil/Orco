@@ -1,4 +1,5 @@
 import type { Question } from './questions.js';
+import type { Review } from './reviews.js';
 import type { Message, Participant, Store } from './store.js';
 import type { Task } from './tasks.js';
 import { byWorkOrder, type TicketSummary } from './tickets.js';
@@ -20,6 +21,12 @@ export interface MyWork {
   tasks: Task[];
   tickets: WorkTicket[];
   mentions: Message[];
+  /** Reviews others asked of you. */
+  reviews: Review[];
+  /** For agents: the titles of your private memory notes (read them with my_notes). */
+  memory: string[];
+  /** Tasks cancelled since you last heard, so you can stop work on them. */
+  cancelled: { taskId: number; room: string; note: string | null }[];
 }
 
 /**
@@ -45,8 +52,12 @@ export function myWork(store: Store, me: Participant): MyWork {
       };
     });
   const mentions = store.unseenMentions(me).slice(-MAX_MENTIONS);
+  const reviews = store.reviews.pendingFor(me);
+  const memory = me.kind === 'agent' ? store.memory.list(me).map((n) => n.title) : [];
+  const cancelled = store.tasks.takeCancelNotices(me);
 
   const next: string[] = [];
+  for (const c of cancelled) next.push(`Stop work on task #${c.taskId}: it was cancelled${c.note ? ` (${c.note})` : ''}.`);
   for (const q of questionsForYou) {
     next.push(q.kind === 'plan' ? `Approve or reject ${q.asker}'s plan for task #${q.taskId} (question ${q.id}).` : `Answer question ${q.id} from ${q.asker} on task #${q.taskId}.`);
   }
@@ -56,6 +67,8 @@ export function myWork(store: Store, me: Participant): MyWork {
     const what = q.kind === 'plan' ? `${q.answeredBy} ${q.verdict === 'approved' ? 'approved' : 'rejected'} your plan` : `${q.answeredBy} answered your question`;
     next.push(`Continue task #${t.id}: ${what}.`);
   }
+  for (const r of reviews) next.push(`Review ${r.target} for ${r.requester} (review ${r.id}), then submit_review.`);
+  for (const t of tasks.filter((t) => t.budget?.over)) next.push(`Task #${t.id} is over its budget: stop and check with ${t.requester} before going on.`);
   for (const t of tasks.filter((t) => t.state === 'requested')) next.push(`Accept or decline task #${t.id} from ${t.chain.join(' → ')}.`);
   for (const t of tasks.filter((t) => t.state === 'accepted' && t.question?.state !== 'answered')) next.push(`Finish task #${t.id}.`);
   const ready = tickets.filter((t) => !t.blocked && !t.task);
@@ -64,5 +77,9 @@ export function myWork(store: Store, me: Participant): MyWork {
   if (waiting) next.push(`${waiting} of your tasks ${waiting === 1 ? 'is' : 'are'} waiting on an answer; nothing to do there until it comes.`);
   if (next.length === 0 && mentions.length === 0) next.push('Nothing is waiting on you. Use wait_for_mentions to wait for work.');
 
-  return { next: next.slice(0, 8), questionsForYou, stalled, tasks, tickets, mentions };
+  if (me.kind === 'agent') {
+    store.tasks.markSeen(me, tasks.map((t) => t.id));
+    store.questions.markSeen(me, questionsForYou.map((q) => q.id));
+  }
+  return { next: next.slice(0, 8), questionsForYou, stalled, tasks, tickets, mentions, reviews, memory, cancelled };
 }

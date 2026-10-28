@@ -2795,3 +2795,339 @@ button:disabled {
 .note-card .ticket-text > :first-child {
   margin-top: 0;
 }
+
+/* Text files */
+
+.files {
+  grid-column: 2;
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+  max-width: min(46rem, 100%);
+}
+
+.file-chip {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-raised);
+  min-width: 0;
+}
+
+.file-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.35rem 0.3rem 0.6rem;
+  font-size: 0.84rem;
+}
+
+.file-head .svg-icon {
+  color: var(--muted);
+  flex: none;
+}
+
+.file-name {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.file-head .muted {
+  margin-right: auto;
+}
+
+.button-link {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.5rem;
+  border-radius: 6px;
+  color: var(--text);
+  text-decoration: none;
+  font-size: 0.8rem;
+}
+
+.button-link:hover {
+  background: var(--bg-hover);
+}
+
+.file-view {
+  border-top: 1px solid var(--border);
+  max-height: 24rem;
+  overflow: auto;
+}
+
+.file-view pre {
+  margin: 0;
+  padding: 0.5rem 0.65rem;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  white-space: pre;
+}
+
+.file-view .add {
+  color: var(--ok);
+}
+
+.file-view .del {
+  color: var(--danger);
+}
+
+.file-view .hunk {
+  color: var(--accent);
+}
+
+.pending-file {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  height: 72px;
+  max-width: 14rem;
+  padding: 0 2rem 0 0.6rem;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+}
+
+.pending-file span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Text relayed from outside Orco */
+
+.external-block {
+  grid-column: 2;
+  margin: 0.35rem 0 0;
+  max-width: min(46rem, 100%);
+  border: 1px dashed var(--border);
+  border-left: 3px solid var(--listen);
+  border-radius: 6px;
+  padding: 0.4rem 0.65rem 0.5rem;
+  background: var(--bg-raised);
+}
+
+.external-block figcaption {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.25rem;
+}
+
+.external-chip {
+  --task-edge: var(--listen);
+  color: var(--listen);
+}
+
+.external-block blockquote {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.86rem;
+  color: var(--text);
+}
+
+/* Task extras: seen, budget, links, follow-ups */
+
+.task-card .seen {
+  font-size: 0.78rem;
+}
+
+.chip.budget {
+  --task-edge: var(--idle);
+}
+
+.chip.budget.over {
+  --task-edge: var(--danger);
+  color: var(--danger);
+}
+
+.task-links {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.task-links a {
+  font-size: 0.8rem;
+  color: var(--accent);
+  max-width: 18rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-wrap {
+  grid-column: 2;
+  justify-self: start;
+  display: grid;
+  gap: 0.25rem;
+  max-width: 100%;
+}
+
+.task-wrap .task-card {
+  grid-column: auto;
+}
+
+.followups {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 0.75rem;
+  display: grid;
+  gap: 0.2rem;
+  border-left: 2px solid var(--border);
+}
+
+.followup {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  font-size: 0.82rem;
+}
+
+.followup-dismissed .followup-title {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+/* Reviews */
+
+.review-card {
+  grid-column: 2;
+  justify-self: start;
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+  padding: 0.4rem 0.4rem 0.4rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-raised);
+  box-shadow: var(--shadow);
+  font-size: 0.84rem;
+  max-width: 100%;
+}
+
+.review-pending {
+  --task-edge: var(--listen);
+}
+
+.review-approved {
+  --task-edge: var(--ok);
+}
+
+.review-changes_requested {
+  --task-edge: var(--danger);
+}
+
+.review-card .spacer {
+  flex: 1;
+}
+
+/* Search */
+
+.search-kinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  padding: 0.6rem 0.9rem 0;
+}
+
+.search-kinds .active {
+  background: var(--bg-hover);
+}
+
+.chip.kind-message {
+  --task-edge: var(--accent);
+}
+
+.chip.kind-ticket {
+  --task-edge: var(--ok);
+}
+
+.chip.kind-note {
+  --task-edge: var(--listen);
+}
+
+.chip.kind-task {
+  --task-edge: var(--muted);
+}
+
+/* Agent memory and spend */
+
+.agent-spend {
+  margin: 0;
+}
+
+.memory-details summary {
+  cursor: pointer;
+  padding: 0.2rem 0;
+}
+
+.memory-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.memory-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.memory-head .spacer {
+  flex: 1;
+}
+
+.memory-body {
+  white-space: pre-wrap;
+  font-size: 0.84rem;
+  overflow-wrap: anywhere;
+}
+
+/* Schedules */
+
+.schedule-form {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.schedule-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 0.6rem;
+}
+
+.field {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.mono {
+  font-family: var(--mono);
+}
+
+.schedule-card.paused {
+  opacity: 0.7;
+}
+
+.schedule-card .plan-card-head .svg-icon {
+  color: var(--muted);
+}
+
+.schedule-request {
+  margin: 0.2rem 0;
+  white-space: pre-wrap;
+}
+
+.warning-text {
+  color: var(--danger);
+  margin: 0;
+}

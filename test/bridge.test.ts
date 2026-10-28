@@ -48,10 +48,11 @@ after(async () => {
   await closeServer();
 });
 
-async function startBridge(mode: string, agent: Partial<BridgeAgentConfig> = {}) {
+async function startBridge(mode: string, agent: Partial<BridgeAgentConfig> = {}, logs: string[] = []) {
   let connected = false;
   const logger: Logger = {
     info: (message) => {
+      logs.push(message);
       if (message.includes('connected, waiting for tasks')) connected = true;
     },
     error: () => {},
@@ -66,12 +67,13 @@ async function startBridge(mode: string, agent: Partial<BridgeAgentConfig> = {})
           command: [process.execPath, FAKE_AGENT, '{prompt}', '{task_id}'],
           timeout_seconds: 30,
           max_concurrent: 1,
+          task_tokens: true,
           ...agent,
         },
       ],
     },
     {
-      env: { ...process.env, BOT_TOKEN: botToken, FAKE_TOKEN: botToken, FAKE_MODE: mode },
+      env: { ...process.env, BOT_TOKEN: botToken, FAKE_MODE: mode },
       logger,
       echoOutput: false,
     },
@@ -154,6 +156,28 @@ describe('bridge', () => {
     assert.equal(store.questions.claimResume(store.participantByName('ana-bot')!, question.id), false);
   });
 
+  it('hands the agent a token for the task project only, unless turned off', async () => {
+    store.createProject(ana, 'secret');
+    await startBridge('scope');
+    const scoped = JSON.parse((await settled(task('what can you see?').id)).note!) as { prefix: string; projects: string[] };
+    assert.deepEqual(scoped, { prefix: 'orco_t_', projects: ['api'] });
+    await Promise.all(bridges.splice(0).map((bridge) => bridge.stop()));
+    await startBridge('scope', { task_tokens: false });
+    const full = JSON.parse((await settled(task('and now?').id)).note!) as { prefix: string; projects: string[] };
+    assert.deepEqual(full, { prefix: 'orco_a_', projects: ['api', 'secret'] });
+  });
+
+  it('stops the agent when its task is cancelled', async () => {
+    const logs: string[] = [];
+    await startBridge('hang', {}, logs);
+    const created = task('this will be cancelled');
+    await waitFor(() => logs.some((l) => l.includes(`task #${created.id} from ana: starting`)), 'the agent to start');
+    store.tasks.update(ana, created.id, 'cancelled', 'not needed any more');
+    await waitFor(() => logs.some((l) => l.includes(`task #${created.id} agent exited`)), 'the agent to stop');
+    assert.ok(logs.some((l) => l.includes(`task #${created.id} was cancelled; stopping the agent`)));
+    assert.equal(store.tasks.get(ana, created.id).state, 'cancelled');
+  });
+
   it('ignores tasks for other agents', async () => {
     await startBridge('complete');
     const other = store.tasks.create(ana, { agent: 'ana-other', room: 'api/general', request: 'not for the bridge' });
@@ -165,7 +189,7 @@ describe('bridge', () => {
 
   it('refuses a token that belongs to a different agent', async () => {
     const bridge = new Bridge(
-      { server: baseUrl, agents: [{ name: 'ana-bot', token_env: 'T', command: ['true'], timeout_seconds: 30, max_concurrent: 1 }] },
+      { server: baseUrl, agents: [{ name: 'ana-bot', token_env: 'T', command: ['true'], timeout_seconds: 30, max_concurrent: 1, task_tokens: true }] },
       { env: { T: otherToken }, logger: quiet },
     );
     await assert.rejects(bridge.start(), /belongs to agent ana-other/);

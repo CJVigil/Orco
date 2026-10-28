@@ -701,8 +701,9 @@ export class Tickets {
       where.push('t.project_id = ?');
       params.push(project.id);
     } else {
-      where.push('t.project_id IN (SELECT project_id FROM project_members WHERE user_id = ?)');
-      params.push(this.store.humanOf(actor));
+      const visible = this.store.projectFilter(actor, 't.project_id');
+      where.push(visible.sql);
+      params.push(...visible.params);
     }
     if (filter.status) {
       where.push('s.name = ?');
@@ -1050,6 +1051,52 @@ export class Tickets {
       this.store.db.prepare(`UPDATE tickets SET updated_at = ${NOW_SQL} WHERE id = ?`).run(row.id);
     }
     this.changed(row);
+  }
+
+  /**
+   * Notes a review on a ticket and moves it: to review (the next started status), back to work (the
+   * first started status), or to done (the first completed status).
+   */
+  reviewStep(ticketId: number, actor: Participant | null, to: 'review' | 'rework' | 'done' | null, note: string): void {
+    const row = this.row(ticketId);
+    if (!row) return;
+    const statuses = this.statuses(row.project_id);
+    const current = statuses.find((s) => s.id === row.status_id)!;
+    const started = statuses.filter((s) => s.category === 'started');
+    let target: TicketStatus | undefined;
+    if (to === 'review') {
+      const index = started.findIndex((s) => s.id === current.id);
+      target = index === -1 ? (started[1] ?? started[0]) : started[index + 1];
+    } else if (to === 'rework') {
+      target = started[0];
+    } else if (to === 'done') {
+      target = statuses.find((s) => s.category === 'completed');
+    }
+    this.activity(row.id, actor, 'comment', note, null);
+    if (target && target.id !== current.id) {
+      this.store.db
+        .prepare(
+          `UPDATE tickets SET status_id = ?, sort = ?, updated_at = ${NOW_SQL},
+             started_at = CASE WHEN ? = 'started' THEN coalesce(started_at, ${NOW_SQL}) ELSE started_at END,
+             completed_at = CASE WHEN ? IN ('completed', 'canceled') THEN ${NOW_SQL} ELSE NULL END
+           WHERE id = ?`,
+        )
+        .run(target.id, this.topSort(target.id), target.category, target.category, row.id);
+      const changes = [{ field: 'status', from: current.name, to: target.name }];
+      this.activity(row.id, actor, 'change', null, { changes });
+      this.store.audit.record(actor, 'ticket.update', { projectId: row.project_id, subject: `ticket:${refOf(row)}`, detail: { changes, via: 'review' } });
+    } else {
+      this.store.db.prepare(`UPDATE tickets SET updated_at = ${NOW_SQL} WHERE id = ?`).run(row.id);
+    }
+    this.changed(row);
+  }
+
+  /** The room a project's ticket work is announced in (its #general, or its first room). */
+  workRoom(projectId: number): string {
+    const room = this.store.db
+      .prepare("SELECT r.name, p.name AS project FROM rooms r JOIN projects p ON p.id = r.project_id WHERE r.project_id = ? ORDER BY r.name = 'general' DESC, r.id LIMIT 1")
+      .get(projectId) as { name: string; project: string };
+    return `${room.project}/${room.name}`;
   }
 
   /** A ticket follows its task when the agent hands the work to another agent. */

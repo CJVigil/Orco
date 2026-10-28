@@ -1,6 +1,8 @@
 import { OrcoError } from './errors.js';
 import type { QuestionSummary } from './questions.js';
 import type { Participant, Store } from './store.js';
+import { hashToken } from './tokens.js';
+import { randomBytes } from 'node:crypto';
 
 export type TaskState =
   | 'awaiting_approval'
@@ -20,6 +22,28 @@ export interface TaskProgress {
   at: string;
 }
 
+export interface TaskBudget {
+  minutes: number | null;
+  cents: number | null;
+  /** Minutes since the agent accepted, up to when the task closed. */
+  elapsedMinutes: number | null;
+  spentCents: number;
+  tokens: number;
+  over: boolean;
+}
+
+export interface TaskLink {
+  title: string | null;
+  url: string;
+}
+
+export interface TaskFollowup {
+  id: number;
+  title: string;
+  state: 'open' | 'accepted' | 'dismissed';
+  ticket: string | null;
+}
+
 export interface TaskSummary {
   id: number;
   state: TaskState;
@@ -28,7 +52,30 @@ export interface TaskSummary {
   chain: string[];
   progress: TaskProgress | null;
   stalled: boolean;
+  /** When the assignee first looked at the task (read it, listed it, or started on it). */
+  seenAt: string | null;
+  budget: TaskBudget | null;
+  links: TaskLink[];
+  followups: TaskFollowup[];
 }
+
+export interface TaskResult {
+  links?: { title?: string; url: string }[];
+  followups?: { title: string; description?: string }[];
+}
+
+export interface CancelNotice {
+  taskId: number;
+  room: string;
+  note: string | null;
+}
+
+export const MAX_BUDGET_MINUTES = 7 * 24 * 60;
+export const MAX_BUDGET_CENTS = 1_000_000;
+const MAX_LINKS = 10;
+const MAX_FOLLOWUPS = 10;
+const DEFAULT_TOKEN_TTL_SECONDS = 2 * 3600;
+const MAX_TOKEN_TTL_SECONDS = 24 * 3600;
 
 export interface AgentActivity {
   taskId: number;
@@ -61,6 +108,13 @@ export interface Task {
   progress: TaskProgress | null;
   /** Accepted, not waiting on a person, and no sign of life from the agent for a while. */
   stalled: boolean;
+  seenAt: string | null;
+  budget: TaskBudget | null;
+  /** Links the assignee left with its result: a PR, a commit, a deploy. */
+  links: TaskLink[];
+  /** Follow-up work the assignee suggested; people turn each into a ticket or dismiss it. */
+  followups: TaskFollowup[];
+  scheduleId: number | null;
 }
 
 interface TaskRow {
@@ -90,6 +144,15 @@ interface TaskRow {
   progress_at: string | null;
   heartbeat_at: number | null;
   stall_notified: number;
+  seen_at: string | null;
+  accepted_at: number | null;
+  budget_minutes: number | null;
+  budget_cents: number | null;
+  spent_cents: number;
+  spent_tokens: number;
+  over_budget_notified: number;
+  links: string;
+  schedule_id: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -101,7 +164,8 @@ const TASK_SELECT = `
          t.parent_id, t.depth, t.request, t.state, t.note, t.approval_id, ap.state AS approval_state,
          (SELECT q.id FROM questions q WHERE q.task_id = t.id AND q.state = 'open') AS open_question,
          t.progress, t.progress_pct, t.progress_at, t.heartbeat_at, t.stall_notified,
-         t.created_at, t.updated_at
+         t.seen_at, t.accepted_at, t.budget_minutes, t.budget_cents, t.spent_cents, t.spent_tokens,
+         t.over_budget_notified, t.links, t.schedule_id, t.created_at, t.updated_at
   FROM tasks t
   LEFT JOIN approvals ap ON ap.id = t.approval_id
   JOIN rooms r ON r.id = t.room_id
@@ -136,7 +200,33 @@ function progressOf(row: { progress: string | null; progress_pct: number | null;
   return row.progress === null ? null : { text: row.progress, percent: row.progress_pct, at: row.progress_at! };
 }
 
-function baseTask(row: TaskRow): Omit<Task, 'chain' | 'question' | 'progress' | 'stalled'> {
+function checkBudget(minutes: number | null | undefined, cents: number | null | undefined): void {
+  if (minutes !== undefined && minutes !== null && (!Number.isInteger(minutes) || minutes < 1 || minutes > MAX_BUDGET_MINUTES)) {
+    throw new OrcoError('invalid', `A time budget is 1 to ${MAX_BUDGET_MINUTES} minutes`);
+  }
+  if (cents !== undefined && cents !== null && (!Number.isInteger(cents) || cents < 1 || cents > MAX_BUDGET_CENTS)) {
+    throw new OrcoError('invalid', `A cost budget is 1 to ${MAX_BUDGET_CENTS} cents`);
+  }
+}
+
+function checkLinks(links: TaskResult['links']): TaskLink[] {
+  if (!links?.length) return [];
+  if (links.length > MAX_LINKS) throw new OrcoError('invalid', `Leave at most ${MAX_LINKS} links`);
+  return links.map((link) => {
+    let url: URL;
+    try {
+      url = new URL(link.url.trim());
+    } catch {
+      throw new OrcoError('invalid', `Not a link: ${link.url}`);
+    }
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new OrcoError('invalid', `Links must be http or https: ${link.url}`);
+    if (url.href.length > 2000) throw new OrcoError('invalid', 'That link is too long');
+    const title = link.title?.trim().replace(/\s+/g, ' ').slice(0, 100) || null;
+    return { title, url: url.href };
+  });
+}
+
+function baseTask(row: TaskRow): Omit<Task, 'chain' | 'question' | 'progress' | 'stalled' | 'seenAt' | 'budget' | 'links' | 'followups'> {
   return {
     id: row.id,
     room: row.project ? `${row.project}/${row.room}` : row.room,
@@ -152,6 +242,7 @@ function baseTask(row: TaskRow): Omit<Task, 'chain' | 'question' | 'progress' | 
     note: row.note,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    scheduleId: row.schedule_id,
   };
 }
 
@@ -160,8 +251,12 @@ export class Tasks {
 
   constructor(private readonly store: Store) {}
 
-  create(actor: Participant, input: { agent: string; room: string; request: string; parentId?: number }): Task {
+  create(
+    actor: Participant,
+    input: { agent: string; room: string; request: string; parentId?: number; budgetMinutes?: number | null; budgetCents?: number | null; scheduleId?: number },
+  ): Task {
     const request = input.request.trim();
+    checkBudget(input.budgetMinutes, input.budgetCents);
     if (!request) throw new OrcoError('invalid', 'Task request is empty');
     if (request.length > MAX_REQUEST) throw new OrcoError('invalid', `Task request is over ${MAX_REQUEST} characters`);
     const assignee = this.store.participantByName(input.agent.replace(/^@/, ''));
@@ -196,10 +291,23 @@ export class Tasks {
           : null;
         const { lastInsertRowid } = this.store.db
           .prepare(
-            `INSERT INTO tasks (message_id, room_id, requester_id, assignee_id, parent_id, depth, request, approval_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO tasks (message_id, room_id, requester_id, assignee_id, parent_id, depth, request, approval_id,
+               budget_minutes, budget_cents, schedule_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
-          .run(messageId, inserted.id, actor.id, assignee.id, parent?.id ?? null, depth, request, approvalId);
+          .run(
+            messageId,
+            inserted.id,
+            actor.id,
+            assignee.id,
+            parent?.id ?? null,
+            depth,
+            request,
+            approvalId,
+            input.budgetMinutes ?? null,
+            input.budgetCents ?? null,
+            input.scheduleId ?? null,
+          );
         taskId = Number(lastInsertRowid);
       },
     });
@@ -207,7 +315,16 @@ export class Tasks {
     this.store.audit.record(actor, 'task.create', {
       projectId: task.projectId,
       subject: `task:${task.id}`,
-      detail: { assignee: assignee.name, room: task.room, request, parentId: task.parentId, depth, needsApproval },
+      detail: {
+        assignee: assignee.name,
+        room: task.room,
+        request,
+        parentId: task.parentId,
+        depth,
+        needsApproval,
+        ...(task.budget ? { budget: { minutes: task.budget.minutes, cents: task.budget.cents } } : {}),
+        ...(input.scheduleId ? { scheduleId: input.scheduleId } : {}),
+      },
     });
     this.store.events.emit('task', task);
     return task;
@@ -248,10 +365,18 @@ export class Tasks {
     return !this.store.trusts(assignee, requesterHuman);
   }
 
-  update(actor: Participant, id: number, state: TaskState, note?: string): Task {
+  update(actor: Participant, id: number, state: TaskState, note?: string, result: TaskResult = {}): Task {
     const row = this.row(id);
     if (!row || !this.store.canSeeRoomId(actor, row.room_id)) throw new OrcoError('not_found', `No task ${id}`);
     const trimmedNote = note?.trim() || null;
+    const links = checkLinks(result.links);
+    const followups = result.followups ?? [];
+    if ((links.length || followups.length) && state !== 'done' && state !== 'failed') {
+      throw new OrcoError('invalid', 'Links and follow-ups go with a done or failed task');
+    }
+    if (followups.length > MAX_FOLLOWUPS) throw new OrcoError('invalid', `Suggest at most ${MAX_FOLLOWUPS} follow-ups`);
+    if (followups.length && row.project_id === null) throw new OrcoError('invalid', 'Follow-ups become tickets, so they need a task in a project room');
+    for (const f of followups) this.store.suggestions.check(f);
 
     const current = effectiveState(row);
     if (state === 'cancelled') {
@@ -266,7 +391,12 @@ export class Tasks {
       }
     }
     if (state === 'cancelled' && row.approval_id !== null) this.store.approvals.withdraw(row.approval_id);
-    return this.transition(actor, row, state, trimmedNote);
+    if (links.length) this.store.db.prepare('UPDATE tasks SET links = ? WHERE id = ?').run(JSON.stringify(links), id);
+    for (const f of followups) this.store.suggestions.create(actor, row.id, row.project_id!, f);
+    return this.transition(actor, row, state, trimmedNote, {
+      ...(links.length ? { links } : {}),
+      ...(followups.length ? { followups: followups.map((f) => f.title) } : {}),
+    });
   }
 
   private transition(actor: Participant, row: TaskRow, state: TaskState, note: string | null, detail: Record<string, unknown> = {}): Task {
@@ -281,9 +411,13 @@ export class Tasks {
         this.store.db
           .prepare(
             `UPDATE tasks SET state = ?, note = coalesce(?, note), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-               heartbeat_at = CASE WHEN ? = 'accepted' THEN ? ELSE heartbeat_at END, stall_notified = 0 WHERE id = ?`,
+               heartbeat_at = CASE WHEN ? = 'accepted' THEN ? ELSE heartbeat_at END, stall_notified = 0,
+               accepted_at = CASE WHEN ? = 'accepted' THEN coalesce(accepted_at, ?) ELSE accepted_at END,
+               seen_at = CASE WHEN ? = 'accepted' THEN coalesce(seen_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) ELSE seen_at END,
+               cancel_unseen = CASE WHEN ? = 'cancelled' AND ? != assignee_id THEN 1 ELSE 0 END
+             WHERE id = ?`,
           )
-          .run(state, note, state, this.store.now(), id);
+          .run(state, note, state, this.store.now(), state, this.store.now(), state, state, actor.id, id);
       },
     });
     const task = this.byId(id)!;
@@ -293,7 +427,13 @@ export class Tasks {
   }
 
   /** Updates the progress line on an open task in place, without posting a message. */
-  reportProgress(actor: Participant, id: number, text: string, percent?: number | null): Task {
+  reportProgress(
+    actor: Participant,
+    id: number,
+    text: string,
+    percent?: number | null,
+    usage: { costCents?: number | null; tokens?: number | null } = {},
+  ): Task {
     const row = this.row(id);
     if (!row || !this.store.canSeeRoomId(actor, row.room_id)) throw new OrcoError('not_found', `No task ${id}`);
     if (row.assignee_id !== actor.id) throw new OrcoError('forbidden', `Only ${row.assignee} can report progress on task ${id}`);
@@ -304,17 +444,143 @@ export class Tasks {
     if (percent !== undefined && percent !== null && (!Number.isInteger(percent) || percent < 0 || percent > 100)) {
       throw new OrcoError('invalid', 'Percent must be a whole number from 0 to 100');
     }
+    for (const [field, value] of [['Cost', usage.costCents], ['Tokens', usage.tokens]] as const) {
+      if (value !== undefined && value !== null && (!Number.isInteger(value) || value < 0 || value > 1e12)) {
+        throw new OrcoError('invalid', `${field} must be a whole number of at least 0`);
+      }
+    }
     this.store.checkRate(actor, 'post');
     this.store.db
       .prepare(
         `UPDATE tasks SET progress = ?, progress_pct = ?, progress_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-           heartbeat_at = ?, stall_notified = 0 WHERE id = ?`,
+           heartbeat_at = ?, stall_notified = 0, spent_cents = coalesce(?, spent_cents), spent_tokens = coalesce(?, spent_tokens)
+         WHERE id = ?`,
       )
-      .run(line, percent ?? null, this.store.now(), id);
+      .run(line, percent ?? null, this.store.now(), usage.costCents ?? null, usage.tokens ?? null, id);
+    this.store.audit.record(actor, 'task.progress', {
+      projectId: row.project_id,
+      subject: `task:${id}`,
+      detail: { text: line, percent: percent ?? null, ...(usage.costCents != null ? { costCents: usage.costCents } : {}), ...(usage.tokens != null ? { tokens: usage.tokens } : {}) },
+    });
+    this.checkOverBudget(id);
     const task = this.byId(id)!;
-    this.store.audit.record(actor, 'task.progress', { projectId: task.projectId, subject: `task:${id}`, detail: { text: line, percent: percent ?? null } });
     this.store.events.emit('task', task);
     return task;
+  }
+
+  /** Tells the requester once when a task runs past its time or cost budget. */
+  private checkOverBudget(id: number): void {
+    const row = this.row(id);
+    if (!row || row.over_budget_notified || !OPEN_STATES.includes(row.state)) return;
+    const budget = this.budgetOf(row);
+    if (!budget?.over) return;
+    const parts: string[] = [];
+    if (budget.minutes !== null && budget.elapsedMinutes !== null && budget.elapsedMinutes > budget.minutes) {
+      parts.push(`${budget.elapsedMinutes} of ${budget.minutes} minutes`);
+    }
+    if (budget.cents !== null && budget.spentCents > budget.cents) parts.push(`${money(budget.spentCents)} of ${money(budget.cents)}`);
+    const assignee = this.store.participantById(row.assignee_id)!;
+    this.store.db.prepare('UPDATE tasks SET over_budget_notified = 1 WHERE id = ?').run(id);
+    this.store.post(assignee, this.toTask(row).room, `@${row.requester} Task #${id} is over its budget (${parts.join(', ')}). ${row.assignee} has been asked to stop and check with you before going on.`, row.message_id, {
+      skipRateLimit: true,
+    });
+    this.store.audit.record(null, 'task.over_budget', { projectId: row.project_id, subject: `task:${id}`, detail: budget });
+  }
+
+  /** Records that the assignee has looked at these tasks; the first look only. */
+  markSeen(actor: Participant, ids: number[]): void {
+    if (actor.kind !== 'agent' || ids.length === 0) return;
+    const update = this.store.db.prepare("UPDATE tasks SET seen_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND assignee_id = ? AND seen_at IS NULL");
+    for (const id of new Set(ids)) {
+      if (Number(update.run(id, actor.id).changes) > 0) this.store.events.emit('task', this.byId(id)!);
+    }
+  }
+
+  /** Tasks of this agent's that someone cancelled since it last heard; each is reported once. */
+  takeCancelNotices(actor: Participant): CancelNotice[] {
+    if (actor.kind !== 'agent') return [];
+    const rows = this.store.db
+      .prepare(`${TASK_SELECT} WHERE t.assignee_id = ? AND t.cancel_unseen = 1 ORDER BY t.id`)
+      .all(actor.id) as unknown as TaskRow[];
+    if (rows.length === 0) return [];
+    this.store.db.prepare('UPDATE tasks SET cancel_unseen = 0 WHERE assignee_id = ? AND cancel_unseen = 1').run(actor.id);
+    return rows.map((row) => ({ taskId: row.id, room: this.toTask(row).room, note: row.note }));
+  }
+
+  /**
+   * A short-lived token for one task: it signs in as the assignee but sees only the task's project
+   * (and server rooms), and stops working when the task closes. The bridge hands it to the agent it
+   * starts instead of the agent's own token.
+   */
+  issueToken(actor: Participant, id: number, ttlSeconds = DEFAULT_TOKEN_TTL_SECONDS): { token: string; taskId: number; expiresAt: string } {
+    this.store.unscoped(actor, 'issue task tokens');
+    const row = this.row(id);
+    if (!row || !this.store.canSeeRoomId(actor, row.room_id)) throw new OrcoError('not_found', `No task ${id}`);
+    if (row.assignee_id !== actor.id) throw new OrcoError('forbidden', `Only ${row.assignee} can get a token for task ${id}`);
+    if (!OPEN_STATES.includes(row.state)) throw new OrcoError('conflict', `Task ${id} is ${row.state}`);
+    if (!Number.isInteger(ttlSeconds) || ttlSeconds < 60 || ttlSeconds > MAX_TOKEN_TTL_SECONDS) {
+      throw new OrcoError('invalid', `A task token lasts 60 to ${MAX_TOKEN_TTL_SECONDS} seconds`);
+    }
+    const now = this.store.now();
+    this.store.db.prepare('DELETE FROM task_tokens WHERE expires_at < ?').run(now);
+    const token = `orco_t_${randomBytes(32).toString('base64url')}`;
+    const expires = now + ttlSeconds * 1000;
+    this.store.db.prepare('INSERT INTO task_tokens (token_hash, task_id, agent_id, expires_at) VALUES (?, ?, ?, ?)').run(hashToken(token), id, actor.id, expires);
+    this.store.audit.record(actor, 'task.token', { projectId: row.project_id, subject: `task:${id}`, detail: { ttlSeconds } });
+    return { token, taskId: id, expiresAt: new Date(expires).toISOString() };
+  }
+
+  authenticateTaskToken(hash: string): Participant | null {
+    const row = this.store.db
+      .prepare(
+        `SELECT p.id, p.kind, p.name, p.owner_id, t.id AS task_id, r.project_id
+         FROM task_tokens tt JOIN tasks t ON t.id = tt.task_id JOIN rooms r ON r.id = t.room_id
+         JOIN participants p ON p.id = tt.agent_id
+         WHERE tt.token_hash = ? AND tt.expires_at > ? AND t.state IN ('requested', 'accepted')`,
+      )
+      .get(hash, this.store.now()) as
+      | { id: number; kind: 'agent'; name: string; owner_id: number | null; task_id: number; project_id: number | null }
+      | undefined;
+    if (!row) return null;
+    return { id: row.id, kind: row.kind, name: row.name, ownerId: row.owner_id, scope: { taskId: row.task_id, projectId: row.project_id } };
+  }
+
+  /** What an agent spent on tasks over the last `days` days, for its owner. */
+  spendOf(agentId: number, days = 30): { tasks: number; cents: number; tokens: number; minutes: number } {
+    const since = new Date(this.store.now() - days * 86_400_000).toISOString();
+    const rows = this.store.db
+      .prepare(`${TASK_SELECT} WHERE t.assignee_id = ? AND t.created_at >= ? AND t.accepted_at IS NOT NULL`)
+      .all(agentId, since) as unknown as TaskRow[];
+    let cents = 0;
+    let tokens = 0;
+    let minutes = 0;
+    for (const row of rows) {
+      cents += row.spent_cents;
+      tokens += row.spent_tokens;
+      minutes += this.elapsedMinutes(row) ?? 0;
+    }
+    return { tasks: rows.length, cents, tokens, minutes };
+  }
+
+  private elapsedMinutes(row: TaskRow): number | null {
+    if (row.accepted_at === null) return null;
+    const end = OPEN_STATES.includes(row.state) ? this.store.now() : Date.parse(row.updated_at);
+    return Math.max(0, Math.floor((end - row.accepted_at) / 60_000));
+  }
+
+  private budgetOf(row: TaskRow): TaskBudget | null {
+    if (row.budget_minutes === null && row.budget_cents === null && row.spent_cents === 0 && row.spent_tokens === 0) return null;
+    const elapsedMinutes = this.elapsedMinutes(row);
+    const overTime = row.budget_minutes !== null && elapsedMinutes !== null && elapsedMinutes > row.budget_minutes;
+    const overCost = row.budget_cents !== null && row.spent_cents > row.budget_cents;
+    return {
+      minutes: row.budget_minutes,
+      cents: row.budget_cents,
+      elapsedMinutes,
+      spentCents: row.spent_cents,
+      tokens: row.spent_tokens,
+      over: overTime || overCost,
+    };
   }
 
   /**
@@ -351,8 +617,15 @@ export class Tasks {
     for (const { id } of revived) this.store.events.emit('task', this.byId(id)!);
   }
 
-  /** Announces newly stalled tasks once each (as task events); returns them. */
+  /** Announces newly stalled tasks once each (as task events); returns them. Also catches tasks that ran out of time. */
   sweepStalled(): Task[] {
+    const timed = this.store.db
+      .prepare("SELECT id FROM tasks WHERE state = 'accepted' AND budget_minutes IS NOT NULL AND over_budget_notified = 0 AND accepted_at < ? - budget_minutes * 60000")
+      .all(this.store.now()) as unknown as { id: number }[];
+    for (const { id } of timed) {
+      this.checkOverBudget(id);
+      this.store.events.emit('task', this.byId(id)!);
+    }
     const cutoff = this.store.now() - this.store.limits.taskStallMinutes * 60_000;
     const rows = this.store.db
       .prepare(
@@ -433,39 +706,21 @@ export class Tasks {
   }
 
   summaryForMessage(messageId: number): TaskSummary | null {
-    const row = this.store.db
-      .prepare(
-        `SELECT t.id, t.state, a.name AS assignee, ap.state AS approval_state, t.updated_at AS since, t.parent_id,
-                rq.name AS requester, t.progress, t.progress_pct, t.progress_at, t.heartbeat_at,
-                (SELECT q.id FROM questions q WHERE q.task_id = t.id AND q.state = 'open') AS open_question
-         FROM tasks t
-         JOIN participants a ON a.id = t.assignee_id JOIN participants rq ON rq.id = t.requester_id
-         LEFT JOIN approvals ap ON ap.id = t.approval_id
-         WHERE t.message_id = ?`,
-      )
-      .get(messageId) as
-      | (Omit<TaskSummary, 'chain' | 'progress' | 'stalled'> & {
-          approval_state: string | null;
-          open_question: number | null;
-          parent_id: number | null;
-          requester: string;
-          progress: string | null;
-          progress_pct: number | null;
-          progress_at: string | null;
-          heartbeat_at: number | null;
-        })
-      | undefined;
-    return row
-      ? {
-          id: row.id,
-          state: effectiveState(row),
-          assignee: row.assignee,
-          since: row.since,
-          chain: this.chainFor(row),
-          progress: progressOf(row),
-          stalled: this.isStalled(row),
-        }
-      : null;
+    const row = this.store.db.prepare(`${TASK_SELECT} WHERE t.message_id = ?`).get(messageId) as TaskRow | undefined;
+    if (!row) return null;
+    return {
+      id: row.id,
+      state: effectiveState(row),
+      assignee: row.assignee,
+      since: row.updated_at,
+      chain: this.chainFor(row),
+      progress: progressOf(row),
+      stalled: this.isStalled(row),
+      seenAt: row.seen_at,
+      budget: this.budgetOf(row),
+      links: JSON.parse(row.links) as TaskLink[],
+      followups: this.store.suggestions.forTask(row.id),
+    };
   }
 
   activity(viewer: Participant): Map<number, AgentActivity> {
@@ -491,6 +746,10 @@ export class Tasks {
       question: this.store.questions.latestForTask(row.id),
       progress: progressOf(row),
       stalled: this.isStalled(row),
+      seenAt: row.seen_at,
+      budget: this.budgetOf(row),
+      links: JSON.parse(row.links) as TaskLink[],
+      followups: this.store.suggestions.forTask(row.id),
     };
   }
 
@@ -539,4 +798,8 @@ export class Tasks {
     const row = this.row(id);
     return row ? this.toTask(row) : null;
   }
+}
+
+function money(cents: number): string {
+  return `$${(cents / 100).toFixed(2)}`;
 }

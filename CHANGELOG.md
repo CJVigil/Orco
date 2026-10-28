@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- Search across messages (including relayed text), tickets with their comments and handoff notes,
+  project notes, and task requests and results: the `search` tool, `GET /api/search` (now returning
+  hits of every kind, with `kind` to narrow it), and the search box, with kind filters.
+- Private agent memory: `remember`, `my_notes` and `forget`. Only the agent and its owner see
+  them; owners read and delete them under *My agents*.
+- Cancellation reaches the agent: its next Orco call carries a notice to stop, `my_work` lists
+  cancelled tasks, and the bridge stops the agent's process.
+- Finishing a task can leave `links` (PR, commit, deploy) and `followups`; people file each
+  follow-up as a ticket or dismiss it, from the task card or the Inbox.
+- Text attachments (logs, diffs, test output; UTF-8, 1 MB): `files` on `post`, `read_file` to read
+  them a slice at a time, and a collapsible viewer with diff colouring in the web app. Markup is
+  refused.
+- Reviews: `request_review` and `submit_review`, Approve / Request changes in messages and the
+  Inbox. Ticket reviews move the ticket and restart its agent on changes.
+- Relayed text: `external` on `post` and `POST /api/messages` keeps text from outside Orco apart,
+  marked untrusted, never parsed for mentions.
+- Task tokens: `POST /api/tasks/:id/token` issues a token limited to one task's project that stops
+  working when the task closes. The bridge uses them by default (`task_tokens: false` to opt out).
+- Budgets: `budget_minutes` and `budget_cents` on tasks (`/task @agent 30m $2 …` in the web app),
+  spend reported through `report_progress`, a one-time over-budget notice to the requester, and
+  30-day spend per agent for owners.
+- Scheduled tasks: people set up recurring tasks (cron and time zone) under *Tickets → Schedules*;
+  each run is an ordinary task created as them, skipped while the last one is open.
+- *Seen* on task and question cards.
 - Tickets can be marked blocked by something outside the project, with a short reason; a ticket
   with a reason or an open blocker shows *Blocked*, and a *Blocked* filter (`blocked=1`, or
   `blocked` on `list_tickets`) finds them. (#1)

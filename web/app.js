@@ -158,6 +158,8 @@ function renderMessage(message, previous, { inThread = false } = {}) {
     previous.author === message.author &&
     new Date(message.createdAt) - new Date(previous.createdAt) < GROUP_MS;
   const mentionsMe = message.mentions.includes(state.me.name);
+  const images = (message.attachments || []).filter((a) => a.mime !== 'text/plain');
+  const files = (message.attachments || []).filter((a) => a.mime === 'text/plain');
   const node = el(
     'li',
     {
@@ -173,12 +175,13 @@ function renderMessage(message, previous, { inThread = false } = {}) {
       message.owner ? el('span', { class: 'owner', text: `owned by ${message.owner}` }) : null,
       el('time', { class: 'time', datetime: message.createdAt, title: new Date(message.createdAt).toLocaleString(), text: formatTime(message.createdAt) }),
     ),
-    el('div', { class: 'msg-body md' }, richText(message.text)),
-    message.attachments?.length
+    message.text ? el('div', { class: 'msg-body md' }, richText(message.text)) : null,
+    message.external ? externalBlock(message.external) : null,
+    images.length
       ? el(
           'div',
           { class: 'images' },
-          message.attachments.map((image) =>
+          images.map((image) =>
             el(
               'a',
               { href: `/api/attachments/${image.id}`, target: '_blank', rel: 'noopener', title: image.name },
@@ -187,9 +190,11 @@ function renderMessage(message, previous, { inThread = false } = {}) {
           ),
         )
       : null,
+    files.length ? el('div', { class: 'files' }, files.map(fileChip)) : null,
     message.task ? taskCard(message) : null,
     message.approval ? approvalCard(message) : null,
     message.question ? questionCard(message) : null,
+    message.review ? reviewCard(message) : null,
   );
   if (!inThread) {
     node.append(
@@ -207,6 +212,201 @@ function renderMessage(message, previous, { inThread = false } = {}) {
     }
   }
   return node;
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+const DIFF_NAME = /\.(diff|patch)$/i;
+// Terminal colour codes in logs are noise in a browser.
+const ANSI = /\u001b\[[0-9;]*[A-Za-z]/g;
+
+/** A text attachment: name and size, opening into the file itself (fetched as text, shown as text). */
+function fileChip(file) {
+  const body = el('div', { class: 'file-view', hidden: true });
+  let loaded = false;
+  const toggle = el('button', {
+    class: 'ghost small',
+    type: 'button',
+    text: 'Show',
+    'aria-expanded': 'false',
+    onclick: async () => {
+      const open = body.hidden;
+      body.hidden = !open;
+      toggle.textContent = open ? 'Hide' : 'Show';
+      toggle.setAttribute('aria-expanded', String(open));
+      if (!open || loaded) return;
+      loaded = true;
+      try {
+        const res = await fetch(`/api/attachments/${file.id}`, { credentials: 'same-origin' });
+        if (!res.ok) throw new Error(res.statusText);
+        const text = (await res.text()).replace(ANSI, '');
+        const lines = text.split('\n');
+        const diff = DIFF_NAME.test(file.name);
+        body.replaceChildren(
+          el(
+            'pre',
+            {},
+            lines.map((line, i) =>
+              el('span', {
+                class: diff ? (line.startsWith('+') && !line.startsWith('+++') ? 'add' : line.startsWith('-') && !line.startsWith('---') ? 'del' : line.startsWith('@@') ? 'hunk' : '') : '',
+                text: `${line}${i < lines.length - 1 ? '\n' : ''}`,
+              }),
+            ),
+          ),
+        );
+      } catch (err) {
+        body.replaceChildren(el('p', { class: 'muted small', text: `Could not load the file: ${err.message}` }));
+      }
+    },
+  });
+  return el(
+    'div',
+    { class: 'file-chip' },
+    el(
+      'div',
+      { class: 'file-head' },
+      icon('file'),
+      el('span', { class: 'file-name', text: file.name }),
+      el('span', { class: 'muted small', text: formatBytes(file.size) }),
+      toggle,
+      el('a', { class: 'ghost small button-link', href: `/api/attachments/${file.id}`, download: file.name, text: 'Download' }),
+    ),
+    body,
+  );
+}
+
+/** Text the author relayed from outside Orco: shown apart from their own words, never as markdown, never with live links. */
+function externalBlock(external) {
+  return el(
+    'figure',
+    { class: 'external-block' },
+    el('figcaption', {}, el('span', { class: 'chip external-chip', text: 'External' }), el('span', { class: 'muted small', text: `from ${external.source} · untrusted, relayed by the author` })),
+    el('blockquote', { text: external.text }),
+  );
+}
+
+function money(cents) {
+  return `$${(cents / 100).toFixed(2)}`;
+}
+
+function budgetLine(budget) {
+  const parts = [];
+  const started = budget.elapsedMinutes !== null;
+  if (budget.minutes !== null) parts.push(started ? `${budget.elapsedMinutes} of ${budget.minutes} min` : `${budget.minutes} min budget`);
+  else if (started) parts.push(`${budget.elapsedMinutes} min`);
+  if (budget.cents !== null) parts.push(started || budget.spentCents ? `${money(budget.spentCents)} of ${money(budget.cents)}` : `${money(budget.cents)} budget`);
+  else if (budget.spentCents) parts.push(money(budget.spentCents));
+  if (budget.tokens) parts.push(`${budget.tokens.toLocaleString()} tokens`);
+  return el('span', { class: `chip budget${budget.over ? ' over' : ''}`, title: budget.over ? 'Over budget: the agent was asked to stop and check with the requester' : 'Budget and spend so far', text: `${budget.over ? 'Over budget · ' : ''}${parts.join(' · ')}` });
+}
+
+async function decideSuggestion(id, action) {
+  try {
+    if (action === 'accept') {
+      const result = await api(`/suggestions/${id}/accept`, { method: 'POST', body: {} });
+      void tickets.openTicket(result.ticket.ref);
+    } else {
+      await api(`/suggestions/${id}/dismiss`, { method: 'POST', body: {} });
+    }
+    scheduleInbox();
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+function followupList(followups) {
+  return el(
+    'ul',
+    { class: 'followups' },
+    followups.map((f) =>
+      el(
+        'li',
+        { class: `followup followup-${f.state}` },
+        el('span', { class: 'muted small', text: 'Follow-up' }),
+        f.ticket ? ticketLink(...f.ticket.split(/-(?=\d+$)/)) ?? el('span', { text: f.ticket }) : null,
+        el('span', { class: 'followup-title', text: f.title }),
+        f.state === 'open' && state.me.kind === 'user'
+          ? [
+              el('button', { class: 'small', type: 'button', text: 'File ticket', onclick: () => void decideSuggestion(f.id, 'accept') }),
+              el('button', { class: 'ghost small', type: 'button', text: 'Dismiss', onclick: () => void decideSuggestion(f.id, 'dismiss') }),
+            ]
+          : f.state === 'dismissed'
+            ? el('span', { class: 'muted small', text: 'dismissed' })
+            : null,
+      ),
+    ),
+  );
+}
+
+const REVIEW_LABEL = { pending: 'Waiting for review', approved: 'Approved', changes_requested: 'Changes requested', withdrawn: 'Withdrawn' };
+
+async function submitReview(id, verdict) {
+  let note;
+  if (verdict === 'changes_requested') {
+    note = prompt('What needs to change? (shared with the author)');
+    if (!note) return;
+  }
+  try {
+    await api(`/reviews/${id}`, { method: 'POST', body: { verdict, note } });
+    scheduleInbox();
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+function reviewButtons(id) {
+  return [
+    el('button', { class: 'ghost small danger', type: 'button', text: 'Request changes', onclick: () => void submitReview(id, 'changes_requested') }),
+    el('button', { class: 'primary small', type: 'button', text: 'Approve', onclick: () => void submitReview(id, 'approved') }),
+  ];
+}
+
+function reviewCard(message) {
+  const r = message.review;
+  const mine = r.state === 'pending' && r.reviewer === state.me.name;
+  return el(
+    'div',
+    { class: `review-card review-${r.state}` },
+    el(
+      'div',
+      { class: 'question-head' },
+      el('span', { class: 'task-id', text: `Review of ${r.target}` }),
+      el('span', { class: 'chip', text: REVIEW_LABEL[r.state] }),
+      el('span', { class: 'muted small', text: r.state === 'pending' ? `by ${r.reviewer}` : `${r.reviewer}` }),
+      mine ? el('span', { class: 'spacer' }) : null,
+      mine ? reviewButtons(r.id) : null,
+    ),
+    r.note ? el('div', { class: 'question-answer', text: r.note }) : null,
+  );
+}
+
+function onReview(review) {
+  let touched = false;
+  for (const list of [state.messages, state.threadMessages]) {
+    for (const message of list) {
+      if (message.review && message.review.id === review.id) {
+        touched = true;
+        void api(`/reviews/${review.id}`).then((full) => {
+          message.review = { ...message.review, state: full.state, note: full.note };
+          renderMessages({ keepScroll: true });
+          if (state.panel === 'thread') renderThread({ keepScroll: true });
+        }, () => {});
+      } else if (message.id === review.messageId && !message.review) {
+        touched = true;
+        void api(`/reviews/${review.id}`).then((full) => {
+          const { room, messageId, projectId, createdAt, decidedAt, ...summary } = full;
+          message.review = summary;
+          renderMessages({ keepScroll: true });
+        }, () => {});
+      }
+    }
+  }
+  scheduleInbox();
+  return touched;
 }
 
 const TASK_LABEL = {
@@ -238,10 +438,20 @@ setInterval(() => {
 }, 30_000);
 
 function taskCard(message) {
-  const { id, state: taskState, assignee, since, chain = [], progress = null, stalled = false } = message.task;
+  const { id, state: taskState, assignee, since, chain = [], progress = null, stalled = false, seenAt = null, budget = null, links = [], followups = [] } = message.task;
   const open = ['awaiting_approval', 'requested', 'accepted', 'needs_input'].includes(taskState);
   const mine = message.author === state.me.name || message.owner === state.me.name;
-  return el(
+  const extras = [
+    budget ? budgetLine(budget) : null,
+    links.length
+      ? el(
+          'span',
+          { class: 'task-links' },
+          links.map((link) => el('a', { href: link.url, target: '_blank', rel: 'noopener noreferrer nofollow', title: link.url, text: link.title || new URL(link.url).host + new URL(link.url).pathname })),
+        )
+      : null,
+  ].filter(Boolean);
+  const card = el(
     'div',
     { class: `task-card task-${taskState}` },
     el('span', { class: 'task-id', text: `Task #${id}` }),
@@ -255,9 +465,13 @@ function taskCard(message) {
           taskState === 'accepted' ? el('span', { class: 'working-dot', 'aria-hidden': 'true' }) : null,
           taskState === 'accepted' && since ? liveElapsed('In progress · ', since) : TASK_LABEL[taskState],
         ),
+    taskState === 'requested'
+      ? el('span', { class: 'muted small seen', title: seenAt ? new Date(seenAt).toLocaleString() : `${assignee} has not looked at it yet` }, seenAt ? liveElapsed('Seen ', seenAt) : 'Not seen yet')
+      : null,
     progress && open
       ? el('span', { class: 'task-progress', title: `Updated ${formatTime(progress.at)}` }, progress.percent !== null ? progressMeter(progress.percent) : null, progress.text)
       : null,
+    extras,
     state.me.kind === 'user'
       ? el('button', { class: 'ghost small', type: 'button', text: 'Trail', title: 'What the agent did on this task', onclick: () => void showTrail(id) })
       : null,
@@ -277,6 +491,7 @@ function taskCard(message) {
         })
       : null,
   );
+  return followups.length ? el('div', { class: 'task-wrap' }, card, followupList(followups)) : card;
 }
 
 const APPROVAL_LABEL = { pending: 'Waiting for a decision', approved: 'Approved', denied: 'Denied', expired: 'Expired' };
@@ -428,6 +643,7 @@ function questionCard(message) {
       el('span', { class: 'task-id', text: everyone ? `Question for everyone${project ? ` in ${project}` : ''}` : `Question for ${q.target}` }),
       el('span', { class: 'chip', text: QUESTION_LABEL[q.state] }),
       q.answeredBy ? el('span', { class: 'muted small', text: `by ${q.answeredBy}` }) : null,
+      q.state === 'open' ? el('span', { class: 'muted small seen' }, q.seenAt ? liveElapsed('Seen ', q.seenAt) : 'Not seen yet') : null,
     ),
     q.answer ? el('div', { class: 'question-answer', text: q.answer }) : null,
     canAnswer ? answerBox(q.id) : null,
@@ -439,7 +655,7 @@ function onQuestion(question) {
   for (const list of [state.messages, state.threadMessages]) {
     for (const message of list) {
       if (message.question && message.question.id === question.id) {
-        message.question = { ...message.question, state: question.state, answer: question.answer, answeredBy: question.answeredBy, verdict: question.verdict };
+        message.question = { ...message.question, state: question.state, answer: question.answer, answeredBy: question.answeredBy, verdict: question.verdict, seenAt: question.seenAt };
         touched = true;
       }
     }
@@ -531,10 +747,56 @@ async function showMyAgents() {
           }),
         ),
       );
+      const spend = agent.spend30d;
+      const memory = el('div', { class: 'agent-memory' });
+      const showMemory = async () => {
+        const notes = await api(`/agents/${encodeURIComponent(agent.name)}/memory`);
+        memory.replaceChildren(
+          notes.length
+            ? el(
+                'ul',
+                { class: 'memory-list' },
+                notes.map((n) =>
+                  el(
+                    'li',
+                    {},
+                    el('div', { class: 'memory-head' }, el('strong', { text: n.title }), el('span', { class: 'muted small', text: formatTime(n.updatedAt) }), el('span', { class: 'spacer' }),
+                      el('button', {
+                        class: 'ghost small danger',
+                        type: 'button',
+                        text: 'Forget',
+                        onclick: async () => {
+                          if (!confirm(`Delete ${agent.name}'s note “${n.title}”?`)) return;
+                          await api(`/agents/${encodeURIComponent(agent.name)}/memory/${n.id}`, { method: 'DELETE' });
+                          void showMemory();
+                        },
+                      }),
+                    ),
+                    el('div', { class: 'memory-body', text: n.body }),
+                  ),
+                ),
+              )
+            : el('p', { class: 'muted small', text: 'No notes yet.' }),
+        );
+      };
       return el(
         'section',
         { class: 'agent-settings' },
         el('div', { class: 'agent-name' }, avatar(agent.name, 'agent'), el('strong', { text: agent.name })),
+        spend && spend.tasks
+          ? el(
+              'p',
+              { class: 'small muted agent-spend', title: 'Tasks accepted in the last 30 days, with the time and cost the agent reported' },
+              `Last 30 days: ${spend.tasks} ${spend.tasks === 1 ? 'task' : 'tasks'} · ${spend.minutes < 60 ? `${spend.minutes} min` : `${Math.round(spend.minutes / 6) / 10} h`}${spend.cents ? ` · ${money(spend.cents)}` : ''}${spend.tokens ? ` · ${spend.tokens.toLocaleString()} tokens` : ''}`,
+            )
+          : null,
+        el(
+          'details',
+          { class: 'memory-details', ontoggle: (event) => event.target.open && void showMemory() },
+          el('summary', { class: 'small', text: `Private notes (${agent.memory ?? 0})` }),
+          el('p', { class: 'small muted', text: `What ${agent.name} keeps between sessions. Only it and you can see these.` }),
+          memory,
+        ),
         connections.length
           ? el('div', { class: 'trusted' }, el('span', { class: 'small muted', text: 'Connected apps:' }), el('ul', { class: 'connections' }, connections))
           : null,
@@ -580,6 +842,10 @@ function onTask(task) {
           chain: task.chain,
           progress: task.progress,
           stalled: task.stalled,
+          seenAt: task.seenAt,
+          budget: task.budget,
+          links: task.links,
+          followups: task.followups,
         };
         touched = true;
       }
@@ -1116,6 +1382,9 @@ function connect() {
     if (state.panel === 'inbox') scheduleInbox();
   });
   events.addEventListener('question', (event) => onQuestion(JSON.parse(event.data)));
+  events.addEventListener('review', (event) => onReview(JSON.parse(event.data)));
+  events.addEventListener('suggestion', () => scheduleInbox());
+  events.addEventListener('schedule', (event) => tickets.onSchedules(JSON.parse(event.data)));
   events.addEventListener('flag', () => scheduleInbox());
   events.addEventListener('notes', (event) => tickets.onNotes(JSON.parse(event.data)));
   events.addEventListener('summary', (event) => {
@@ -1222,10 +1491,16 @@ function autosize(textarea) {
 
 const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_TEXT_BYTES = 1024 * 1024;
 const MAX_IMAGES = 4;
+const TEXT_NAME = /\.(txt|log|md|diff|patch|json|csv|tsv|ya?ml|toml|ini|conf|cfg|env\.example|sql|py|rb|go|rs|java|kt|c|h|cpp|cs|ts|tsx|jsx|css|scss|sh|ps1|xml)$/i;
+
+function isTextFile(file) {
+  return (file.type.startsWith('text/') && file.type !== 'text/html') || file.type === 'application/json' || TEXT_NAME.test(file.name || '');
+}
 
 async function uploadImage(file, room) {
-  const res = await fetch(`/api/attachments?room=${encodeURIComponent(room)}&name=${encodeURIComponent(file.name || 'image')}`, {
+  const res = await fetch(`/api/attachments?room=${encodeURIComponent(room)}&name=${encodeURIComponent(file.name || 'file')}`, {
     method: 'POST',
     headers: { 'Content-Type': file.type || 'application/octet-stream' },
     body: file,
@@ -1245,12 +1520,12 @@ function wireComposer(form, textarea, pendingEl, roomOf, send) {
         el(
           'div',
           { class: 'pending-item' },
-          el('img', { src: item.url, alt: item.file.name || 'image' }),
+          item.url ? el('img', { src: item.url, alt: item.file.name || 'image' }) : el('span', { class: 'pending-file', title: item.file.name }, icon('file'), el('span', { text: item.file.name })),
           el('button', {
             type: 'button',
             'aria-label': `Remove ${item.file.name || 'image'}`,
             onclick: () => {
-              URL.revokeObjectURL(item.url);
+              if (item.url) URL.revokeObjectURL(item.url);
               pending.splice(i, 1);
               renderPending();
             },
@@ -1261,19 +1536,20 @@ function wireComposer(form, textarea, pendingEl, roomOf, send) {
   };
   const addFiles = (files) => {
     for (const file of files) {
-      if (!IMAGE_TYPES.includes(file.type)) {
-        alert(`${file.name || 'That file'} is not a PNG, JPEG, GIF or WebP image.`);
+      const image = IMAGE_TYPES.includes(file.type);
+      if (!image && !isTextFile(file)) {
+        alert(`${file.name || 'That file'} is not an image (PNG, JPEG, GIF, WebP) or a text file.`);
         continue;
       }
-      if (file.size > MAX_IMAGE_BYTES) {
-        alert(`${file.name || 'That image'} is over 5 MB.`);
+      if (file.size > (image ? MAX_IMAGE_BYTES : MAX_TEXT_BYTES)) {
+        alert(`${file.name || 'That file'} is over ${image ? '5 MB' : '1 MB'}.`);
         continue;
       }
       if (pending.length >= MAX_IMAGES) {
-        alert('You can attach up to 4 images.');
+        alert('You can attach up to 4 files.');
         break;
       }
-      pending.push({ file, url: URL.createObjectURL(file) });
+      pending.push({ file, url: image ? URL.createObjectURL(file) : null });
     }
     renderPending();
   };
@@ -1322,7 +1598,7 @@ function wireComposer(form, textarea, pendingEl, roomOf, send) {
       const message = await send(text, ids);
       textarea.value = '';
       autosize(textarea);
-      for (const item of pending) URL.revokeObjectURL(item.url);
+      for (const item of pending) if (item.url) URL.revokeObjectURL(item.url);
       pending.length = 0;
       renderPending();
       if (message) onMessage(message);
@@ -1452,7 +1728,8 @@ $('notify').addEventListener('click', async () => {
 async function refreshInbox() {
   const inbox = await api('/inbox').catch(() => null);
   if (!inbox) return;
-  const count = inbox.counts.approvals + inbox.counts.questions + inbox.counts.flags + inbox.counts.stalled + inbox.counts.unseenMentions;
+  const c = inbox.counts;
+  const count = c.approvals + c.questions + c.flags + c.stalled + (c.reviews ?? 0) + (c.suggestions ?? 0) + c.unseenMentions;
   notify.setBadge(count);
   announceNew(inbox);
   const badge = $('inbox-badge');
@@ -1539,6 +1816,28 @@ function renderInbox(inbox) {
       ),
     );
   }
+  if (inbox.reviews?.length) {
+    sections.push(
+      inboxHeading('Reviews for you', inbox.reviews.length),
+      ...inbox.reviews.map((r) =>
+        el(
+          'div',
+          { class: 'inbox-card' },
+          el(
+            'button',
+            {
+              class: 'inbox-row',
+              type: 'button',
+              onclick: () => (r.ticket ? void tickets.openTicket(r.ticket) : void jumpTo({ id: r.messageId, room: r.room, threadId: null })),
+            },
+            el('span', { class: 'inbox-meta' }, el('strong', { text: r.requester }), el('span', { class: 'muted', text: ` asks you to review ${r.target} · ${r.room}` })),
+            el('span', { class: 'inbox-text', text: r.summary }),
+          ),
+          el('div', { class: 'row-end' }, reviewButtons(r.id)),
+        ),
+      ),
+    );
+  }
   if (inbox.flags.length) {
     sections.push(
       inboxHeading('Flagged by your agents', inbox.flags.length),
@@ -1575,6 +1874,30 @@ function renderInbox(inbox) {
                 scheduleInbox();
               },
             }),
+          ),
+        ),
+      ),
+    );
+  }
+  if (inbox.suggestions?.length) {
+    sections.push(
+      inboxHeading('Suggested follow-ups', inbox.suggestions.length),
+      ...inbox.suggestions.map((f) =>
+        el(
+          'div',
+          { class: 'inbox-card' },
+          el(
+            'button',
+            { class: 'inbox-row', type: 'button', onclick: () => void openTask(f.taskId) },
+            el('span', { class: 'inbox-meta' }, el('strong', { text: f.author }), el('span', { class: 'muted', text: ` suggests, from task #${f.taskId} · ${f.project}` })),
+            el('span', { class: 'inbox-text', text: f.title }),
+            f.description ? el('span', { class: 'flag-quote', text: snippet(f.description, 240) }) : null,
+          ),
+          el(
+            'div',
+            { class: 'row-end' },
+            el('button', { class: 'ghost small', type: 'button', text: 'Dismiss', onclick: () => void decideSuggestion(f.id, 'dismiss') }),
+            el('button', { class: 'primary small', type: 'button', text: 'File ticket', onclick: () => void decideSuggestion(f.id, 'accept') }),
           ),
         ),
       ),
@@ -1621,7 +1944,7 @@ function renderInbox(inbox) {
   sections.push(
     ...(mentions.length ? mentions.map((m) => messageRow(m, { unseen: !m.seen })) : [el('p', { class: 'panel-intro muted small', text: 'No one has mentioned you yet.' })]),
   );
-  if (!inbox.approvals.length && !inbox.questions.length && !inbox.flags.length && !inbox.stalled.length && !inbox.tasks.length) {
+  if (!inbox.approvals.length && !inbox.questions.length && !inbox.flags.length && !inbox.stalled.length && !inbox.tasks.length && !inbox.reviews?.length && !inbox.suggestions?.length) {
     sections.unshift(el('p', { class: 'panel-intro muted small', text: 'Nothing needs your decision right now.' }));
   }
   $('panel-body').replaceChildren(...sections);
@@ -1639,22 +1962,61 @@ async function showInbox() {
   }
 }
 
-async function runSearch(query) {
+async function openTask(id) {
+  try {
+    const task = await api(`/tasks/${id}`);
+    await jumpTo({ id: task.messageId, room: task.room, threadId: null });
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+const KIND_LABEL = { message: 'Message', ticket: 'Ticket', note: 'Note', task: 'Task' };
+
+function openHit(hit) {
+  if (hit.kind === 'message') return jumpTo({ id: Number(hit.ref), room: hit.room, threadId: hit.threadId === Number(hit.ref) ? null : hit.threadId });
+  if (hit.kind === 'ticket') return tickets.openTicket(hit.ref);
+  if (hit.kind === 'note') {
+    location.hash = `~${hit.project}/notes`;
+    return undefined;
+  }
+  return jumpTo({ id: hit.threadId, room: hit.room, threadId: null });
+}
+
+async function runSearch(query, kind = '') {
   openPanel('search', `Search: ${query}`);
   let results;
   try {
-    results = await api(`/search?q=${encodeURIComponent(query)}`);
+    results = await api(`/search?q=${encodeURIComponent(query)}${kind ? `&kind=${kind}` : ''}&limit=60`);
   } catch (err) {
     $('panel-body').replaceChildren(el('p', { class: 'empty muted', text: err.message }));
     return;
   }
   if (state.panel !== 'search') return;
+  const filter = el(
+    'div',
+    { class: 'search-kinds', role: 'group', 'aria-label': 'What to search' },
+    [['', 'All'], ...Object.entries(KIND_LABEL).map(([k, label]) => [k, `${label}s`])].map(([k, label]) =>
+      el('button', { class: `small${k === kind ? ' active' : ' ghost'}`, type: 'button', 'aria-pressed': String(k === kind), text: label, onclick: () => void runSearch(query, k) }),
+    ),
+  );
   $('panel-body').replaceChildren(
-    el('p', {
-      class: 'panel-intro muted small',
-      text: results.length ? `${results.length}${results.length === 50 ? '+' : ''} ${results.length === 1 ? 'message' : 'messages'}` : 'No messages match.',
-    }),
-    ...results.map((m) => messageRow(m)),
+    filter,
+    el('p', { class: 'panel-intro muted small', text: results.length ? `${results.length}${results.length === 60 ? '+' : ''} ${results.length === 1 ? 'result' : 'results'}, newest first` : 'Nothing matches every word.' }),
+    ...results.map((hit) =>
+      el(
+        'button',
+        { class: 'inbox-row', type: 'button', onclick: () => void openHit(hit) },
+        el(
+          'span',
+          { class: 'inbox-meta' },
+          el('span', { class: `chip kind-${hit.kind}`, text: KIND_LABEL[hit.kind] }),
+          el('strong', { text: ` ${hit.title}` }),
+          el('time', { class: 'muted', text: ` · ${formatTime(hit.at)}` }),
+        ),
+        el('span', { class: 'inbox-text', text: hit.snippet }),
+      ),
+    ),
   );
 }
 
@@ -1777,17 +2139,31 @@ const tickets = createTickets({
   panel: () => state.panel,
   jumpTo,
   me: () => state.me,
+  rooms: () => state.rooms,
   $,
 });
 
 const TASK_COMMAND = /^\/task\s+@?([a-z0-9][a-z0-9-]{0,31})\s+([\s\S]+)$/;
+// Optional budgets right after the agent: `/task @agent 30m $2 do the thing`.
+const BUDGET_TOKEN = /^(?:(\d+)(m|h)|\$(\d+(?:\.\d{1,2})?))\s+/;
+
+function parseTask(text) {
+  const match = TASK_COMMAND.exec(text);
+  if (!match) throw new Error('Use /task @agent what you need (optionally /task @agent 30m $2 what you need)');
+  let request = match[2];
+  const body = { agent: match[1] };
+  for (let token = BUDGET_TOKEN.exec(request); token; token = BUDGET_TOKEN.exec(request)) {
+    if (token[1]) body.budget_minutes = Number(token[1]) * (token[2] === 'h' ? 60 : 1);
+    else body.budget_cents = Math.round(Number(token[3]) * 100);
+    request = request.slice(token[0].length);
+  }
+  return { ...body, request };
+}
 
 wireComposer($('composer'), $('composer-text'), $('composer-pending'), () => state.room.ref, async (text, ids) => {
   if (text.startsWith('/task')) {
-    if (ids.length) throw new Error('Tasks cannot carry images yet; post the image, then create the task.');
-    const match = TASK_COMMAND.exec(text);
-    if (!match) throw new Error('Use /task @agent what you need');
-    await api('/tasks', { method: 'POST', body: { agent: match[1], room: state.room.ref, request: match[2] } });
+    if (ids.length) throw new Error('Tasks cannot carry attachments yet; post the file, then create the task.');
+    await api('/tasks', { method: 'POST', body: { ...parseTask(text), room: state.room.ref } });
     return null;
   }
   return api('/messages', { method: 'POST', body: { room: state.room.ref, text, attachment_ids: ids } });

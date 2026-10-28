@@ -78,7 +78,9 @@ class AgentRunner {
   private readonly seen = new Set<number>();
   private readonly queue: Job[] = [];
   private readonly claiming = new Set<number>();
-  private readonly running = new Map<number, ChildProcess>();
+  /** Running agents by task; null while the bridge is still getting a task token. */
+  private readonly running = new Map<number, ChildProcess | null>();
+  private readonly stopping = new Set<number>();
   private stream: EventStream | null = null;
   private stopped = false;
 
@@ -122,7 +124,7 @@ class AgentRunner {
       [...this.running.values()].map(
         (child) =>
           new Promise<void>((resolve) => {
-            if (child.exitCode !== null || child.signalCode !== null) return resolve();
+            if (!child || child.exitCode !== null || child.signalCode !== null) return resolve();
             child.once('exit', () => resolve());
             child.kill('SIGTERM');
           }),
@@ -141,6 +143,17 @@ class AgentRunner {
 
   private offer(task: Task): void {
     if (this.stopped || task.assignee !== this.config.name) return;
+    // Someone cancelled the task while its agent works: stop the agent instead of letting it finish.
+    if (task.state === 'cancelled' && this.running.has(task.id) && !this.stopping.has(task.id)) {
+      this.stopping.add(task.id);
+      const child = this.running.get(task.id);
+      this.log.info(`[${this.config.name}] task #${task.id} was cancelled; stopping the agent`);
+      if (child) {
+        child.kill('SIGTERM');
+        setTimeout(() => child.kill('SIGKILL'), KILL_GRACE_MS).unref();
+      }
+      return;
+    }
     if (task.state === 'requested' && !this.seen.has(task.id)) {
       this.seen.add(task.id);
       this.queue.push({ task, resume: false });
@@ -170,11 +183,37 @@ class AgentRunner {
 
   private pump(): void {
     while (!this.stopped && this.running.size < this.config.max_concurrent && this.queue.length > 0) {
-      this.run(this.queue.shift()!);
+      void this.prepare(this.queue.shift()!);
     }
   }
 
-  private run({ task, resume }: Job): void {
+  /** Gets a task token (unless turned off), then starts the agent with it. */
+  private async prepare(job: Job): Promise<void> {
+    const { task } = job;
+    this.running.set(task.id, null);
+    let token = this.token;
+    if (this.config.task_tokens) {
+      try {
+        const ttl = Math.min(this.config.timeout_seconds + 600, 24 * 3600);
+        ({ token } = (await this.api(`/tasks/${task.id}/token`, { ttl_seconds: ttl })) as { token: string });
+      } catch (err) {
+        this.running.delete(task.id);
+        const note = `The bridge could not get a task token, so it did not start the agent: ${(err as Error).message}`;
+        this.log.error(`[${this.config.name}] task #${task.id}: ${note}`);
+        void this.finish(task, note).finally(() => this.pump());
+        return;
+      }
+    }
+    if (this.stopped || this.stopping.has(task.id)) {
+      this.running.delete(task.id);
+      this.stopping.delete(task.id);
+      this.pump();
+      return;
+    }
+    this.run(job, token);
+  }
+
+  private run({ task, resume }: Job, token: string): void {
     const prompt = fill(resume ? RESUME_PROMPT : (this.config.prompt_template ?? DEFAULT_PROMPT), task, '');
     const [command, ...args] = this.config.command.map((part) => fill(part, task, prompt));
     this.log.info(`[${this.config.name}] task #${task.id} from ${task.requester}: ${resume ? 'resuming with the answer' : 'starting'} ${command}`);
@@ -188,6 +227,8 @@ class AgentRunner {
         env: {
           ...this.env,
           ...this.config.env,
+          // The agent's MCP config reads its token from this variable; with task tokens it only reaches this task's project.
+          [this.config.token_env]: token,
           ORCO_URL: this.server,
           ORCO_AGENT: this.config.name,
           ORCO_TASK_ID: String(task.id),
@@ -198,7 +239,8 @@ class AgentRunner {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
     } catch (err) {
-      void this.finish(task, `The bridge could not start the agent: ${(err as Error).message}`);
+      this.running.delete(task.id);
+      void this.finish(task, `The bridge could not start the agent: ${(err as Error).message}`).finally(() => this.pump());
       return;
     }
     this.running.set(task.id, child);
@@ -237,6 +279,7 @@ class AgentRunner {
       clearTimeout(timer);
       flush();
       this.running.delete(task.id);
+      this.stopping.delete(task.id);
       const seconds = Math.round((Date.now() - started) / 1000);
       this.log.info(`[${this.config.name}] task #${task.id} agent exited after ${seconds}s (${reason})`);
       if (!this.stopped && tail.trim() && reason !== 'code 0') {

@@ -34,7 +34,7 @@
         </header>
         <form id="search-form" class="search" role="search">
           <span class="search-icon" data-icon="search"></span>
-          <input id="search-input" type="search" placeholder="Search messages" aria-label="Search messages" autocomplete="off" />
+          <input id="search-input" type="search" placeholder="Search" aria-label="Search messages, tickets, notes and tasks" autocomplete="off" />
         </form>
         <button id="inbox" class="inbox-link" type="button" data-icon="inbox">
           <span>Inbox</span>
@@ -73,8 +73,8 @@
         <section id="tickets-view" class="tickets-view" aria-label="Tickets" hidden></section>
         <div id="composer-pending" class="pending" aria-label="Images to send"></div>
         <form id="composer" class="composer">
-          <button type="button" class="ghost icon attach" title="Attach images" aria-label="Attach images" data-icon="paperclip"></button>
-          <input type="file" class="attach-input" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden />
+          <button type="button" class="ghost icon attach" title="Attach images or text files" aria-label="Attach images or text files" data-icon="paperclip"></button>
+          <input type="file" class="attach-input" accept="image/png,image/jpeg,image/gif,image/webp,text/plain,.txt,.log,.md,.diff,.patch,.json,.csv,.yaml,.yml,.toml" multiple hidden />
           <textarea id="composer-text" rows="1" placeholder="Message, or /task @agent …" aria-label="Message"></textarea>
           <button type="submit" class="primary">Send</button>
         </form>
@@ -88,8 +88,8 @@
         <div id="panel-body" class="panel-body"></div>
         <div id="thread-pending" class="pending" aria-label="Images to send"></div>
         <form id="thread-composer" class="composer" hidden>
-          <button type="button" class="ghost icon attach" title="Attach images" aria-label="Attach images" data-icon="paperclip"></button>
-          <input type="file" class="attach-input" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden />
+          <button type="button" class="ghost icon attach" title="Attach images or text files" aria-label="Attach images or text files" data-icon="paperclip"></button>
+          <input type="file" class="attach-input" accept="image/png,image/jpeg,image/gif,image/webp,text/plain,.txt,.log,.md,.diff,.patch,.json,.csv,.yaml,.yml,.toml" multiple hidden />
           <textarea id="thread-text" rows="1" placeholder="Reply in thread" aria-label="Reply in thread"></textarea>
           <button type="submit" class="primary">Reply</button>
         </form>

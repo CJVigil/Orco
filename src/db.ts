@@ -386,6 +386,110 @@ const MIGRATIONS = [
   `
   ALTER TABLE tickets ADD COLUMN blocked_reason TEXT NOT NULL DEFAULT '';
   `,
+  `
+  CREATE TABLE attachments_v2 (
+    id INTEGER PRIMARY KEY,
+    room_id INTEGER NOT NULL REFERENCES rooms(id),
+    message_id INTEGER REFERENCES messages(id),
+    uploader_id INTEGER NOT NULL REFERENCES participants(id),
+    name TEXT NOT NULL,
+    mime TEXT NOT NULL CHECK (mime IN ('image/png', 'image/jpeg', 'image/gif', 'image/webp', 'text/plain')),
+    size INTEGER NOT NULL,
+    sha256 TEXT NOT NULL,
+    data BLOB NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  INSERT INTO attachments_v2 (id, room_id, message_id, uploader_id, name, mime, size, sha256, data, created_at)
+    SELECT id, room_id, message_id, uploader_id, name, mime, size, sha256, data, created_at FROM attachments;
+  DROP TABLE attachments;
+  ALTER TABLE attachments_v2 RENAME TO attachments;
+  CREATE INDEX attachments_message ON attachments (message_id);
+  CREATE INDEX attachments_unattached ON attachments (message_id, created_at);
+
+  CREATE TABLE agent_memory (
+    id INTEGER PRIMARY KEY,
+    agent_id INTEGER NOT NULL REFERENCES participants(id),
+    title TEXT NOT NULL COLLATE NOCASE,
+    body TEXT NOT NULL,
+    updated_by INTEGER NOT NULL REFERENCES participants(id),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE (agent_id, title)
+  );
+
+  ALTER TABLE messages ADD COLUMN external_source TEXT;
+  ALTER TABLE messages ADD COLUMN external_text TEXT;
+
+  ALTER TABLE tasks ADD COLUMN cancel_unseen INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE tasks ADD COLUMN seen_at TEXT;
+  ALTER TABLE tasks ADD COLUMN accepted_at INTEGER;
+  ALTER TABLE tasks ADD COLUMN budget_minutes INTEGER;
+  ALTER TABLE tasks ADD COLUMN budget_cents INTEGER;
+  ALTER TABLE tasks ADD COLUMN spent_cents INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE tasks ADD COLUMN spent_tokens INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE tasks ADD COLUMN over_budget_notified INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE tasks ADD COLUMN links TEXT NOT NULL DEFAULT '[]';
+  ALTER TABLE tasks ADD COLUMN schedule_id INTEGER;
+  ALTER TABLE questions ADD COLUMN seen_at TEXT;
+
+  CREATE TABLE task_tokens (
+    token_hash TEXT PRIMARY KEY,
+    task_id INTEGER NOT NULL REFERENCES tasks(id),
+    agent_id INTEGER NOT NULL REFERENCES participants(id),
+    expires_at INTEGER NOT NULL
+  );
+  CREATE INDEX task_tokens_task ON task_tokens (task_id);
+
+  CREATE TABLE suggestions (
+    id INTEGER PRIMARY KEY,
+    task_id INTEGER NOT NULL REFERENCES tasks(id),
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    author_id INTEGER NOT NULL REFERENCES participants(id),
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open', 'accepted', 'dismissed')),
+    ticket_id INTEGER REFERENCES tickets(id),
+    decided_by INTEGER REFERENCES participants(id),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    decided_at TEXT
+  );
+  CREATE INDEX suggestions_project ON suggestions (project_id, state);
+
+  CREATE TABLE reviews (
+    id INTEGER PRIMARY KEY,
+    room_id INTEGER NOT NULL REFERENCES rooms(id),
+    message_id INTEGER NOT NULL UNIQUE REFERENCES messages(id),
+    ticket_id INTEGER REFERENCES tickets(id),
+    task_id INTEGER REFERENCES tasks(id),
+    requester_id INTEGER NOT NULL REFERENCES participants(id),
+    reviewer_id INTEGER NOT NULL REFERENCES participants(id),
+    summary TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'approved', 'changes_requested', 'withdrawn')),
+    note TEXT,
+    review_task_id INTEGER REFERENCES tasks(id),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    decided_at TEXT
+  );
+  CREATE INDEX reviews_reviewer ON reviews (reviewer_id, state);
+
+  CREATE TABLE schedules (
+    id INTEGER PRIMARY KEY,
+    room_id INTEGER NOT NULL REFERENCES rooms(id),
+    creator_id INTEGER NOT NULL REFERENCES participants(id),
+    agent_id INTEGER NOT NULL REFERENCES participants(id),
+    request TEXT NOT NULL,
+    cron TEXT NOT NULL,
+    tz TEXT NOT NULL DEFAULT 'UTC',
+    budget_minutes INTEGER,
+    budget_cents INTEGER,
+    enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+    next_run INTEGER NOT NULL,
+    last_run INTEGER,
+    last_task_id INTEGER REFERENCES tasks(id),
+    last_error TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+  CREATE INDEX schedules_due ON schedules (enabled, next_run);
+  `,
 ];
 
 export function openDatabase(path: string): DatabaseSync {

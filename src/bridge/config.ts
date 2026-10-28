@@ -13,6 +13,8 @@ const agentSchema = z.object({
   timeout_seconds: z.number().int().min(10).max(24 * 3600).default(1800),
   max_concurrent: z.number().int().min(1).max(8).default(1),
   prompt_template: z.string().optional(),
+  /** Hand the agent a token limited to the task's project instead of its own (default on). */
+  task_tokens: z.boolean().default(true),
 });
 
 const configSchema = z.object({

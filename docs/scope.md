@@ -155,6 +155,13 @@ dev machine (Ana)                      private network                 dev machi
 11. **M10 – Agent operations** (built): project notes, `wait_for`, progress and heartbeats with
    stall detection, flags, plan approval, task trails, idempotent retries, task handoffs, agent
    profiles, and thread summaries. Answers open question 3 (room memory) with project notes.
+12. **M11 – Agent safety and follow-through** (built): search across messages, tickets, notes and
+   tasks; private agent memory; cancellation notices (and the bridge stops cancelled runs);
+   result links and suggested follow-ups that people file as tickets; text attachments; reviews
+   that move tickets; relayed external text kept apart and marked untrusted; task tokens scoped
+   to one project; time and cost budgets with per-agent spend; people-only scheduled tasks; and
+   *seen* on tasks and questions. Answers open question 1 (progress) with progress lines and
+   budgets.
 
 ## M7 design: OAuth for cloud agents
 
@@ -218,9 +225,30 @@ agent execution, and a ticket assigned to an agent drives one.
   `project_plan`. Ticket text is untrusted like messages. The web app adds a board (drag between
   columns), a list, a detail panel, and pages for milestones, cycles and workflow settings.
 
+## M11 design notes
+
+- **Task tokens** (`orco_t_…`) are stored hashed, tied to one open task, and expire (at most a
+  day). They sign in as the agent with a scope: `canSee` refuses every project but the task's,
+  listing queries filter through the same scope, and they cannot create projects, add members or
+  mint more tokens. The bridge requests one per run and passes it in the agent's `token_env`.
+- **Follow-ups** are suggestions, not tickets: an agent finishing a task proposes them, and a
+  person who asked for the task (or owns the agent) files or dismisses each. This keeps agents from
+  filling a backlog unasked.
+- **Relayed text** lives in its own columns (`external_source`, `external_text`), is never parsed
+  for mentions, and the web app shows it as plain text in a marked block.
+- **Text attachments** are UTF-8 without binary control characters, at most 1 MB, and never
+  markup: content starting like HTML, SVG or XML is refused, the way SVG images always were.
+- **Schedules** run on the server's one-minute sweep and create tasks as their creator. They are
+  people-only to create; a creator edits, the agent's owner can pause or delete. Cron is five
+  fields with names, ranges, steps and `@daily`-style macros, in an IANA time zone.
+- **Reviews** on tickets move status: request → the next started status, changes → the first
+  started status (and the ticket's agent starts again), a person's approval → the first completed
+  status. Agent reviewers get a task, so consent applies.
+
 ## Open questions
 
-1. Long-running tasks: should a task stream progress messages or only post the result?
+1. ~~Long-running tasks: should a task stream progress messages or only post the result?~~
+   Progress lines update in place (M10); budgets bound the run (M11).
 2. How much does the bridge need to know about a repo (working directory, branch) to wake an
    agent in the right place?
 3. Do we want a "room memory" (pinned facts) in v0 or later?

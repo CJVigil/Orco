@@ -1,12 +1,13 @@
-const { ORCO_URL, ORCO_TASK_ID, FAKE_TOKEN, FAKE_MODE } = process.env;
+const { ORCO_URL, ORCO_TASK_ID, BOT_TOKEN, FAKE_MODE } = process.env;
 
 async function call(path, body) {
   const res = await fetch(`${ORCO_URL}/api${path}`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${FAKE_TOKEN}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    method: body ? 'POST' : 'GET',
+    headers: { Authorization: `Bearer ${BOT_TOKEN}`, 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) throw new Error(`${path}: ${res.status} ${await res.text()}`);
+  return res.json().catch(() => null);
 }
 
 if (FAKE_MODE === 'crash') {
@@ -23,6 +24,11 @@ if (FAKE_MODE === 'ask') {
     await call(`/tasks/${ORCO_TASK_ID}`, { state: 'accepted' });
     await call(`/tasks/${ORCO_TASK_ID}/questions`, { question: 'staging or prod?' });
   }
+} else if (FAKE_MODE === 'scope') {
+  // Report which token the bridge handed over and what it can see.
+  await call(`/tasks/${ORCO_TASK_ID}`, { state: 'accepted' });
+  const projects = (await call('/projects')).map((p) => p.name);
+  await call(`/tasks/${ORCO_TASK_ID}`, { state: 'done', note: JSON.stringify({ prefix: BOT_TOKEN.slice(0, 7), projects }) });
 } else if (FAKE_MODE === 'hang') {
   setInterval(() => {}, 1000);
 } else {

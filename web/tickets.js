@@ -7,7 +7,15 @@ const TABS = [
   ['milestones', 'Milestones'],
   ['cycles', 'Cycles'],
   ['notes', 'Notes'],
+  ['schedules', 'Schedules'],
   ['settings', 'Settings'],
+];
+const CRON_PRESETS = [
+  ['0 9 * * 1-5', 'Weekdays at 9:00'],
+  ['0 9 * * 1', 'Mondays at 9:00'],
+  ['0 9 * * *', 'Every day at 9:00'],
+  ['0 * * * *', 'Every hour'],
+  ['0 17 * * 5', 'Fridays at 17:00'],
 ];
 const PRIORITY_LABEL = { none: 'No priority', urgent: 'Urgent', high: 'High', medium: 'Medium', low: 'Low' };
 const PRIORITY_ORDER = ['urgent', 'high', 'medium', 'low', 'none'];
@@ -42,7 +50,7 @@ function blockedWhy(ticket) {
 }
 
 export function createTickets(ctx) {
-  const { api, el, icon, avatar, richText, openPanel, closePanel, panel, jumpTo, me, $ } = ctx;
+  const { api, el, icon, avatar, richText, openPanel, closePanel, panel, jumpTo, me, rooms, $ } = ctx;
   const t = { project: null, tab: 'board', plan: null, tickets: [], filters: { ...EMPTY_FILTERS }, open: null, editing: false, timer: null };
   const root = $('tickets-view');
 
@@ -130,14 +138,16 @@ export function createTickets(ctx) {
 
   async function load() {
     const project = t.project;
-    const [plan, tickets, notes] = await Promise.all([
+    const [plan, tickets, notes, schedules] = await Promise.all([
       api(`/projects/${encodeURIComponent(project)}/plan`),
       fetchTickets(),
       t.tab === 'notes' ? api(`/projects/${encodeURIComponent(project)}/notes`) : Promise.resolve(t.notes ?? []),
+      t.tab === 'schedules' ? api(`/schedules?project=${encodeURIComponent(project)}`) : Promise.resolve(t.schedules ?? []),
     ]);
     if (t.project !== project) return;
     t.plan = plan;
     t.notes = notes;
+    t.schedules = schedules;
     plans.set(project, plan);
     t.tickets = tickets;
     const filters = root.querySelector('.ticket-filters');
@@ -258,7 +268,7 @@ export function createTickets(ctx) {
       return;
     }
     t.pendingTab = false;
-    const views = { board: renderBoard, list: renderList, milestones: renderMilestones, cycles: renderCycles, notes: renderNotes, settings: renderSettings };
+    const views = { board: renderBoard, list: renderList, milestones: renderMilestones, cycles: renderCycles, notes: renderNotes, schedules: renderSchedules, settings: renderSettings };
     body.replaceChildren(...[views[t.tab]()].flat(Infinity).filter((node) => node !== null && node !== undefined));
   }
 
@@ -1202,6 +1212,111 @@ export function createTickets(ctx) {
     t.timer = setTimeout(() => void load(), 250);
   }
 
+  /* Schedules */
+
+  function scheduleForm() {
+    const agents = people().filter((p) => p.kind === 'agent');
+    const projectRooms = rooms().filter((r) => r.project === t.project);
+    const agent = el('select', { 'aria-label': 'Agent', required: true }, agents.map((a) => el('option', { value: a.name, text: a.owner ? `${a.name} (${a.owner})` : a.name })));
+    const room = el('select', { 'aria-label': 'Room' }, projectRooms.map((r) => el('option', { value: r.ref, text: `#${r.name}`, selected: r.name === 'general' })));
+    const request = el('textarea', { rows: '3', required: true, maxlength: '4000', placeholder: 'What the agent should do each time, like “Triage tickets filed since the last run”', 'aria-label': 'Request' });
+    const cron = el('input', { value: CRON_PRESETS[0][0], required: true, 'aria-label': 'Schedule (cron)', class: 'mono', spellcheck: 'false' });
+    const preset = el(
+      'select',
+      { 'aria-label': 'Common schedules', onchange: (event) => event.target.value && (cron.value = event.target.value) },
+      el('option', { value: '', text: 'Common schedules…' }),
+      CRON_PRESETS.map(([value, label]) => el('option', { value, text: label })),
+    );
+    const tz = el('input', { value: Intl.DateTimeFormat().resolvedOptions().timeZone, 'aria-label': 'Time zone', spellcheck: 'false' });
+    const minutes = el('input', { type: 'number', min: '1', max: '10080', placeholder: 'No limit', 'aria-label': 'Time budget in minutes' });
+    if (agents.length === 0) return el('p', { class: 'muted plan-intro', text: 'No agents can see this project yet. Add their owners as members first.' });
+    return el(
+      'form',
+      {
+        class: 'schedule-form plan-card',
+        onsubmit: (event) => {
+          event.preventDefault();
+          void act(() =>
+            api('/schedules', {
+              method: 'POST',
+              body: {
+                agent: agent.value,
+                room: room.value,
+                request: request.value,
+                cron: cron.value,
+                tz: tz.value,
+                budgetMinutes: minutes.value ? Number(minutes.value) : undefined,
+              },
+            }),
+          );
+        },
+      },
+      el('h3', { text: 'New schedule' }),
+      el('div', { class: 'schedule-grid' },
+        el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Agent' }), agent),
+        el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Room' }), room),
+        el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'When (minute hour day month weekday)' }), cron),
+        el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Preset' }), preset),
+        el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Time zone' }), tz),
+        el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Time budget (minutes)' }), minutes),
+      ),
+      el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Request' }), request),
+      el('div', { class: 'row-end' }, el('button', { class: 'primary small', type: 'submit', text: 'Create schedule' })),
+    );
+  }
+
+  function renderSchedules() {
+    const list = t.schedules ?? [];
+    const cards = list.map((s) =>
+      el(
+        'article',
+        { class: `plan-card schedule-card${s.enabled ? '' : ' paused'}` },
+        el(
+          'div',
+          { class: 'plan-card-head' },
+          icon('clock'),
+          el('h3', { text: `${s.agent} in #${s.room.split('/').pop()}` }),
+          el('span', { class: 'chip', text: s.enabled ? 'Active' : 'Paused' }),
+          el('span', { class: 'spacer' }),
+          el('button', {
+            class: 'ghost small',
+            type: 'button',
+            text: s.enabled ? 'Pause' : 'Resume',
+            onclick: () => void act(() => api(`/schedules/${s.id}`, { method: 'POST', body: { enabled: !s.enabled } })),
+          }),
+          el('button', {
+            class: 'ghost small danger',
+            type: 'button',
+            text: 'Delete',
+            onclick: () => confirm('Delete this schedule?') && void act(() => api(`/schedules/${s.id}`, { method: 'DELETE' })),
+          }),
+        ),
+        el('p', { class: 'schedule-request', text: s.request }),
+        el(
+          'p',
+          { class: 'muted small' },
+          el('code', { text: s.cron }),
+          ` ${s.tz} · set up by ${s.creator}`,
+          s.enabled ? ` · next ${new Date(s.nextRun).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' })}` : '',
+          s.budgetMinutes ? ` · ${s.budgetMinutes} min budget` : '',
+          s.lastRun ? ` · last ran ${ago(s.lastRun)}${s.lastTaskId ? ` (task #${s.lastTaskId})` : ''}` : '',
+        ),
+        s.lastError ? el('p', { class: 'small warning-text', text: s.lastError }) : null,
+      ),
+    );
+    return [
+      el('p', { class: 'muted plan-intro', text: 'Recurring tasks. Each run is an ordinary task created as the person who set it up, so the agent’s consent rules apply. A run is skipped while the previous one is still open.' }),
+      cards.length ? cards : el('p', { class: 'muted plan-intro', text: 'No schedules yet.' }),
+      scheduleForm(),
+    ];
+  }
+
+  function onSchedules() {
+    if (t.tab !== 'schedules' || !root || root.hidden) return;
+    clearTimeout(t.timer);
+    t.timer = setTimeout(() => void load(), 250);
+  }
+
   /* Settings: workflow and labels */
 
   function renderSettings() {
@@ -1378,5 +1493,5 @@ export function createTickets(ctx) {
     );
   }
 
-  return { show, onEvent, onNotes, inboxRow, openTicket, openNewTicket, get project() { return t.project; } };
+  return { show, onEvent, onNotes, onSchedules, inboxRow, openTicket, openNewTicket, get project() { return t.project; } };
 }

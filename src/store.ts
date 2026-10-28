@@ -6,7 +6,11 @@ import { Audit } from './audit.js';
 import { OrcoError } from './errors.js';
 import { Flags } from './flags.js';
 import { Locks } from './locks.js';
+import { Memory } from './memory.js';
 import { Notes } from './notes.js';
+import { Reviews, type ReviewSummary } from './reviews.js';
+import { Schedules } from './schedules.js';
+import { Suggestions } from './suggestions.js';
 import { Questions, type QuestionSummary } from './questions.js';
 import { Tasks, type TaskSummary } from './tasks.js';
 import { Tickets } from './tickets.js';
@@ -21,6 +25,14 @@ export interface Participant {
   kind: ParticipantKind;
   name: string;
   ownerId: number | null;
+  /** Set when an agent signed in with a task token: it sees only that task's project (and server rooms). */
+  scope?: { taskId: number; projectId: number | null };
+}
+
+/** Text an agent relayed from outside Orco (a web page, an email, an issue), kept apart from its own words. */
+export interface ExternalContent {
+  source: string;
+  text: string;
 }
 
 export interface Room {
@@ -51,7 +63,9 @@ export interface Message {
   task: TaskSummary | null;
   approval: ApprovalSummary | null;
   question: QuestionSummary | null;
+  review: ReviewSummary | null;
   attachments: AttachmentInfo[];
+  external: ExternalContent | null;
 }
 
 export type TaskPolicy = 'open' | 'ask' | 'owner_only';
@@ -106,6 +120,7 @@ export const DEFAULT_LIMITS: Limits = { maxTaskDepth: 4, agentPostsPerMinute: 30
 const NAME = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const MENTION = /(?<![\w@])@([a-z0-9][a-z0-9-]{0,31})\b/g;
 const MAX_TEXT = 16_000;
+const MAX_EXTERNAL_SOURCE = 200;
 /** `@all` mentions every person who can see the room; agents are never pinged by it. */
 export const MENTION_ALL = 'all';
 const RESERVED_NAMES = new Set([MENTION_ALL, 'everyone', 'here']);
@@ -145,13 +160,15 @@ interface MessageRow {
   author_kind: ParticipantKind;
   owner: string | null;
   text: string;
+  external_source: string | null;
+  external_text: string | null;
   created_at: string;
   reply_count: number;
 }
 
 const MESSAGE_SELECT = `
   SELECT m.id, m.room_id, r.project_id, p.name AS project, r.name AS room, m.thread_id, a.name AS author,
-         a.kind AS author_kind, o.name AS owner, m.text, m.created_at,
+         a.kind AS author_kind, o.name AS owner, m.text, m.external_source, m.external_text, m.created_at,
          (SELECT count(*) FROM messages t WHERE t.thread_id = m.id) AS reply_count
   FROM messages m
   JOIN rooms r ON r.id = m.room_id
@@ -159,6 +176,16 @@ const MESSAGE_SELECT = `
   JOIN participants a ON a.id = m.author_id
   LEFT JOIN participants o ON o.id = a.owner_id
 `;
+
+function checkExternal(external: ExternalContent): ExternalContent {
+  const source = external.source.trim().replace(/\s+/g, ' ');
+  const text = external.text.trim();
+  if (!source) throw new OrcoError('invalid', 'Say where the external text came from (a URL, "email from vendor", ...)');
+  if (source.length > MAX_EXTERNAL_SOURCE) throw new OrcoError('invalid', `The external source is over ${MAX_EXTERNAL_SOURCE} characters`);
+  if (!text) throw new OrcoError('invalid', 'The external text is empty');
+  if (text.length > MAX_TEXT) throw new OrcoError('invalid', `The external text is over ${MAX_TEXT} characters`);
+  return { source, text };
+}
 
 function toParticipant(row: ParticipantRow): Participant {
   return { id: row.id, kind: row.kind, name: row.name, ownerId: row.owner_id };
@@ -187,6 +214,10 @@ export class Store {
   readonly questions: Questions;
   readonly notes: Notes;
   readonly flags: Flags;
+  readonly memory: Memory;
+  readonly suggestions: Suggestions;
+  readonly reviews: Reviews;
+  readonly schedules: Schedules;
   private readonly recent = new Map<string, number[]>();
 
   constructor(
@@ -205,6 +236,10 @@ export class Store {
     this.questions = new Questions(this);
     this.notes = new Notes(this);
     this.flags = new Flags(this);
+    this.memory = new Memory(this);
+    this.suggestions = new Suggestions(this);
+    this.reviews = new Reviews(this);
+    this.schedules = new Schedules(this);
   }
 
   checkRate(actor: Participant, kind: 'post' | 'task'): void {
@@ -452,10 +487,24 @@ export class Store {
   }
 
   authenticate(token: string): Participant | null {
+    const hash = hashToken(token);
     const row = this.db
       .prepare('SELECT id, kind, name, owner_id FROM participants WHERE token_hash = ?')
-      .get(hashToken(token)) as ParticipantRow | undefined;
-    return row ? toParticipant(row) : null;
+      .get(hash) as ParticipantRow | undefined;
+    if (row) return toParticipant(row);
+    return this.tasks.authenticateTaskToken(hash);
+  }
+
+  /** Refuses actions a task token must not take: they reach beyond the one task's project. */
+  unscoped(actor: Participant, action: string): void {
+    if (actor.scope) throw new OrcoError('forbidden', `A task token cannot ${action}; it only works on task #${actor.scope.taskId}`);
+  }
+
+  /** SQL (and its parameters) limiting `column` to projects the actor can see, honouring a task token's scope. */
+  projectFilter(actor: Participant, column: string): { sql: string; params: number[] } {
+    const sql = `${column} IN (SELECT project_id FROM project_members WHERE user_id = ?)`;
+    if (!actor.scope) return { sql, params: [this.humanOf(actor)] };
+    return { sql: `(${sql} AND ${column} IS ?)`, params: [this.humanOf(actor), actor.scope.projectId ?? -1] };
   }
 
   participantByName(name: string): Participant | null {
@@ -491,6 +540,7 @@ export class Store {
   }
 
   createProject(actor: Participant, name: string): Project {
+    this.unscoped(actor, 'create projects');
     checkName('Project', name);
     const userId = this.humanOf(actor);
     this.db.exec('BEGIN');
@@ -516,16 +566,17 @@ export class Store {
   }
 
   listProjects(actor: Participant): (Project & { members: string[]; ticketKey: string })[] {
+    const visible = this.projectFilter(actor, 'p.id');
     const rows = this.db
       .prepare(
         `SELECT p.id, p.name, p.ticket_key, group_concat(u.name, ',') AS members
          FROM projects p
          JOIN project_members pm ON pm.project_id = p.id
          JOIN participants u ON u.id = pm.user_id
-         WHERE p.id IN (SELECT project_id FROM project_members WHERE user_id = ?)
+         WHERE ${visible.sql}
          GROUP BY p.id ORDER BY p.name`,
       )
-      .all(this.humanOf(actor)) as unknown as { id: number; name: string; ticket_key: string | null; members: string }[];
+      .all(...visible.params) as unknown as { id: number; name: string; ticket_key: string | null; members: string }[];
     return rows.map((row) => {
       if (row.ticket_key === null) this.tickets.setup(row.id);
       const ticketKey =
@@ -535,6 +586,7 @@ export class Store {
   }
 
   addMember(actor: Participant, projectName: string, userName: string): void {
+    this.unscoped(actor, 'add project members');
     const project = this.visibleProject(actor, projectName);
     const user = this.participantByName(userName);
     if (!user || user.kind !== 'user') throw new OrcoError('not_found', `No user named ${userName}`);
@@ -560,15 +612,15 @@ export class Store {
   }
 
   listRooms(actor: Participant, projectName?: string): Room[] {
-    const userId = this.humanOf(actor);
+    const visible = this.projectFilter(actor, 'r.project_id');
     const rows = this.db
       .prepare(
         `SELECT r.id, r.project_id, p.name AS project, r.name
          FROM rooms r LEFT JOIN projects p ON p.id = r.project_id
-         WHERE (r.project_id IS NULL OR r.project_id IN (SELECT project_id FROM project_members WHERE user_id = ?))
+         WHERE (r.project_id IS NULL OR ${visible.sql})
          ORDER BY p.name IS NOT NULL, p.name, r.name`,
       )
-      .all(userId) as unknown as RoomRow[];
+      .all(...visible.params) as unknown as RoomRow[];
     const rooms = rows.map(toRoom);
     if (projectName === undefined) return rooms;
     this.visibleProject(actor, projectName);
@@ -596,11 +648,17 @@ export class Store {
     roomRef: string,
     text: string,
     threadId?: number,
-    options: { onInsert?: (messageId: number, room: Room) => void; skipRateLimit?: boolean; attachmentIds?: number[] } = {},
+    options: {
+      onInsert?: (messageId: number, room: Room) => void;
+      skipRateLimit?: boolean;
+      attachmentIds?: number[];
+      external?: ExternalContent;
+    } = {},
   ): Message {
     const trimmed = text.trim();
     const attachmentIds = options.attachmentIds ?? [];
-    if (!trimmed && attachmentIds.length === 0) throw new OrcoError('invalid', 'Message text is empty');
+    const external = options.external ? checkExternal(options.external) : null;
+    if (!trimmed && attachmentIds.length === 0 && !external) throw new OrcoError('invalid', 'Message text is empty');
     if (trimmed.length > MAX_TEXT) throw new OrcoError('invalid', `Message is over ${MAX_TEXT} characters`);
     const room = this.room(actor, roomRef);
     this.attachments.checkAttachable(actor, room, attachmentIds);
@@ -614,13 +672,14 @@ export class Store {
       thread = parent.thread_id ?? threadId;
     }
 
+    // Only the author's own words can mention anyone; relayed text never pings.
     const mentioned = this.resolveMentions(trimmed, room, actor);
     this.db.exec('BEGIN');
     let messageId: number;
     try {
       const { lastInsertRowid } = this.db
-        .prepare('INSERT INTO messages (room_id, thread_id, author_id, text) VALUES (?, ?, ?, ?)')
-        .run(room.id, thread, actor.id, trimmed);
+        .prepare('INSERT INTO messages (room_id, thread_id, author_id, text, external_source, external_text) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(room.id, thread, actor.id, trimmed, external?.source ?? null, external?.text ?? null);
       messageId = Number(lastInsertRowid);
       const insertMention = this.db.prepare('INSERT INTO mentions (message_id, participant_id) VALUES (?, ?)');
       for (const target of mentioned) insertMention.run(messageId, target.id);
@@ -641,6 +700,7 @@ export class Store {
         threadId: thread,
         text: trimmed,
         mentions: message.mentions,
+        ...(external ? { external } : {}),
         ...(attachmentIds.length ? { attachments: this.attachments.auditDetail(attachmentIds) } : {}),
       },
     });
@@ -695,15 +755,15 @@ export class Store {
     if (q.length < 2) throw new OrcoError('invalid', 'Search for at least 2 characters');
     if (q.length > 200) throw new OrcoError('invalid', 'That search is too long');
     const pattern = `%${q.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
-    const userId = this.humanOf(actor);
+    const visible = this.projectFilter(actor, 'r.project_id');
     const rows = this.db
       .prepare(
         `${MESSAGE_SELECT}
-         WHERE m.text LIKE ? ESCAPE '\\'
-           AND (r.project_id IS NULL OR r.project_id IN (SELECT project_id FROM project_members WHERE user_id = ?))
+         WHERE (m.text LIKE ? ESCAPE '\\' OR m.external_text LIKE ? ESCAPE '\\')
+           AND (r.project_id IS NULL OR ${visible.sql})
          ORDER BY m.id DESC LIMIT ?`,
       )
-      .all(pattern, userId, Math.min(Math.max(limit, 1), 100)) as unknown as MessageRow[];
+      .all(pattern, pattern, ...visible.params, Math.min(Math.max(limit, 1), 100)) as unknown as MessageRow[];
     return rows.map((row) => this.toMessage(row));
   }
 
@@ -770,6 +830,7 @@ export class Store {
 
   canSee(actor: Participant, projectId: number | null): boolean {
     if (projectId === null) return true;
+    if (actor.scope && projectId !== actor.scope.projectId) return false;
     return (
       this.db
         .prepare('SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ?')
@@ -831,7 +892,9 @@ export class Store {
       task: this.tasks.summaryForMessage(row.id),
       approval: this.approvals.summaryForMessage(row.id),
       question: this.questions.summaryForMessage(row.id),
+      review: this.reviews.summaryForMessage(row.id),
       attachments: this.attachments.forMessage(row.id),
+      external: row.external_source === null ? null : { source: row.external_source, text: row.external_text ?? '' },
     };
   }
 }
