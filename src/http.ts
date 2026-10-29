@@ -205,6 +205,8 @@ export interface AppOptions {
   presence?: Presence;
   publicUrl?: string;
   now?: () => number;
+  /** While no one has an account: the code that lets the first person set up Orco in the browser. */
+  setupCode?: string;
 }
 
 /** Cookies are Secure on HTTPS, and whenever Orco's public address is HTTPS (a proxy may speak HTTP to it). */
@@ -217,6 +219,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
   const oauth = options.publicUrl ? new OAuth(store, options.publicUrl) : undefined;
   const logins = new RateLimiter(10, 15 * 60_000, options.now);
   const registrations = new RateLimiter(20, 3600_000, options.now);
+  const pairings = new RateLimiter(20, 3600_000, options.now);
   const app = express();
   app.disable('x-powered-by');
   // Behind a proxy without ORCO_TRUST_PROXY, every request looks like it comes from the proxy: sign-in
@@ -276,6 +279,40 @@ export function createApp(store: Store, options: AppOptions = {}) {
     void mcpNode(req, res);
   });
 
+  // First run: the first person sets Orco up in the browser with the code the server printed.
+  app.get('/api/setup', (_req, res) => {
+    res.json({ needed: store.onboarding.setupNeeded() });
+  });
+  app.post('/api/setup', express.json({ limit: '4kb' }), (req, res) => {
+    const ip = req.ip ?? 'unknown';
+    if (logins.blocked(ip)) {
+      res.status(429).json({ error: 'Too many tries. Wait 15 minutes and try again.' });
+      return;
+    }
+    try {
+      const { participant, token } = store.onboarding.setup(options.setupCode, String(req.body?.code ?? ''), String(req.body?.name ?? ''));
+      res.cookie(COOKIE, token, { httpOnly: true, sameSite: 'strict', secure: secureCookies(req, options.publicUrl), path: '/', maxAge: 30 * 24 * 3600 * 1000 });
+      res.status(201).json({ name: participant.name, token });
+    } catch (err) {
+      if (err instanceof OrcoError && err.code === 'forbidden') logins.hit(ip);
+      throw err;
+    }
+  });
+
+  // A computer asks to join with `orco connect`; a person approves its code in the browser.
+  app.post('/api/pair', express.json({ limit: '8kb' }), (req, res) => {
+    const ip = req.ip ?? 'unknown';
+    if (pairings.blocked(ip)) {
+      res.status(429).json({ error: 'Too many pairing requests from here. Wait a while and try again.' });
+      return;
+    }
+    pairings.hit(ip);
+    res.status(201).json(store.onboarding.start(req.body ?? {}));
+  });
+  app.get('/api/pair/:id', (req, res) => {
+    res.json(store.onboarding.poll(String(req.params.id), String(req.query.secret ?? '')));
+  });
+
   app.post('/api/session', express.json({ limit: '4kb' }), (req, res) => {
     const ip = req.ip ?? 'unknown';
     if (logins.blocked(ip)) {
@@ -314,6 +351,40 @@ export function createApp(store: Store, options: AppOptions = {}) {
   api.get('/participants', (req, res) => {
     const project = typeof req.query.project === 'string' && req.query.project ? req.query.project : undefined;
     res.json(withStatus(req.participant!, store.members(req.participant!, project)));
+  });
+  api.get('/getting-started', (req, res) => {
+    res.json(store.onboarding.steps(req.participant!, (id) => presence.status(id) !== 'offline'));
+  });
+  api.get('/pair/code/:code', (req, res) => {
+    res.json(store.onboarding.view(req.participant!, String(req.params.code)));
+  });
+  api.post('/pair/code/:code', (req, res) => {
+    const b = req.body ?? {};
+    if (b.decision === 'deny') {
+      store.onboarding.deny(req.participant!, String(req.params.code));
+      res.status(204).end();
+      return;
+    }
+    res.json(store.onboarding.approve(req.participant!, String(req.params.code), Array.isArray(b.agents) ? b.agents : []));
+  });
+  // People add their own agents, and org admins add people, from the browser. Tokens are shown once.
+  api.post('/agents', (req, res) => {
+    const me = req.participant!;
+    if (me.kind !== 'user' || me.scope) throw new OrcoError('forbidden', 'Only people add agents');
+    const { participant, token } = store.createAgent(me.name, String(req.body?.name ?? '').trim().toLowerCase());
+    res.status(201).json({ name: participant.name, token });
+  });
+  api.post('/agents/:name/token', (req, res) => {
+    const me = req.participant!;
+    const agent = store.participantByName(String(req.params.name));
+    if (me.kind !== 'user' || me.scope || !agent || agent.kind !== 'agent' || agent.ownerId !== me.id) throw new OrcoError('not_found', 'You have no agent by that name');
+    res.json({ name: agent.name, token: store.rotateToken(agent.name) });
+  });
+  api.post('/users', (req, res) => {
+    const me = req.participant!;
+    if (!store.isOrgAdmin(me)) throw new OrcoError('forbidden', 'Only org admins add people');
+    const { participant, token } = store.createUser(String(req.body?.name ?? '').trim().toLowerCase(), { orgAdmin: req.body?.admin === true });
+    res.status(201).json({ name: participant.name, token, orgAdmin: store.isOrgAdmin(participant) });
   });
   api.get('/projects', (req, res) => {
     res.json(store.listProjects(req.participant!));

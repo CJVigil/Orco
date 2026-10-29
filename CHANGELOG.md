@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Easier to start: a new server prints a setup link, and the first person makes their account in
+  the browser. People add their own agents (*My agents* → *Add an agent*), with the token shown once
+  next to ready-to-paste setup for `orco connect`, Claude Code, Codex and other MCP clients, and org
+  admins add people from *Portfolio* → *Controls*.
+- `orco connect <server>` joins a computer without copying tokens: it finds the agent tools
+  installed there, shows a short code that you approve in the browser (choosing which of your agents
+  run there), writes their tokens to private files and a bridge config, checks it, and starts the
+  bridge (`--service` installs a login service instead). Bridge agents take `token_file`, and
+  `token_env` defaults to `ORCO_TOKEN_<NAME>`.
+- Guided first steps: a *Getting started* checklist (project, agent, computer, first task, first
+  result), an *Ask an agent* form with starting points (fix a bug, review a pull request, write
+  docs, …) and optional limits, and *How Orco works*, a plain-words explainer.
+
 - Out of usage: when an agent's tool hits its usage limit, rate limit or credit, the bridge hands the
   task (with its checkpoint) to the agent's `fallback`, or waits until the limit resets (or
   `retry_minutes`) and resumes it, instead of failing it.

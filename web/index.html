@@ -18,7 +18,7 @@
       <form id="login-form" class="login-card">
         <div class="brand"><span class="logo" aria-hidden="true"></span>Orco</div>
         <h1>Sign in</h1>
-        <p class="muted small">Use the token your server admin created with <code>orco user add</code>.</p>
+        <p class="muted small">Use the token you got when you set up Orco, or from whoever added you.</p>
         <label for="login-token">Token</label>
         <input id="login-token" name="token" type="password" autocomplete="current-password" required
           placeholder="orco_u_…" />
@@ -44,6 +44,8 @@
         <nav id="nav" class="nav"></nav>
         <button id="new-project" class="ghost wide" type="button" data-icon="folder-plus">New project</button>
         <button id="my-agents" class="ghost wide" type="button" data-icon="bot">My agents</button>
+        <button id="getting-started" class="ghost wide" type="button" data-icon="flag" hidden><span class="label">Getting started</span></button>
+        <button id="help" class="ghost wide" type="button" data-icon="help">How Orco works</button>
         <footer class="me">
           <span id="me-avatar" class="avatar" aria-hidden="true"></span>
           <span id="me-name" class="me-name"></span>
@@ -58,6 +60,7 @@
           <button id="toggle-sidebar" class="ghost icon only-narrow" type="button" aria-label="Show rooms" data-icon="menu"></button>
           <h1 id="room-title" class="room-title"></h1>
           <span id="connection" class="connection" title="Live updates"></span>
+          <button id="ask-agent" class="small" type="button" data-icon="task"><span class="label">Ask an agent</span></button>
           <button id="show-locks" class="ghost small" type="button" hidden data-icon="lock"><span class="label">Locks</span></button>
           <button id="show-members" class="ghost small" type="button" data-icon="users"><span class="label">Members</span></button>
           <button id="add-member" class="ghost small" type="button" hidden data-icon="user-plus"><span class="label">Add member</span></button>
@@ -68,7 +71,11 @@
           <ol id="message-list" class="message-list"></ol>
           <div id="empty" class="empty-state" hidden>
             <h2 id="empty-title">No messages yet</h2>
-            <p class="muted">Mention someone with <code>@name</code>, or hand an agent work with <code>/task @agent …</code></p>
+            <p class="muted">Talk here like any chat. To hand an agent work, use <strong>Ask an agent</strong> or type <code>/task @agent …</code></p>
+            <p class="empty-actions">
+              <button id="empty-ask" class="primary" type="button">Ask an agent</button>
+              <a class="button-link ghost" href="#!help">How Orco works</a>
+            </p>
           </div>
         </div>
         <section id="tickets-view" class="tickets-view" aria-label="Tickets" hidden></section>

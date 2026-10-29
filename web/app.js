@@ -2,6 +2,7 @@ import { attachMentionAutocomplete } from './autocomplete.js';
 import { icon } from './icons.js';
 import { renderMarkdown } from './markdown.js';
 import * as notify from './notify.js';
+import { createGuide } from './guide.js';
 import { createPortfolio } from './portfolio.js';
 import { createTickets } from './tickets.js';
 
@@ -714,10 +715,14 @@ async function showMyAgents() {
   const agents = await api('/agents');
   if (state.panel !== 'agents') return;
   if (agents.length === 0) {
-    $('panel-body').replaceChildren(el('p', { class: 'empty muted', text: 'You have no agents yet. A server admin adds one with orco agent add <you> <name>.' }));
+    $('panel-body').replaceChildren(
+      agentActions(),
+      el('p', { class: 'panel-intro muted small', text: 'You have no agents yet. An agent is an AI helper you own, like Claude Code or Codex, that works on tasks you and others give it.' }),
+    );
     return;
   }
   $('panel-body').replaceChildren(
+    agentActions(),
     el('p', { class: 'panel-intro muted small', text: 'Choose who may give each agent tasks. Tasks from your own agents always go through.' }),
     ...agents.map((agent) => {
       const select = el(
@@ -804,7 +809,29 @@ async function showMyAgents() {
       return el(
         'section',
         { class: 'agent-settings' },
-        el('div', { class: 'agent-name' }, avatar(agent.name, 'agent'), el('strong', { text: agent.name })),
+        el(
+          'div',
+          { class: 'agent-name' },
+          avatar(agent.name, 'agent'),
+          el('strong', { text: agent.name }),
+          el('span', { class: 'spacer' }),
+          el('button', { class: 'ghost small', type: 'button', text: 'Connect…', title: `Ways to connect ${agent.name}`, onclick: () => guide.showConnect(agent.name) }),
+          el('button', {
+            class: 'ghost small',
+            type: 'button',
+            text: 'New token',
+            title: 'Make a new token; the old one stops working',
+            onclick: async () => {
+              if (!confirm(`Make a new token for ${agent.name}? Anything using the old one (a bridge, a Claude Code setup) stops working until you give it the new one.`)) return;
+              try {
+                const made = await api(`/agents/${encodeURIComponent(agent.name)}/token`, { method: 'POST', body: {} });
+                guide.showConnect(agent.name, made.token);
+              } catch (err) {
+                alert(err.message);
+              }
+            },
+          }),
+        ),
         scorecard(agent.scorecard30d, spend),
         el(
           'details',
@@ -859,6 +886,15 @@ async function showMyAgents() {
           : null,
       );
     }),
+  );
+}
+
+function agentActions() {
+  return el(
+    'div',
+    { class: 'panel-actions' },
+    el('button', { class: 'primary small', type: 'button', text: 'Add an agent', onclick: () => guide.addAgent() }),
+    el('button', { class: 'small', type: 'button', text: 'Connect a computer', onclick: () => guide.connectComputer() }),
   );
 }
 
@@ -946,6 +982,7 @@ function renderNav() {
 async function loadStructure() {
   [state.projects, state.rooms] = await Promise.all([api('/projects'), api('/rooms')]);
   renderNav();
+  void guide.refreshSteps();
 }
 
 /* Rooms */
@@ -998,7 +1035,7 @@ function ticketsRoute() {
 
 function setView(view) {
   state.view = view;
-  for (const id of ['messages', 'composer', 'composer-pending']) $(id).hidden = view !== 'room';
+  for (const id of ['messages', 'composer', 'composer-pending', 'ask-agent']) $(id).hidden = view !== 'room';
   $('tickets-view').hidden = view !== 'tickets';
   $('portfolio-view').hidden = view !== 'portfolio';
   $('portfolio').classList.toggle('active', view === 'portfolio');
@@ -1009,7 +1046,19 @@ function portfolioRoute() {
   return match ? { tab: match[1] || 'overview' } : null;
 }
 
+/** Links that open a dialog or panel over whatever is showing, then put the address back. */
+function overlayRoute() {
+  const pair = /^#pair=([A-Za-z0-9-]{4,12})$/.exec(location.hash);
+  if (pair) void guide.openPairCode(pair[1]);
+  else if (location.hash === '#!help') guide.showHelp();
+  else return false;
+  history.replaceState(null, '', state.viewHash || location.pathname + location.search);
+  return Boolean(state.room);
+}
+
 async function selectRoom() {
+  if (overlayRoute()) return;
+  state.viewHash = location.hash || undefined;
   const across = portfolioRoute();
   if (across) {
     setView('portfolio');
@@ -1589,6 +1638,7 @@ function connect() {
   });
   events.addEventListener('task', (event) => {
     onTask(JSON.parse(event.data));
+    if (!$('getting-started').hidden) void guide.refreshSteps();
     scheduleInbox();
     if (state.panel === 'members') {
       clearTimeout(presenceTimer);
@@ -2306,15 +2356,18 @@ async function start() {
   $('me-avatar').replaceWith(Object.assign(avatar(state.me.name, state.me.kind), { id: 'me-avatar' }));
   await loadStructure();
   await selectRoom();
+  if (state.me.kind === 'user' && state.projects.length === 0 && !guide.stepsDismissed()) void guide.showSteps();
   connect();
   void refreshInbox();
   renderNotifyButton();
   void notify.registerWorker(openFromNotification);
 }
 
-function showLogin() {
+async function showLogin() {
   $('app').hidden = true;
   $('login').hidden = false;
+  const setup = await api('/setup').catch(() => ({ needed: false }));
+  if (setup.needed) return guide.showSetup(/^#setup=([\w-]+)$/.exec(location.hash)?.[1], () => start());
   $('login-token').focus();
 }
 
@@ -2342,6 +2395,16 @@ $('logout').addEventListener('click', async () => {
 });
 
 $('new-project').addEventListener('click', () => void newProject());
+$('getting-started').addEventListener('click', () => {
+  $('sidebar').classList.remove('open');
+  return state.panel === 'start' ? closePanel() : void guide.showSteps();
+});
+$('help').addEventListener('click', () => {
+  $('sidebar').classList.remove('open');
+  return state.panel === 'help' ? closePanel() : guide.showHelp();
+});
+$('ask-agent').addEventListener('click', () => void guide.askAgent());
+$('empty-ask').addEventListener('click', () => void guide.askAgent());
 $('add-member').addEventListener('click', () => void addMember());
 $('show-members').addEventListener('click', () => (state.panel === 'members' ? closePanel() : void showMembers()));
 $('show-locks').addEventListener('click', () => (state.panel === 'locks' ? closePanel() : void showLocks()));
@@ -2380,6 +2443,22 @@ const tickets = createTickets({
   me: () => state.me,
   rooms: () => state.rooms,
   $,
+});
+
+const guide = createGuide({
+  api,
+  el,
+  $,
+  me: () => state.me,
+  projects: () => state.projects,
+  room: () => state.room,
+  openPanel,
+  closePanel,
+  panel: () => state.panel,
+  loadStructure,
+  newProject,
+  showMyAgents,
+  onChange: () => void guide.refreshSteps(),
 });
 
 const TASK_COMMAND = /^\/task\s+@?([a-z0-9][a-z0-9-]{0,31})\s+([\s\S]+)$/;

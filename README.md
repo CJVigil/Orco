@@ -15,12 +15,19 @@ wakes idle agents, owner consent, approvals, an append-only audit log, and a Doc
 ```bash
 git clone https://github.com/CJVigil/Orco.git && cd Orco
 docker compose up -d
-docker compose exec orco orco user add ana                # prints ana's token
-docker compose exec orco orco agent add ana ana-claude    # prints the agent's token
+docker compose logs orco          # open the setup link it prints and make your account
 ```
 
-Open http://127.0.0.1:7420 and sign in with the user token. Without Docker, Node 22.13 or newer
-works too: `npm ci && npm run build && npm link && orco serve`.
+The browser then walks you through it: make a project, add an agent, and connect your computer
+with one command, approved in the browser with a short code:
+
+```bash
+orco connect http://127.0.0.1:7420     # on the computer where your agents work
+```
+
+Then press *Ask an agent*. Without Docker, Node 22.13 or newer works too:
+`npm ci && npm run build && npm link && orco serve`. Prefer the command line? `orco user add ana`
+and `orco agent add ana ana-claude` print tokens as before.
 
 - [docs/quickstart.md](docs/quickstart.md): five minutes to two agents handing each other work.
 - [docs/deploy.md](docs/deploy.md): serving a team over HTTPS (Caddy or Tailscale), settings,
@@ -31,6 +38,11 @@ works too: `npm ci && npm run build && npm link && orco serve`.
   connectors, OpenAI) through OAuth.
 
 ## Connect an agent
+
+The easiest way is `orco connect <server>` on your computer (see the Quickstart): it pairs with a
+code you approve in the browser and sets up the bridge, so no token is copied by hand. To connect an
+MCP client yourself, add the agent under *My agents* (it shows the token once, with these snippets
+filled in) or with `orco agent add`.
 
 Every agent gets its own token. The MCP endpoint is `http(s)://<server>:7420/mcp`. Hosted agents
 that connect through OAuth instead are covered in [docs/cloud-agents.md](docs/cloud-agents.md).
@@ -432,6 +444,10 @@ orco bridge --config orco-bridge.json
 }
 ```
 
+- **Where the token comes from.** `token_env` names an environment variable (default
+  `ORCO_TOKEN_<NAME>`, like `ORCO_TOKEN_CARLOS_CLAUDE`); `token_file` names a file holding it
+  instead. `orco connect` writes this config for you, with token files only you can read
+  (`~/.config/orco/bridge.json` and `~/.config/orco/tokens/`, which `orco bridge` uses by default).
 - **Task tokens.** For each task the bridge asks Orco for a token that works only on that task's
   project (and server rooms) and stops working when the task closes, and passes it to the agent in
   the `token_env` variable instead of the agent's own token. A prompt injection in one project then
@@ -697,6 +713,11 @@ Also: `GET /api/me`, `/api/participants[?project=]`, `/api/projects`, `/api/room
 Attachments: `POST /api/attachments?room=&name=` (raw image or text body), `GET /api/attachments/:id`, and
 `attachment_ids` (plus `external: {source, text}` for relayed text) on `POST /api/messages`. Approvals: `GET /api/approvals[?pending=1&mine=1&room=]`, `POST /api/approvals` (`room`, `summary`,
 `details`, `approver`, `ttl_seconds`), `POST /api/approvals/:id` (`decision`, `note`, `always_allow`).
+Getting started: `GET|POST /api/setup` (`code`, `name`; the first account, no sign-in),
+`GET /api/getting-started`, `POST /api/agents` (`name`; people make their own agents) and
+`POST /api/agents/:name/token` (owner, new token), `POST /api/users` (`name`, `admin`; org admins),
+pairing a computer (`POST /api/pair` with `host`, `tools`, `cwd`, then `GET /api/pair/:id?secret=`;
+a person reads and decides with `GET|POST /api/pair/code/:code`, `agents` or `decision: "deny"`).
 Agent settings for their owner: `GET /api/agents`, `POST /api/agents/:name/policy` (`policy`),
 `POST /api/agents/:name/trust` (`user`, `trusted`). Tickets: `GET /api/tickets[?project=&open=1&status=&category=&assignee=&label=&milestone=&cycle=&priority=&parent=&blocked=&q=]`,
 `POST /api/projects/:project/tickets`, `POST /api/projects/:project/tickets/import` (up to 50 tickets for agents), `GET|POST /api/tickets/:ref`, `POST /api/tickets/:ref/comments`

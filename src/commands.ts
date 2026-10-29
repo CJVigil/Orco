@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, extname, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { parseArgs } from 'node:util';
@@ -7,6 +8,7 @@ import { Bridge } from './bridge/bridge.js';
 import { loadBridgeConfig } from './bridge/config.js';
 import { doctor } from './bridge/doctor.js';
 import { ForgeSync, loadForgeSyncConfig } from './sync/forge.js';
+import { connect, DEFAULT_CONFIG, DEFAULT_TOKEN_DIR } from './connect.js';
 import { CLIENT_COMMANDS, CLIENT_USAGE, readStdin, runClient } from './client.js';
 import { checkTimeZone, parseCron } from './cron.js';
 import { openDatabase } from './db.js';
@@ -35,6 +37,8 @@ Server commands (run where the database lives):
   list                       List users and agents
 
 Bridge commands (run on each developer's machine):
+  connect <server>           Join this computer: approve a code in the browser, and your agents run here
+                             [--dir <folder>] [--service: start at login] [--no-start]
   bridge                     Wake local agents when they are assigned tasks
   bridge example             Print an example bridge config
   bridge doctor              Check each bridge agent: token, tool installed, flags, model API
@@ -106,6 +110,14 @@ const EXAMPLE_BRIDGE_CONFIG = {
   ],
 };
 
+const DEFAULT_BRIDGE_CONFIG = './orco-bridge.json';
+
+/** ./orco-bridge.json if there is one, else the config orco connect writes, if there is one. */
+function defaultBridgeConfig(): string {
+  if (!existsSync(DEFAULT_BRIDGE_CONFIG) && existsSync(DEFAULT_CONFIG)) return DEFAULT_CONFIG;
+  return DEFAULT_BRIDGE_CONFIG;
+}
+
 async function runBridge(path: string): Promise<void> {
   let config: ReturnType<typeof loadBridgeConfig>;
   let bridge: Bridge;
@@ -152,7 +164,7 @@ export function main(): void {
       db: { type: 'string', default: process.env.ORCO_DB ?? './orco.db' },
       host: { type: 'string', default: process.env.ORCO_HOST ?? '127.0.0.1' },
       port: { type: 'string', default: process.env.ORCO_PORT ?? '7420' },
-      config: { type: 'string', default: process.env.ORCO_BRIDGE_CONFIG ?? './orco-bridge.json' },
+      config: { type: 'string', default: process.env.ORCO_BRIDGE_CONFIG ?? defaultBridgeConfig() },
       since: { type: 'string' },
       as: { type: 'string' },
       'create-labels': { type: 'boolean' },
@@ -161,6 +173,8 @@ export function main(): void {
       force: { type: 'boolean' },
       once: { type: 'boolean' },
       admin: { type: 'boolean' },
+      service: { type: 'boolean' },
+      'no-start': { type: 'boolean' },
       off: { type: 'boolean' },
       for: { type: 'string' },
       dir: { type: 'string' },
@@ -216,6 +230,32 @@ export function main(): void {
     return;
   }
 
+  if (command === 'connect') {
+    if (!sub) throw new OrcoError('invalid', 'Usage: orco connect <server address> [--dir <folder>] [--service] [--no-start]');
+    const config = values.config === DEFAULT_BRIDGE_CONFIG ? DEFAULT_CONFIG : values.config;
+    void connect(
+      { server: sub, dir: resolve(values.dir ?? process.cwd()), config, tokenDir: DEFAULT_TOKEN_DIR, service: values.service === true },
+      { out: (text) => console.log(text) },
+    )
+      .then(async () => {
+        const findings = await doctor(loadBridgeConfig(config), process.env);
+        const problems = findings.filter((f) => !f.ok);
+        for (const f of problems) console.log(`  needs attention · ${f.agent}: ${f.text}`);
+        if (!problems.length) console.log('Everything checks out.');
+        if (values.service || values['no-start']) {
+          if (!values.service) console.log(`Start it with: orco bridge`);
+          return;
+        }
+        console.log('Starting the bridge now (Ctrl+C stops it; use --service to start it at login instead).');
+        await runBridge(config);
+      })
+      .catch((err: Error) => {
+        console.error(err.message);
+        process.exitCode = 1;
+      });
+    return;
+  }
+
   if (command === 'sync') {
     if ((sub !== 'gitea' && sub !== 'github') || !args[0]) throw new OrcoError('invalid', 'Usage: orco sync gitea|github <config.json> [--once]');
     const config = loadForgeSyncConfig(args[0], sub);
@@ -244,7 +284,9 @@ export function main(): void {
   switch (key) {
     case 'serve': {
       const publicUrl = process.env.ORCO_PUBLIC_URL || undefined;
-      const { app, close, oauth } = createApp(store, { publicUrl });
+      // Until someone has an account, a one-time code lets the first person set Orco up in the browser.
+      const setupCode = store.onboarding.setupNeeded() ? randomBytes(9).toString('base64url') : undefined;
+      const { app, close, oauth } = createApp(store, { publicUrl, setupCode });
       const warning = networkFilesystemWarning(values.db);
       if (warning) console.error(warning);
       const backups = backupsFromEnv(store);
@@ -278,6 +320,13 @@ export function main(): void {
         if (backups) console.log(`  Backups: every ${process.env.ORCO_BACKUP_HOURS || 24}h to ${process.env.ORCO_BACKUP_DIR}`);
         if (values.host !== '127.0.0.1' && values.host !== 'localhost') {
           console.log('  Not bound to localhost: put TLS in front of this (see docs/deploy.md).');
+        }
+        if (setupCode) {
+          const base = (publicUrl ?? `http://${values.host === '0.0.0.0' ? 'localhost' : values.host}:${port}`).replace(/\/+$/, '');
+          console.log('');
+          console.log('  No one has an account yet. Open this link to set up Orco and make yours:');
+          console.log(`  ${base}/#setup=${setupCode}`);
+          console.log('  (or run: orco user add <your-name>)');
         }
       });
       server.on('error', (err) => {

@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import type { BridgeConfig } from './config.js';
+import { agentToken, type BridgeConfig } from './config.js';
 import { PRESETS } from './presets.js';
 
 export interface Finding {
@@ -32,15 +32,16 @@ export async function doctor(config: BridgeConfig, env: NodeJS.ProcessEnv, probe
   const findings: Finding[] = [];
   for (const agent of config.agents) {
     const note = (ok: boolean, text: string) => findings.push({ agent: agent.name, ok, text });
-    const token = env[agent.token_env];
+    const token = agentToken(agent, env);
+    const where = agent.token_file ?? agent.token_env;
     if (!token) {
-      note(false, `${agent.token_env} is not set`);
+      note(false, agent.token_file ? `cannot read the token file ${agent.token_file}` : `${agent.token_env} is not set`);
     } else {
       try {
         const res = await fetch(`${config.server}/api/me`, { headers: { Authorization: `Bearer ${token}` } });
         const me = (await res.json().catch(() => ({}))) as { name?: string; kind?: string; error?: string };
-        if (!res.ok) note(false, `Orco refused the token in ${agent.token_env}: ${me.error ?? res.status}`);
-        else if (me.name !== agent.name || me.kind !== 'agent') note(false, `the token in ${agent.token_env} belongs to ${me.kind} ${me.name}, not agent ${agent.name}`);
+        if (!res.ok) note(false, `Orco refused the token in ${where}: ${me.error ?? res.status}`);
+        else if (me.name !== agent.name || me.kind !== 'agent') note(false, `the token in ${where} belongs to ${me.kind} ${me.name}, not agent ${agent.name}`);
         else note(true, `signs in to ${config.server} as ${agent.name}`);
       } catch (err) {
         note(false, `cannot reach ${config.server}: ${(err as Error).message}`);

@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { maskSecrets } from '../mask.js';
 import type { Task } from '../tasks.js';
-import type { BridgeAgentConfig, BridgeConfig } from './config.js';
+import { agentToken, type BridgeAgentConfig, type BridgeConfig } from './config.js';
 import { EventStream } from './events.js';
 import { runModel } from './model.js';
 import { RunOutput, type UsageLimit } from './output.js';
@@ -672,9 +672,9 @@ export class Bridge {
   async start(): Promise<void> {
     const env = this.options.env ?? process.env;
     const log = this.options.logger ?? consoleLogger;
-    const missing = this.config.agents.filter((agent) => !env[agent.token_env]);
+    const missing = this.config.agents.filter((agent) => !agentToken(agent, env));
     if (missing.length > 0) {
-      throw new Error(`Set these environment variables first: ${missing.map((a) => a.token_env).join(', ')}`);
+      throw new Error(`No token for ${missing.map((a) => (a.token_file ? `${a.name} (cannot read ${a.token_file})` : `${a.name} (set ${a.token_env})`)).join(', ')}`);
     }
     // Agents branching the same repository into the same folder share one manager, so git work on it is serialized.
     const worktrees = new Map<string, Worktrees>();
@@ -686,7 +686,7 @@ export class Bridge {
         manager = worktrees.get(key) ?? candidate;
         worktrees.set(key, manager);
       }
-      const runner = new AgentRunner(this.config.server, agent, env[agent.token_env]!, env, log, this.options.echoOutput ?? true, manager);
+      const runner = new AgentRunner(this.config.server, agent, agentToken(agent, env)!, env, log, this.options.echoOutput ?? true, manager);
       await runner.start();
       this.runners.push(runner);
     }

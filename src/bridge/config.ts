@@ -21,7 +21,10 @@ const modelSchema = z.object({
 
 const agentSchema = z.object({
   name: z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/),
-  token_env: z.string().regex(/^[A-Z_][A-Z0-9_]*$/, 'token_env must name an environment variable, like ORCO_TOKEN_CLAUDE'),
+  /** The variable holding the agent's token (and that the agent's tool reads it from). Default ORCO_TOKEN_<NAME>. */
+  token_env: z.string().regex(/^[A-Z_][A-Z0-9_]*$/, 'token_env must name an environment variable, like ORCO_TOKEN_CLAUDE').optional(),
+  /** Or a file holding the token, readable only by you (orco connect writes these). */
+  token_file: z.string().optional(),
   /** A ready-made setup for a known agent tool (see presets.ts), instead of command. */
   preset: z.enum(PRESET_NAMES).optional(),
   command: z.array(z.string()).min(1).optional(),
@@ -64,7 +67,8 @@ const configSchema = z.object({
 
 export type ModelConfig = z.infer<typeof modelSchema>;
 /** An agent as the bridge runs it: a preset resolved into its command, lifecycle and prompt. */
-export type BridgeAgentConfig = Omit<z.infer<typeof agentSchema>, 'command' | 'lifecycle' | 'worktree'> & {
+export type BridgeAgentConfig = Omit<z.infer<typeof agentSchema>, 'command' | 'lifecycle' | 'worktree' | 'token_env'> & {
+  token_env: string;
   command: string[];
   lifecycle: 'agent' | 'bridge';
   worktree?: WorktreeSettings;
@@ -113,6 +117,8 @@ export function parseBridgeConfig(raw: unknown, baseDir = process.cwd()): Bridge
       }
       return {
         ...agent,
+        token_env: agent.token_env ?? `ORCO_TOKEN_${agent.name.toUpperCase().replace(/-/g, '_')}`,
+        token_file: agent.token_file ? resolveDir(baseDir, agent.token_file) : undefined,
         command: agent.command ?? preset?.command ?? [],
         lifecycle,
         prompt_template,
@@ -137,4 +143,16 @@ export function loadBridgeConfig(path: string): BridgeConfig {
     throw new OrcoError('invalid', `Bridge config ${path} is not valid JSON: ${(err as Error).message}`);
   }
   return parseBridgeConfig(raw, dirname(resolve(path)));
+}
+
+/** An agent's token: from its token_file if it has one, else from its environment variable. */
+export function agentToken(agent: BridgeAgentConfig, env: NodeJS.ProcessEnv): string | undefined {
+  if (agent.token_file) {
+    try {
+      return readFileSync(agent.token_file, 'utf8').trim() || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return env[agent.token_env];
 }

@@ -1391,6 +1391,177 @@ a.button-link:hover {
   margin-top: 0.75rem;
 }
 
+/* Getting started */
+
+.ask.guide {
+  width: min(560px, calc(100% - 2rem));
+  max-height: calc(100% - 2rem);
+}
+
+.guide-body {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.guide-body p {
+  margin: 0;
+}
+
+.guide-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.guide-head h2 {
+  margin: 0;
+}
+
+.guide-form {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.guide-body textarea,
+.guide-body select,
+.guide-form input {
+  width: 100%;
+}
+
+.copy-block {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  padding: 0.5rem 0.5rem 0.5rem 0.75rem;
+}
+
+.copy-block pre {
+  flex: 1;
+  margin: 0;
+  min-width: 0;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.guide-tabs,
+.templates,
+.panel-actions,
+.empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.guide-tabs button.active {
+  background: var(--bg-hover);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.guide-tab {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.pair-row {
+  display: grid;
+  grid-template-columns: auto 8rem 1fr;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.pair-row .muted {
+  grid-column: 2 / -1;
+}
+
+.panel-actions {
+  padding: 0 1rem 0.5rem;
+}
+
+.empty-actions {
+  justify-content: center;
+  margin-top: 1rem;
+}
+
+.steps {
+  list-style: none;
+  margin: 0.5rem 0;
+  padding: 0 1rem;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.step {
+  display: grid;
+  grid-template-columns: 1.4rem 1fr auto;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.step.next {
+  border-color: var(--accent);
+}
+
+.step.done .step-title {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.step-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 1.3rem;
+  height: 1.3rem;
+  border: 1.5px solid var(--border);
+  border-radius: 50%;
+  font-size: 0.75rem;
+}
+
+.step.done .step-mark {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: #fff;
+}
+
+.glossary {
+  margin: 0.5rem 0;
+  padding: 0 1rem;
+}
+
+.glossary dt {
+  font-weight: 600;
+  margin-top: 0.75rem;
+}
+
+.glossary dd {
+  margin: 0.2rem 0 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+button.link {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+}
+
+button.link:hover {
+  text-decoration: underline;
+}
+
 /* Narrow screens */
 
 .room-head .only-narrow {

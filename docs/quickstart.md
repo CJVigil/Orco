@@ -28,7 +28,7 @@ node dist/cli.js serve
 ```
 
 `node dist/cli.js` works anywhere you would type `orco`, so the commands below become
-`node dist/cli.js user add carlos` and so on. `npm link` also works on Windows (npm creates an
+`node dist/cli.js connect …` and so on. `npm link` also works on Windows (npm creates an
 `orco.cmd` for you), but needs an elevated or user-level npm prefix on some setups. To keep the
 database somewhere specific, set `$env:ORCO_DB = "C:\orco\orco.db"` before starting. CI runs the
 test suite on Windows as well as Linux.
@@ -36,18 +36,58 @@ test suite on Windows as well as Linux.
 Either way Orco listens on http://127.0.0.1:7420 and keeps everything in one SQLite file.
 With Docker, run the commands below as `docker compose exec orco orco …`.
 
-## 2. Create yourself and an agent
+## 2. Make your account in the browser
+
+The first time it starts, Orco prints a setup link (with Docker: `docker compose logs orco`):
+
+```
+  No one has an account yet. Open this link to set up Orco and make yours:
+  http://127.0.0.1:7420/#setup=3kQ9…
+```
+
+Open it, pick your name and press *Create my account*. You are signed in, and Orco shows your
+personal token once: keep it in a password manager for signing in elsewhere or from the command
+line. The *Getting started* checklist on the right walks through the rest of this page.
+
+## 3. Make a project and an agent
+
+*New project* in the sidebar makes a project with a `#general` room. Then *My agents* → *Add an
+agent*: name it after you and the tool, like `carlos-claude`.
+
+## 4. Connect your computer
+
+On the computer where the agent should work, in the folder of your code:
+
+```bash
+orco connect http://127.0.0.1:7420
+```
+
+It finds Claude Code, Codex and the other tools Orco knows, and shows a code like `K7QD-M4XP` (and
+a link). Open the link, or *My agents* → *Connect a computer* and enter the code. Orco shows the
+computer's name, folder and tools; choose which of your agents run there and press *Approve*.
+`orco connect` saves the agents' tokens in files only you can read (no copying tokens around),
+checks the setup and starts the bridge, which wakes the agents when they get work. Add `--service`
+to start it at every login instead (systemd, launchd or Task Scheduler).
+
+## 5. Ask it to do something
+
+In `#general`, press *Ask an agent*, pick your agent, choose a starting point like *Fix a bug* or
+*Write docs*, fill in the parts in angle brackets and press *Ask*. (Typing
+`/task @carlos-claude summarize what changed this week` in the composer does the same.)
+
+The task card moves from *Requested* to *In progress* to *Done*, and the result lands in the
+task's thread. Rate it with ▲ or ▼. *How Orco works* in the sidebar explains the rest in plain words.
+
+## Without the browser
+
+Everything above also works from the command line, where the database lives:
 
 ```bash
 orco user add carlos                  # prints your token: keep it, it is shown once
 orco agent add carlos carlos-claude   # prints the agent's token
 ```
 
-Open http://127.0.0.1:7420 and sign in with your user token. You land in `#lobby`.
-
-## 3. Connect the agent
-
-In the folder you want the agent to work in:
+Then connect the agent to an MCP client by hand. In the folder you want the agent to work in:
 
 ```bash
 claude mcp add --transport http orco http://127.0.0.1:7420/mcp \
@@ -55,23 +95,7 @@ claude mcp add --transport http orco http://127.0.0.1:7420/mcp \
 ```
 
 Start Claude Code and ask it: *"Use the orco tools: say hello in lobby, then wait for mentions."*
-Its message shows up in the browser. Mention it back (`@carlos-claude what are you working on?`)
-and it answers.
-
-## 4. Give it a task
-
-Create a project from the sidebar (*+ New project*), then in its `#general` room type:
-
-```
-/task @carlos-claude summarize what changed in this repo this week
-```
-
-The task card moves from *Requested* to *In progress* to *Done*, and the result lands in the
-task's thread.
-
-## 5. Let it wake up on its own
-
-So far the agent only sees work while its session is open. The bridge starts it for you:
+Its message shows up in the browser. To have it wake up on its own instead, write a bridge config:
 
 ```bash
 orco bridge example > orco-bridge.json    # edit server, name, command, cwd
@@ -79,8 +103,7 @@ export ORCO_TOKEN_CARLOS_CLAUDE=<carlos-claude token>
 orco bridge --config orco-bridge.json
 ```
 
-Close the Claude Code session, assign another task, and watch the bridge start Claude Code, do
-the task, and exit. The agent shows as *standby* in the members list while it waits.
+The agent shows as *standby* in the members list while the bridge waits for its work.
 
 ### Using Codex instead
 
@@ -107,8 +130,9 @@ but approval policy is never" and the bridge marks the task failed. Codex must b
 
 ## Next
 
-- Invite a teammate: `orco user add ana`, add them to your project with *+ Add member*, and let
-  them connect their own agents. Tasks between your agents and theirs ask the owner first.
+- Invite a teammate: *Portfolio* → *Controls* → *People* (or `orco user add ana`), send them the
+  token it shows, add them to your project with *+ Add member*, and let them connect their own
+  agents. Tasks between your agents and theirs ask the owner first.
 - Before agents touch shared things (a deploy, an account), have them use `acquire_lock`.
 - Before risky steps, have them use `request_approval`.
 - Plan work as tickets: open *Tickets* under your project, file a few, and assign one to your
