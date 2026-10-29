@@ -59,10 +59,10 @@ describe('projects and rooms', () => {
     );
   });
 
-  it('makes the creator a member and adds #general', () => {
+  it('makes the creator an admin and adds #general', () => {
     assert.equal(code(() => store.createProject(anaClaude, 'api')), 'forbidden', 'only people create projects');
     store.createProject(ana, 'api');
-    assert.deepEqual(store.listProjects(ana), [{ id: 1, name: 'api', members: ['ana'], ticketKey: 'API' }]);
+    assert.deepEqual(store.listProjects(ana), [{ id: 1, name: 'api', members: ['ana'], ticketKey: 'API', role: 'admin' }]);
     assert.ok(store.listRooms(ana).some((r) => r.ref === 'api/general'));
   });
 

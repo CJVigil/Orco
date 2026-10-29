@@ -9,6 +9,11 @@ import { Files } from './files.js';
 import { Hooks } from './hooks.js';
 import { Locks } from './locks.js';
 import { Reminders } from './reminders.js';
+import { Controls } from './controls.js';
+import { Decisions } from './decisions.js';
+import { Groups } from './groups.js';
+import { Policies } from './policies.js';
+import { Portfolios } from './portfolio.js';
 import { Runs } from './runs.js';
 import { Secrets } from './secrets.js';
 import { Memory } from './memory.js';
@@ -52,6 +57,11 @@ export interface Project {
   id: number;
   name: string;
 }
+
+/** What a person may do in a project: admins manage members and settings, viewers only read. */
+export type ProjectRole = 'admin' | 'member' | 'viewer';
+const ROLE_RANK: Record<ProjectRole, number> = { viewer: 1, member: 2, admin: 3 };
+export const PROJECT_ROLES = Object.keys(ROLE_RANK) as ProjectRole[];
 
 export interface Message {
   id: number;
@@ -126,6 +136,8 @@ export interface StoreOptions {
   limits?: Partial<Limits>;
   /** 32 bytes for encrypting secrets (ORCO_SECRETS_KEY). Without it the credentials broker is off. */
   secretsKey?: Buffer;
+  /** When to write weekly digests (ORCO_DIGEST, ORCO_DIGEST_TZ); null turns them off. Default Monday 9:00 UTC. */
+  digest?: { cron: string; tz: string } | null;
 }
 
 export const DEFAULT_LIMITS: Limits = { maxTaskDepth: 4, agentPostsPerMinute: 30, agentTasksPerMinute: 10, taskStallMinutes: 15, escalateHours: 4, runLogDays: 30 };
@@ -136,7 +148,9 @@ const MAX_TEXT = 16_000;
 const MAX_EXTERNAL_SOURCE = 200;
 /** `@all` mentions every person who can see the room; agents are never pinged by it. */
 export const MENTION_ALL = 'all';
-const RESERVED_NAMES = new Set([MENTION_ALL, 'everyone', 'here']);
+/** Orco's own name, for messages it writes itself (weekly digests). No one can sign in as it. */
+export const SYSTEM_NAME = 'orco';
+const RESERVED_NAMES = new Set([MENTION_ALL, 'everyone', 'here', SYSTEM_NAME]);
 
 function checkName(kind: string, name: string): void {
   if (!NAME.test(name)) {
@@ -233,6 +247,13 @@ export class Store {
   readonly schedules: Schedules;
   readonly reminders: Reminders;
   readonly runs: Runs;
+  readonly groups: Groups;
+  readonly controls: Controls;
+  readonly policies: Policies;
+  readonly decisions: Decisions;
+  readonly portfolios: Portfolios;
+  /** When weekly digests are written (null: never). */
+  readonly digestSchedule: { cron: string; tz: string } | null;
   readonly files: Files;
   readonly hooks: Hooks;
   readonly secrets: Secrets;
@@ -261,6 +282,12 @@ export class Store {
     this.schedules = new Schedules(this);
     this.reminders = new Reminders(this);
     this.runs = new Runs(this);
+    this.groups = new Groups(this);
+    this.controls = new Controls(this);
+    this.policies = new Policies(this);
+    this.decisions = new Decisions(this);
+    this.portfolios = new Portfolios(this);
+    this.digestSchedule = options.digest === undefined ? { cron: '0 9 * * 1', tz: 'UTC' } : options.digest;
     this.files = new Files(this);
     this.hooks = new Hooks(this);
     this.secrets = new Secrets(this, options.secretsKey);
@@ -308,10 +335,40 @@ export class Store {
     return row?.on_ === 1;
   }
 
-  createUser(name: string): { participant: Participant; token: string } {
+  createUser(name: string, options: { orgAdmin?: boolean } = {}): { participant: Participant; token: string } {
+    // The first person on a server runs it: they become its first org admin.
+    const first = this.db.prepare("SELECT 1 FROM participants WHERE kind = 'user' AND org_admin = 1").get() === undefined;
     const created = this.createParticipant('user', name, null);
-    this.audit.record(null, 'user.create', { subject: `user:${name}` });
+    if (first || options.orgAdmin) this.db.prepare('UPDATE participants SET org_admin = 1 WHERE id = ?').run(created.participant.id);
+    this.audit.record(null, 'user.create', { subject: `user:${name}`, detail: { orgAdmin: first || options.orgAdmin === true } });
     return created;
+  }
+
+  isSystem(participant: Participant): boolean {
+    return (this.db.prepare('SELECT system FROM participants WHERE id = ?').get(participant.id) as { system: number } | undefined)?.system === 1;
+  }
+
+  /** Org admins see every project in the portfolio, set org-wide policies and budgets, and manage groups. */
+  isOrgAdmin(actor: Participant): boolean {
+    if (actor.kind !== 'user' || actor.scope) return false;
+    return (this.db.prepare('SELECT org_admin FROM participants WHERE id = ?').get(actor.id) as { org_admin: number } | undefined)?.org_admin === 1;
+  }
+
+  /** Server-side (CLI) only: make a user an org admin or not. */
+  setOrgAdmin(name: string, on: boolean): void {
+    const user = this.participantByName(name);
+    if (!user || user.kind !== 'user' || this.isSystem(user)) throw new OrcoError('not_found', `No user named ${name}`);
+    if (!on) {
+      const others = this.db.prepare("SELECT count(*) AS n FROM participants WHERE kind = 'user' AND org_admin = 1 AND id != ?").get(user.id) as { n: number };
+      if (others.n === 0) throw new OrcoError('conflict', `${name} is the only org admin; make someone else one first`);
+    }
+    this.db.prepare('UPDATE participants SET org_admin = ? WHERE id = ?').run(on ? 1 : 0, user.id);
+    this.audit.record(null, 'user.org_admin', { subject: `user:${name}`, detail: { on } });
+    this.events.emit('structure');
+  }
+
+  orgAdmins(): Participant[] {
+    return (this.db.prepare("SELECT id, kind, name, owner_id FROM participants WHERE kind = 'user' AND org_admin = 1 ORDER BY name").all() as unknown as ParticipantRow[]).map(toParticipant);
   }
 
   createAgent(ownerName: string, name: string): { participant: Participant; token: string } {
@@ -324,7 +381,7 @@ export class Store {
 
   rotateToken(name: string): string {
     const participant = this.participantByName(name);
-    if (!participant) throw new OrcoError('not_found', `No user or agent named ${name}`);
+    if (!participant || this.isSystem(participant)) throw new OrcoError('not_found', `No user or agent named ${name}`);
     const token = newToken(participant.kind);
     this.db.prepare('UPDATE participants SET token_hash = ? WHERE id = ?').run(hashToken(token), participant.id);
     this.audit.record(null, 'token.rotate', { subject: `${participant.kind}:${name}` });
@@ -541,7 +598,7 @@ export class Store {
   authenticate(token: string): Participant | null {
     const hash = hashToken(token);
     const row = this.db
-      .prepare('SELECT id, kind, name, owner_id FROM participants WHERE token_hash = ?')
+      .prepare('SELECT id, kind, name, owner_id FROM participants WHERE token_hash = ? AND system = 0')
       .get(hash) as ParticipantRow | undefined;
     if (row) return toParticipant(row);
     return this.tasks.authenticateTaskToken(hash);
@@ -554,7 +611,7 @@ export class Store {
 
   /** SQL (and its parameters) limiting `column` to projects the actor can see, honouring a task token's scope. */
   projectFilter(actor: Participant, column: string): { sql: string; params: number[] } {
-    const sql = `${column} IN (SELECT project_id FROM project_members WHERE user_id = ?)`;
+    const sql = `${column} IN (SELECT project_id FROM project_access WHERE user_id = ?)`;
     if (!actor.scope) return { sql, params: [this.humanOf(actor)] };
     return { sql: `(${sql} AND ${column} IS ?)`, params: [this.humanOf(actor), actor.scope.projectId ?? -1] };
   }
@@ -578,7 +635,7 @@ export class Store {
     const rows = this.db
       .prepare(
         `SELECT p.id, p.kind, p.name, p.owner_id, o.name AS owner
-         FROM participants p LEFT JOIN participants o ON o.id = p.owner_id ORDER BY p.name`,
+         FROM participants p LEFT JOIN participants o ON o.id = p.owner_id WHERE p.system = 0 ORDER BY p.name`,
       )
       .all() as unknown as (ParticipantRow & { owner: string | null })[];
     return rows.map((row) => ({ ...toParticipant(row), owner: row.owner }));
@@ -602,7 +659,7 @@ export class Store {
         .prepare('INSERT INTO projects (name, created_by) VALUES (?, ?)')
         .run(name, actor.id);
       const projectId = Number(lastInsertRowid);
-      this.db.prepare('INSERT INTO project_members (project_id, user_id) VALUES (?, ?)').run(projectId, userId);
+      this.db.prepare("INSERT INTO project_members (project_id, user_id, role) VALUES (?, ?, 'admin')").run(projectId, userId);
       this.db
         .prepare("INSERT INTO rooms (project_id, name, created_by) VALUES (?, 'general', ?)")
         .run(projectId, actor.id);
@@ -618,13 +675,13 @@ export class Store {
     }
   }
 
-  listProjects(actor: Participant): (Project & { members: string[]; ticketKey: string })[] {
+  listProjects(actor: Participant): (Project & { members: string[]; ticketKey: string; role: ProjectRole | null })[] {
     const visible = this.projectFilter(actor, 'p.id');
     const rows = this.db
       .prepare(
         `SELECT p.id, p.name, p.ticket_key, group_concat(u.name, ',') AS members
          FROM projects p
-         JOIN project_members pm ON pm.project_id = p.id
+         JOIN (SELECT DISTINCT project_id, user_id FROM project_access) pm ON pm.project_id = p.id
          JOIN participants u ON u.id = pm.user_id
          WHERE ${visible.sql}
          GROUP BY p.id ORDER BY p.name`,
@@ -634,27 +691,99 @@ export class Store {
       if (row.ticket_key === null) this.tickets.setup(row.id);
       const ticketKey =
         row.ticket_key ?? (this.db.prepare('SELECT ticket_key FROM projects WHERE id = ?').get(row.id) as { ticket_key: string }).ticket_key;
-      return { id: row.id, name: row.name, members: row.members.split(',').sort(), ticketKey };
+      return { id: row.id, name: row.name, members: row.members.split(',').sort(), ticketKey, role: this.roleIn(actor, row.id) };
     });
   }
 
-  addMember(actor: Participant, projectName: string, userName: string): void {
+  /** Adds a person to a project, or changes their role there. Project admins and org admins only. */
+  addMember(actor: Participant, projectName: string, userName: string, role: ProjectRole = 'member'): void {
     this.unscoped(actor, 'add project members');
     // Who is in a project decides who can see it and approve things there: people decide that, not agents.
     if (actor.kind !== 'user') throw new OrcoError('forbidden', 'Only people add project members');
-    const project = this.visibleProject(actor, projectName);
+    if (!PROJECT_ROLES.includes(role)) throw new OrcoError('invalid', `role is ${PROJECT_ROLES.join(', ')}`);
+    const project = this.adminProject(actor, projectName);
     const user = this.participantByName(userName);
     if (!user || user.kind !== 'user') throw new OrcoError('not_found', `No user named ${userName}`);
+    const current = this.db.prepare('SELECT role FROM project_members WHERE project_id = ? AND user_id = ?').get(project.id, user.id) as { role: ProjectRole } | undefined;
+    if (current?.role === 'admin' && role !== 'admin') this.keepAnAdmin(project.id, user.id);
     this.db
-      .prepare('INSERT OR IGNORE INTO project_members (project_id, user_id) VALUES (?, ?)')
-      .run(project.id, user.id);
-    this.audit.record(actor, 'project.add_member', { projectId: project.id, subject: `user:${userName}` });
+      .prepare('INSERT INTO project_members (project_id, user_id, role) VALUES (?, ?, ?) ON CONFLICT (project_id, user_id) DO UPDATE SET role = excluded.role')
+      .run(project.id, user.id, role);
+    this.audit.record(actor, current ? 'project.set_role' : 'project.add_member', { projectId: project.id, subject: `user:${userName}`, detail: { role } });
     this.events.emit('structure');
+  }
+
+  removeMember(actor: Participant, projectName: string, userName: string): void {
+    this.unscoped(actor, 'remove project members');
+    if (actor.kind !== 'user') throw new OrcoError('forbidden', 'Only people remove project members');
+    const project = this.adminProject(actor, projectName);
+    const user = this.participantByName(userName);
+    if (!user || user.kind !== 'user') throw new OrcoError('not_found', `No user named ${userName}`);
+    this.keepAnAdmin(project.id, user.id);
+    const { changes } = this.db.prepare('DELETE FROM project_members WHERE project_id = ? AND user_id = ?').run(project.id, user.id);
+    if (Number(changes) === 0) throw new OrcoError('not_found', `${userName} is not a member of ${projectName} (they may be in through a group)`);
+    this.audit.record(actor, 'project.remove_member', { projectId: project.id, subject: `user:${userName}` });
+    this.events.emit('structure');
+  }
+
+  /** A project always keeps at least one direct admin, so someone can manage it. */
+  private keepAnAdmin(projectId: number, leavingUserId: number): void {
+    const others = this.db
+      .prepare("SELECT count(*) AS n FROM project_members WHERE project_id = ? AND role = 'admin' AND user_id != ?")
+      .get(projectId, leavingUserId) as { n: number };
+    const leaving = this.db.prepare("SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ? AND role = 'admin'").get(projectId, leavingUserId);
+    if (leaving && others.n === 0) throw new OrcoError('conflict', 'A project needs at least one admin; make someone else admin first');
+  }
+
+  /** Who is in a project and how: people added directly, and groups, each with a role. */
+  access(actor: Participant, projectName: string): { members: { name: string; role: ProjectRole }[]; groups: { name: string; role: ProjectRole; members: string[] }[] } {
+    const project = this.visibleProject(actor, projectName);
+    const members = this.db
+      .prepare('SELECT u.name, pm.role FROM project_members pm JOIN participants u ON u.id = pm.user_id WHERE pm.project_id = ? ORDER BY u.name')
+      .all(project.id) as { name: string; role: ProjectRole }[];
+    const groups = (this.db
+      .prepare('SELECT g.name, pg.role FROM project_groups pg JOIN groups g ON g.id = pg.group_id WHERE pg.project_id = ? ORDER BY g.name')
+      .all(project.id) as { name: string; role: ProjectRole }[]).map((g) => ({ ...g, members: this.groups.get(g.name).members }));
+    return { members, groups };
+  }
+
+  /** The actor's role in a project (an agent has its owner's), or null if not a member. */
+  roleIn(actor: Participant, projectId: number): ProjectRole | null {
+    if (actor.scope && actor.scope.projectId !== projectId) return null;
+    const rows = this.db.prepare('SELECT role FROM project_access WHERE project_id = ? AND user_id = ?').all(projectId, this.humanOf(actor)) as { role: ProjectRole }[];
+    return rows.reduce<ProjectRole | null>((best, r) => (best === null || ROLE_RANK[r.role] > ROLE_RANK[best] ? r.role : best), null);
+  }
+
+  /** Viewers (and their agents) only read, and paused agents change nothing. Server rooms are open to everyone. */
+  assertWrite(actor: Participant, projectId: number | null): void {
+    if (actor.kind === 'agent') this.controls.assertRunning(actor, projectId);
+    if (projectId === null) return;
+    if (this.roleIn(actor, projectId) === 'viewer') {
+      const who = actor.kind === 'agent' ? `${actor.name}'s owner has` : 'You have';
+      throw new OrcoError('forbidden', `${who} read-only access to this project`);
+    }
+  }
+
+  /** A project the actor may change: visible, and not read-only. */
+  writableProject(actor: Participant, name: string): Project {
+    const project = this.visibleProject(actor, name);
+    this.assertWrite(actor, project.id);
+    return project;
+  }
+
+  /** A project the actor administers: a project admin, or an org admin (who need not be a member). */
+  adminProject(actor: Participant, name: string): Project {
+    const row = this.db.prepare('SELECT id, name FROM projects WHERE name = ?').get(name) as Project | undefined;
+    if (!row) throw new OrcoError('not_found', `No project ${name}`);
+    if (this.isOrgAdmin(actor)) return row;
+    if (!this.canSee(actor, row.id)) throw new OrcoError('not_found', `No project ${name}`);
+    if (this.roleIn(actor, row.id) !== 'admin') throw new OrcoError('forbidden', `Only admins of ${name} can do that`);
+    return row;
   }
 
   createRoom(actor: Participant, projectName: string, name: string): Room {
     checkName('Room', name);
-    const project = this.visibleProject(actor, projectName);
+    const project = this.writableProject(actor, projectName);
     try {
       this.db.prepare('INSERT INTO rooms (project_id, name, created_by) VALUES (?, ?, ?)').run(project.id, name, actor.id);
     } catch (err) {
@@ -694,8 +823,21 @@ export class Store {
          WHERE r.name = ? AND ((? IS NULL AND r.project_id IS NULL) OR p.name = ?)`,
       )
       .get(roomName, projectName, projectName) as RoomRow | undefined;
-    if (!row || !this.canSee(actor, row.project_id)) throw new OrcoError('not_found', `No room ${ref}`);
+    if (!row || (actor.name !== SYSTEM_NAME && !this.canSee(actor, row.project_id))) throw new OrcoError('not_found', `No room ${ref}`);
     return toRoom(row);
+  }
+
+  /**
+   * Orco itself, as the author of the messages it writes (digests). Its token is never shown, so no
+   * one can use it. A server that already had a person named orco keeps them and gets none.
+   */
+  system(): Participant | null {
+    const existing = this.participantByName(SYSTEM_NAME);
+    if (existing) return this.isSystem(existing) ? existing : null;
+    const { lastInsertRowid } = this.db
+      .prepare("INSERT INTO participants (kind, name, owner_id, token_hash, system) VALUES ('user', ?, NULL, ?, 1)")
+      .run(SYSTEM_NAME, hashToken(newToken('user')));
+    return { id: Number(lastInsertRowid), kind: 'user', name: SYSTEM_NAME, ownerId: null };
   }
 
   post(
@@ -716,6 +858,8 @@ export class Store {
     if (!trimmed && attachmentIds.length === 0 && !external) throw new OrcoError('invalid', 'Message text is empty');
     if (trimmed.length > MAX_TEXT) throw new OrcoError('invalid', `Message is over ${MAX_TEXT} characters`);
     const room = this.room(actor, roomRef);
+    // Posts Orco makes as part of another action (task notices, approvals) were checked with that action.
+    if (!options.skipRateLimit) this.assertWrite(actor, room.projectId);
     this.attachments.checkAttachable(actor, room, attachmentIds);
     if (!options.skipRateLimit) this.checkRate(actor, 'post');
     let thread: number | null = null;
@@ -867,6 +1011,7 @@ export class Store {
   private createParticipant(kind: ParticipantKind, name: string, ownerId: number | null) {
     checkName(kind === 'user' ? 'User' : 'Agent', name);
     if (RESERVED_NAMES.has(name)) throw new OrcoError('invalid', `The name ${name} is reserved`);
+    if (this.db.prepare('SELECT 1 FROM groups WHERE name = ?').get(name)) throw new OrcoError('conflict', `The name ${name} is taken by a group`);
     const token = newToken(kind);
     try {
       const { lastInsertRowid } = this.db
@@ -896,7 +1041,7 @@ export class Store {
     if (actor.scope && projectId !== actor.scope.projectId) return false;
     return (
       this.db
-        .prepare('SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ?')
+        .prepare('SELECT 1 FROM project_access WHERE project_id = ? AND user_id = ?')
         .get(projectId, this.humanOf(actor)) !== undefined
     );
   }
@@ -925,6 +1070,8 @@ export class Store {
     for (const name of names) {
       const target = this.participantByName(name);
       if (target && target.id !== actor.id && this.canSee(target, room.projectId)) targets.set(target.id, target);
+      // @backend pings the people in that group who can see the room.
+      if (!target) for (const person of this.groups.membersOf(name)) if (person.id !== actor.id && this.canSee(person, room.projectId)) targets.set(person.id, person);
     }
     return [...targets.values()];
   }

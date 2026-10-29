@@ -85,7 +85,7 @@ export class Files {
    * new file); if someone else wrote in between, the write is refused so the writer can merge.
    */
   write(actor: Participant, project: string, path: string, content: string, options: { baseVersion?: number; note?: string } = {}): ProjectFile {
-    const proj = this.store.visibleProject(actor, project);
+    const proj = this.store.writableProject(actor, project);
     const clean = this.path(path);
     const data = Buffer.from(content, 'utf8');
     if (data.length > MAX_FILE_BYTES) throw new OrcoError('invalid', `Files are at most ${MAX_FILE_BYTES / 1024 / 1024} MB`);

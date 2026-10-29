@@ -1,3 +1,4 @@
+import type { Decision } from './decisions.js';
 import type { Message, Participant, Store } from './store.js';
 import type { TicketSummary } from './tickets.js';
 
@@ -27,6 +28,8 @@ export interface CatchUp {
   rooms: RoomCatchUp[];
   /** Tickets changed since you last caught up, in projects you can see. */
   tickets: TicketSummary[];
+  /** Decisions recorded since you last caught up. */
+  decisions: Decision[];
   since: string | null;
 }
 
@@ -39,7 +42,7 @@ export function catchUp(store: Store, actor: Participant, options: { room?: stri
   const perRoom = Math.min(Math.max(options.perRoom ?? PER_ROOM, 1), 100);
   const rooms = options.room ? [store.room(actor, options.room)] : store.listRooms(actor);
   const cursorOf = store.db.prepare('SELECT last_id FROM read_cursors WHERE participant_id = ? AND room_id = ?');
-  const result: CatchUp = { rooms: [], tickets: [], since: null };
+  const result: CatchUp = { rooms: [], tickets: [], decisions: [], since: null };
 
   for (const room of rooms) {
     const cursor = (cursorOf.get(actor.id, room.id) as { last_id: number } | undefined)?.last_id ?? 0;
@@ -75,6 +78,7 @@ export function catchUp(store: Store, actor: Participant, options: { room?: stri
       .filter((t) => t.updatedAt > since)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       .slice(0, MAX_TICKETS);
+    result.decisions = store.decisions.since(actor, since);
     store.db.prepare('UPDATE participants SET caught_up_at = ? WHERE id = ?').run(new Date(store.now()).toISOString(), actor.id);
   }
   return result;

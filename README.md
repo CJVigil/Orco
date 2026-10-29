@@ -362,6 +362,48 @@ written to an append-only log. The database rejects edits and deletes to it. Peo
 project's log from the web app (*Audit log* in a project room) or `GET /api/audit?project=…&format=jsonl`;
 an admin with the database can export everything with `orco audit export`.
 
+## Running many projects
+
+For whoever looks after several projects and the agents working in them. **Portfolio** in the sidebar
+shows everything across your projects; org admins see every project on the server, member or not.
+
+- **Roles.** Each person in a project is an *admin* (manages members, roles, budgets, policy), a
+  *member*, or a *viewer* who can read but not post, file or change anything (their agents cannot
+  take tasks there). Whoever creates a project is its admin; the first person on a server is an
+  *org admin* (`orco user add <name> --admin`, `orco user admin <name>` for more). Project admins
+  manage access in the room's *Members* panel.
+- **Groups.** Org admins make groups like `@backend` (*Portfolio → Controls*); project admins add a
+  group to a project with a role, and `@backend` in a message pings everyone in it who can see the
+  room.
+- **Overview.** One card per project, red first: failing CI (from webhooks, default branch only),
+  stalled agent tasks, a late milestone or a used-up budget make it red; blocked or overdue
+  tickets, an at-risk milestone, an approval waiting over a day, 80% of the budget or a pause make it
+  amber. Each card says why, with open, blocked and overdue tickets, agents at work, approvals
+  waiting on you, and spend this week and month.
+- **Roadmap.** Milestones from every project by date, with progress. Tickets can be blocked by
+  tickets in other projects (`blocked_by` takes any ref you can see); a milestone is *at risk* when
+  it waits on one due after it, with no date, or in a late milestone, so a slip in one project shows
+  in the projects that depend on it.
+- **Decision log.** People record decisions (what, why, options considered, tags) for a project or
+  for every project, and can replace one with a newer decision. Agents get the decisions in force
+  with every task (`get_task` and the bridge prompt), new ones in `catch_up`, and look them up with
+  the `decisions` tool.
+- **Weekly digest.** Every Monday at 9:00 UTC (`ORCO_DIGEST` takes a cron line or `off`,
+  `ORCO_DIGEST_TZ` a time zone) Orco posts a digest in each project's #general: what shipped (with
+  PR links from agents' results), what is blocked and on what, decisions, each agent's done and
+  failed tasks and cost, what is due, and spend. Org admins get a one-line-per-project roll-up under
+  *Portfolio → Digest*, which also previews this week's.
+- **Budgets.** A monthly cap per project (its admins) or per agent (its owner). At 80% the person who
+  set it is told in the thread; past the cap, new tasks wait for that person's approval.
+- **Kill switch.** Pause every agent (org admins), one project's agents (its admins) or one agent
+  (its owner), with a reason. Paused agents cannot accept tasks, post or change anything, though they
+  can still close tasks; bridges stop running agents (the task fails with the reason) and start
+  nothing new until the pause is lifted, then pick up held work.
+- **Policies.** Org admins set rules for every project and project admins can add to them, never
+  loosen them: plain rules for agents ("Never push to main"), actions to ask a person about first,
+  default and maximum task time and cost, and which agents may take tasks. Orco enforces the agent
+  list and the task caps; the rest reaches agents with every task as rules from the org.
+
 ## Wake agents with the bridge
 
 An agent only sees work while a session is open and calling `wait_for_mentions`. The bridge fixes

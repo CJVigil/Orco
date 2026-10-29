@@ -8,6 +8,7 @@ import { loadBridgeConfig } from './bridge/config.js';
 import { doctor } from './bridge/doctor.js';
 import { ForgeSync, loadForgeSyncConfig } from './sync/forge.js';
 import { CLIENT_COMMANDS, CLIENT_USAGE, readStdin, runClient } from './client.js';
+import { checkTimeZone, parseCron } from './cron.js';
 import { openDatabase } from './db.js';
 import { createApp } from './http.js';
 import { importTickets, parseImport } from './import.js';
@@ -19,7 +20,8 @@ const USAGE = `Usage: orco <command> [options]
 
 Server commands (run where the database lives):
   serve                      Start the server
-  user add <name>            Create a user and print their token
+  user add <name> [--admin]  Create a user and print their token (the first user is an org admin)
+  user admin <name> [--off]  Make a user an org admin, or stop
   agent add <owner> <name>   Create an agent owned by a user and print its token
   token rotate <name>        Replace a user's or agent's token and print the new one
   agent policy <agent> <p>   Who may give the agent tasks: open, ask (default) or owner_only
@@ -61,6 +63,14 @@ function backupsFromEnv(store: Store): Backups | null {
     return raw ? Number(raw) : fallback;
   };
   return new Backups(store.db, { dir, everyHours: number('ORCO_BACKUP_HOURS', 24), keep: number('ORCO_BACKUP_KEEP', 14), log: (m) => console.log(m) });
+}
+
+/** ORCO_DIGEST is a cron line (default "0 9 * * 1", Mondays at 9) or "off"; ORCO_DIGEST_TZ its time zone. */
+function digestFromEnv(): { cron: string; tz: string } | null {
+  const cron = process.env.ORCO_DIGEST?.trim() || '0 9 * * 1';
+  if (cron === 'off') return null;
+  parseCron(cron);
+  return { cron, tz: checkTimeZone(process.env.ORCO_DIGEST_TZ?.trim() || 'UTC') };
 }
 
 function limitsFromEnv(): Partial<Limits> {
@@ -150,6 +160,8 @@ export function main(): void {
       'dry-run': { type: 'boolean' },
       force: { type: 'boolean' },
       once: { type: 'boolean' },
+      admin: { type: 'boolean' },
+      off: { type: 'boolean' },
       for: { type: 'string' },
       dir: { type: 'string' },
       project: { type: 'boolean' },
@@ -226,7 +238,7 @@ export function main(): void {
     return;
   }
 
-  const store = new Store(openDatabase(values.db, { snapshotDir: process.env.ORCO_BACKUP_DIR?.trim() || dirname(resolve(values.db)), log: (m) => console.log(m) }), { limits: limitsFromEnv(), secretsKey: parseSecretsKey(process.env.ORCO_SECRETS_KEY) });
+  const store = new Store(openDatabase(values.db, { snapshotDir: process.env.ORCO_BACKUP_DIR?.trim() || dirname(resolve(values.db)), log: (m) => console.log(m) }), { limits: limitsFromEnv(), secretsKey: parseSecretsKey(process.env.ORCO_SECRETS_KEY), digest: digestFromEnv() });
   const key = sub && !['serve', 'list', 'backup', 'import'].includes(command) ? `${command} ${sub}` : command;
 
   switch (key) {
@@ -289,9 +301,17 @@ export function main(): void {
     }
     case 'user add': {
       const [name] = args;
-      if (!name) throw new OrcoError('invalid', 'Usage: orco user add <name>');
-      const { token } = store.createUser(name);
-      console.log(`Created user ${name}. Token (shown once):\n${token}`);
+      if (!name) throw new OrcoError('invalid', 'Usage: orco user add <name> [--admin]');
+      const { participant, token } = store.createUser(name, { orgAdmin: values.admin });
+      const admin = store.isOrgAdmin(participant) ? ' (an org admin)' : '';
+      console.log(`Created user ${name}${admin}. Token (shown once):\n${token}`);
+      return;
+    }
+    case 'user admin': {
+      const [name] = args;
+      if (!name) throw new OrcoError('invalid', 'Usage: orco user admin <name> [--off]');
+      store.setOrgAdmin(name, !values.off);
+      console.log(values.off ? `${name} is no longer an org admin.` : `${name} is now an org admin: they see every project in the portfolio and manage groups, org policies and budgets.`);
       return;
     }
     case 'agent add': {

@@ -88,7 +88,7 @@ describe('web session', () => {
   it('authenticates later requests with the session cookie', async () => {
     const cookie = await login('ana');
     const res = await fetch(`${baseUrl}/api/me`, { headers: { Cookie: cookie } });
-    assert.deepEqual(await res.json(), { name: 'ana', kind: 'user', owner: null });
+    assert.deepEqual(await res.json(), { name: 'ana', kind: 'user', owner: null, orgAdmin: true });
   });
 
   it('refuses cookie-authenticated writes that are not same-origin JSON', async () => {

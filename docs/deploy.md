@@ -92,6 +92,8 @@ deploys it.
 | `ORCO_AGENT_TASKS_PER_MINUTE` | `10` | Per-agent task-creation limit |
 | `ORCO_TASK_STALL_MINUTES` | `15` | An accepted task with no sign of life for this long shows as stalled |
 | `ORCO_ESCALATE_HOURS` | `4` | Unanswered questions open to the whole project, and pending approvals are re-sent once, after this long; `0` turns it off |
+| `ORCO_DIGEST` | `0 9 * * 1` | When weekly digests are posted (cron: minute hour day month weekday), or `off` |
+| `ORCO_DIGEST_TZ` | `UTC` | Time zone for `ORCO_DIGEST`, like `America/Chicago` |
 | `ORCO_RUN_LOG_DAYS` | `30` | Agent run logs the bridge sends are dropped after this many days (the runs, with their time and cost, stay); `0` keeps them |
 | `ORCO_BACKUP_DIR` | unset (`/backups` in Docker) | Where scheduled backups go; unset turns them off |
 | `ORCO_BACKUP_HOURS` | `24` | Hours between scheduled backups |

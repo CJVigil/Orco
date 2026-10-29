@@ -10,6 +10,7 @@ import { oauthRouter } from './oauth-routes.js';
 import { Presence } from './presence.js';
 import { RateLimiter } from './ratelimit.js';
 import { type Message, OrcoError, type Participant, type Store } from './store.js';
+import { parsePolicy } from './policies.js';
 import type { Task, TaskState } from './tasks.js';
 import type { Approval } from './approvals.js';
 import type { Question, QuestionTarget } from './questions.js';
@@ -308,7 +309,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
 
   api.get('/me', (req, res) => {
     const me = req.participant!;
-    res.json({ name: me.name, kind: me.kind, owner: store.ownerName(me) });
+    res.json({ name: me.name, kind: me.kind, owner: store.ownerName(me), orgAdmin: store.isOrgAdmin(me) });
   });
   api.get('/participants', (req, res) => {
     const project = typeof req.query.project === 'string' && req.query.project ? req.query.project : undefined;
@@ -321,8 +322,37 @@ export function createApp(store: Store, options: AppOptions = {}) {
     res.status(201).json(store.createProject(req.participant!, String(req.body?.name ?? '')));
   });
   api.post('/projects/:project/members', (req, res) => {
-    store.addMember(req.participant!, String(req.params.project), String(req.body?.user ?? ''));
+    const role = req.body?.role === undefined ? 'member' : req.body.role;
+    store.addMember(req.participant!, String(req.params.project), String(req.body?.user ?? ''), role);
     res.status(204).end();
+  });
+  api.delete('/projects/:project/members/:user', (req, res) => {
+    store.removeMember(req.participant!, String(req.params.project), String(req.params.user));
+    res.status(204).end();
+  });
+  api.get('/projects/:project/access', (req, res) => {
+    res.json(store.access(req.participant!, String(req.params.project)));
+  });
+  api.post('/projects/:project/groups', (req, res) => {
+    const role = req.body?.role === null ? null : (req.body?.role ?? 'member');
+    res.json(store.groups.setProjectRole(req.participant!, String(req.params.project), String(req.body?.group ?? ''), role));
+  });
+  api.get('/groups', (_req, res) => {
+    res.json(store.groups.list());
+  });
+  api.post('/groups', (req, res) => {
+    const members = Array.isArray(req.body?.members) ? req.body.members.map(String) : [];
+    res.status(201).json(store.groups.create(req.participant!, String(req.body?.name ?? ''), members));
+  });
+  api.delete('/groups/:name', (req, res) => {
+    store.groups.remove(req.participant!, String(req.params.name));
+    res.status(204).end();
+  });
+  api.post('/groups/:name/members', (req, res) => {
+    res.json(store.groups.addMember(req.participant!, String(req.params.name), String(req.body?.user ?? '')));
+  });
+  api.delete('/groups/:name/members/:user', (req, res) => {
+    res.json(store.groups.removeMember(req.participant!, String(req.params.name), String(req.params.user)));
   });
   api.get('/rooms', (req, res) => {
     const project = typeof req.query.project === 'string' ? req.query.project : undefined;
@@ -848,6 +878,90 @@ export function createApp(store: Store, options: AppOptions = {}) {
     // Agent output is untrusted: plain text, never rendered.
     res.set('Content-Type', 'text/plain; charset=utf-8').set('X-Content-Type-Options', 'nosniff').send(log);
   });
+  api.get('/policy', (req, res) => {
+    const project = typeof req.query.project === 'string' && req.query.project ? req.query.project : null;
+    res.json(store.policies.view(req.participant!, project));
+  });
+  api.post('/policy', (req, res) => {
+    const b = req.body ?? {};
+    const project = typeof b.project === 'string' && b.project ? b.project : null;
+    res.json(store.policies.set(req.participant!, project, b.policy === null ? null : parsePolicy(b.policy ?? {})));
+  });
+  // What an agent should know before starting a task: the project's rules and the decisions in force.
+  api.get('/tasks/:id/context', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a task id');
+    const task = store.tasks.get(req.participant!, id);
+    res.json({ policy: store.policies.rulesFor(task.projectId), decisions: store.decisions.relevantFor(task.projectId, 10) });
+  });
+  api.get('/decisions', (req, res) => {
+    const q = req.query;
+    res.json(
+      store.decisions.list(req.participant!, {
+        project: typeof q.project === 'string' && q.project ? q.project : undefined,
+        query: typeof q.q === 'string' ? q.q : undefined,
+        tag: typeof q.tag === 'string' && q.tag ? q.tag : undefined,
+        all: q.all === '1',
+        limit: optionalInt(q.limit),
+      }),
+    );
+  });
+  api.post('/decisions', (req, res) => {
+    const b = req.body ?? {};
+    const input = { project: typeof b.project === 'string' && b.project ? b.project : null, title: b.title, context: b.context, options: b.options, decision: b.decision, tags: b.tags };
+    res.status(201).json(store.decisions.record(req.participant!, input, optionalInt(b.supersedes)));
+  });
+  api.get('/decisions/:id', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a decision id');
+    res.json(store.decisions.get(req.participant!, id));
+  });
+  api.get('/portfolio', (req, res) => {
+    res.json(store.portfolios.overview(req.participant!));
+  });
+  api.get('/roadmap', (req, res) => {
+    res.json(store.portfolios.roadmap(req.participant!));
+  });
+  api.get('/digests', (req, res) => {
+    res.json(store.portfolios.digests(req.participant!, optionalInt(req.query.limit) ?? 20));
+  });
+  // This week's digest so far, without waiting for Monday: one project's, or the roll-up for org admins.
+  api.get('/digests/preview', (req, res) => {
+    const me = req.participant!;
+    const project = typeof req.query.project === 'string' && req.query.project ? req.query.project : null;
+    if (project === null) {
+      if (!store.isOrgAdmin(me)) throw new OrcoError('forbidden', 'Only org admins get the all-projects digest; name a project');
+      res.json({ body: store.portfolios.orgDigest(me) });
+      return;
+    }
+    const target = store.portfolios.projects(me).find((p) => p.name === project);
+    if (!target) throw new OrcoError('not_found', `No project ${project}`);
+    res.json({ body: store.portfolios.projectDigest(target.id) });
+  });
+  api.get('/controls', (req, res) => {
+    res.json({ budgets: store.controls.budgets(req.participant!), pauses: store.controls.pauses(req.participant!) });
+  });
+  api.post('/budgets', (req, res) => {
+    const b = req.body ?? {};
+    const cents = b.monthly_cents === null ? null : optionalInt(b.monthly_cents);
+    if (cents === undefined) throw new OrcoError('invalid', 'monthly_cents is a whole number of cents, or null to remove the budget');
+    res.json(store.controls.setBudget(req.participant!, b.scope, String(b.target ?? ''), cents));
+  });
+  api.post('/pauses', (req, res) => {
+    const b = req.body ?? {};
+    res.status(201).json(store.controls.pause(req.participant!, b.scope, b.scope === 'all' ? null : String(b.target ?? ''), typeof b.reason === 'string' ? b.reason : ''));
+  });
+  api.post('/pauses/resume', (req, res) => {
+    const b = req.body ?? {};
+    store.controls.resume(req.participant!, b.scope, b.scope === 'all' ? null : String(b.target ?? ''));
+    res.status(204).end();
+  });
+  // For bridges: is anything stopping this agent from working this task?
+  api.get('/pauses/check', (req, res) => {
+    const id = optionalInt(req.query.task_id);
+    const projectId = id === undefined ? null : store.tasks.get(req.participant!, id).projectId;
+    res.json({ paused: store.controls.pausedFor(req.participant!, projectId) });
+  });
   api.get('/agents/:name/scorecard', (req, res) => {
     res.json(store.runs.scorecard(req.participant!, String(req.params.name), optionalInt(req.query.days) ?? 30));
   });
@@ -1071,6 +1185,16 @@ export function createApp(store: Store, options: AppOptions = {}) {
       if (store.canSee(me, event.projectId)) send('files', event);
     };
     const onPresence = () => send('presence', {});
+    const onDecision = ({ projectId }: { projectId: number | null }) => {
+      if (store.canSee(me, projectId)) send('decision', { projectId });
+    };
+    const onPause = (event: { scope: string; projectId: number | null; agentId: number | null }) => {
+      const mine = event.agentId !== null && (event.agentId === me.id || store.participantById(event.agentId)?.ownerId === me.id);
+      if (event.scope === 'all' || (event.projectId !== null && store.canSee(me, event.projectId)) || mine) send('pause', event);
+    };
+    const onControls = () => {
+      if (me.kind === 'user') send('controls', {});
+    };
     store.events.on('ticket', onTicket);
     store.events.on('notes', onNotes);
     store.events.on('flag', onFlag);
@@ -1086,6 +1210,9 @@ export function createApp(store: Store, options: AppOptions = {}) {
     store.events.on('schedule', onSchedule);
     store.events.on('wake', onWake);
     store.events.on('files', onFiles);
+    store.events.on('pause', onPause);
+    store.events.on('decision', onDecision);
+    store.events.on('controls', onControls);
     presence.events.on('change', onPresence);
     const release = presence.hold(me.id, req.query.bridge === '1' && me.kind === 'agent' ? 'bridges' : 'streams');
     const heartbeat = setInterval(() => res.write(': ping\n\n'), HEARTBEAT_MS);
@@ -1107,6 +1234,9 @@ export function createApp(store: Store, options: AppOptions = {}) {
       store.events.off('schedule', onSchedule);
       store.events.off('wake', onWake);
       store.events.off('files', onFiles);
+      store.events.off('pause', onPause);
+      store.events.off('decision', onDecision);
+      store.events.off('controls', onControls);
       presence.events.off('change', onPresence);
       release();
     });
@@ -1215,6 +1345,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
       store.questions.escalateDue();
       store.approvals.remindDue();
       store.runs.pruneLogs(store.limits.runLogDays);
+      store.portfolios.runDue(store.digestSchedule);
     } catch (err) {
       console.error('Sweep failed:', err);
     }

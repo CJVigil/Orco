@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Running many projects: a **Portfolio** view with project health (red, amber, green and why), a
+  roadmap of milestones across projects with cross-project blockers and at-risk detection, a decision
+  log agents read, weekly digests posted to each project (and a roll-up for org admins), and
+  controls: project roles (admin, member, viewer), org admins, groups with `@group` mentions, monthly
+  budgets per project and agent that hold new tasks past the cap, a kill switch for all, a project's
+  or one agent's work, and org-wide policies projects can only tighten. Agents get the rules and
+  decisions in force with each task.
+- Changed: adding members and changing roles takes a project admin; the first user on a server
+  becomes an org admin, and each project's creator its admin.
+
 - Security: only people create projects and add members (the `create_project` and `add_member` MCP
   tools are gone), and an agent's approval requests always go to its owner. Leased secret values are
   hidden in agents' posts, task notes and run logs, and only people read run logs. Webhook tasks wait

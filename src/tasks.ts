@@ -304,6 +304,12 @@ export class Tasks {
     if (!this.store.canSee(assignee, room.projectId)) {
       throw new OrcoError('forbidden', `${assignee.name} cannot see ${room.ref}; add its owner to the project first`);
     }
+    this.store.assertWrite(actor, room.projectId);
+    if (room.projectId !== null && this.store.roleIn(assignee, room.projectId) === 'viewer') {
+      throw new OrcoError('forbidden', `${assignee.name}'s owner has read-only access to ${room.project}, so it cannot take tasks there`);
+    }
+    // The project's policy decides who may take tasks and fills in or caps the budget.
+    const budget = this.store.policies.forNewTask(room.projectId, assignee.name, { minutes: input.budgetMinutes, cents: input.budgetCents });
 
     const parent = this.parentFor(actor, input.parentId);
     const depth = parent ? parent.depth + 1 : 0;
@@ -314,15 +320,19 @@ export class Tasks {
       );
     }
     const owner = this.store.participantById(assignee.ownerId!)!;
-    // The owner's consent comes first; a person confirming outside text only stands in when none is needed.
+    // Over a monthly budget, the task waits for the person who set it (see controls.ts). Otherwise the
+    // owner's consent comes first; a person confirming outside text only stands in when none is needed.
+    const gate = this.store.controls.taskGate(actor, assignee, room);
     const needsConsent = this.consent(actor, assignee, owner);
-    const confirmBy = !needsConsent && input.confirmBy?.kind === 'user' ? input.confirmBy : null;
-    const approver = confirmBy ?? owner;
-    const needsApproval = confirmBy !== null || needsConsent;
+    const confirmBy = !gate && !needsConsent && input.confirmBy?.kind === 'user' ? input.confirmBy : null;
+    const approver = gate?.approver ?? confirmBy ?? owner;
+    const needsApproval = gate !== null || confirmBy !== null || needsConsent;
     this.store.checkRate(actor, 'task');
 
-    const text = confirmBy
-      ? `@${confirmBy.name} This came from outside Orco. Should ${assignee.name} start on it?\n${request}\nApprove to let it start, or deny.`
+    const text = gate
+      ? `@${approver.name} ${gate.reason}. ${actor.name} asks ${assignee.name} to: ${request}\nApprove to let it start anyway, or deny.`
+      : confirmBy
+        ? `@${confirmBy.name} This came from outside Orco. Should ${assignee.name} start on it?\n${request}\nApprove to let it start, or deny.`
       : needsApproval
         ? `@${owner.name} ${actor.name} asks your agent ${assignee.name} to: ${request}\nApprove to let ${assignee.name} start, or deny.`
         : `@${assignee.name} ${request}`;
@@ -331,7 +341,7 @@ export class Tasks {
       skipRateLimit: true,
       onInsert: (messageId, inserted) => {
         const approvalId = needsApproval
-          ? this.store.approvals.createForTask(actor, inserted, messageId, approver, `${assignee.name}: ${request}`.slice(0, 300))
+          ? this.store.approvals.createForTask(actor, inserted, messageId, approver, `${gate ? 'Over budget · ' : ''}${assignee.name}: ${request}`.slice(0, 300))
           : null;
         const { lastInsertRowid } = this.store.db
           .prepare(
@@ -348,8 +358,8 @@ export class Tasks {
             depth,
             request,
             approvalId,
-            input.budgetMinutes ?? null,
-            input.budgetCents ?? null,
+            budget.minutes,
+            budget.cents,
             input.scheduleId ?? null,
           );
         taskId = Number(lastInsertRowid);
@@ -366,6 +376,7 @@ export class Tasks {
         parentId: task.parentId,
         depth,
         needsApproval,
+        ...(gate ? { overBudget: gate.reason } : {}),
         ...(task.budget ? { budget: { minutes: task.budget.minutes, cents: task.budget.cents } } : {}),
         ...(input.scheduleId ? { scheduleId: input.scheduleId } : {}),
       },
@@ -433,6 +444,8 @@ export class Tasks {
         const why = current === 'awaiting_approval' ? `Task ${id} is waiting for your owner's approval` : `Task ${id} is ${current}`;
         throw new OrcoError('conflict', `${why}; it cannot move to ${state}`);
       }
+      // A paused agent may still let go of work (done, failed, declined) but not start it.
+      if (state === 'accepted') this.store.controls.assertRunning(actor, row.project_id);
     }
     if (state === 'cancelled' && row.approval_id !== null) this.store.approvals.withdraw(row.approval_id);
     if (links.length) this.store.db.prepare('UPDATE tasks SET links = ? WHERE id = ?').run(JSON.stringify(links), id);
@@ -501,6 +514,7 @@ export class Tasks {
          WHERE id = ?`,
       )
       .run(line, percent ?? null, this.store.now(), usage.costCents ?? null, usage.tokens ?? null, id);
+    if (usage.costCents != null) this.store.controls.checkSpend(id);
     this.store.audit.record(actor, 'task.progress', {
       projectId: row.project_id,
       subject: `task:${id}`,
@@ -517,6 +531,7 @@ export class Tasks {
     if (cents <= 0 && tokens <= 0) return;
     this.store.db.prepare('UPDATE tasks SET spent_cents = spent_cents + ?, spent_tokens = spent_tokens + ? WHERE id = ?').run(cents, tokens, id);
     this.checkOverBudget(id);
+    this.store.controls.checkSpend(id);
     this.store.events.emit('task', this.byId(id)!);
   }
 

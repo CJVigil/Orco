@@ -212,6 +212,31 @@ describe('bridge', () => {
   });
 });
 
+describe('bridge and the kill switch', () => {
+  it('holds new work while paused and starts it when the pause is lifted', async () => {
+    const logs: string[] = [];
+    await startBridge('complete', {}, logs);
+    store.controls.pause(ana, 'agent', 'ana-bot', 'maintenance');
+    const t = task('wait for me');
+    await waitFor(() => logs.some((l) => l.includes(`task #${t.id} waits`)), 'the bridge to hold the task');
+    assert.equal(store.tasks.get(ana, t.id).state, 'requested');
+    store.controls.resume(ana, 'agent', 'ana-bot');
+    assert.equal((await settled(t.id)).state, 'done');
+  });
+
+  it('stops a running agent when its project is paused', async () => {
+    await startBridge('hang');
+    const t = task('long job');
+    await waitFor(() => presenceStatus('ana-bot') !== 'offline' && store.tasks.get(ana, t.id).state === 'requested', 'the task');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    store.controls.pause(ana, 'project', 'api', 'incident 42');
+    const stopped = await settled(t.id);
+    assert.equal(stopped.state, 'failed');
+    assert.match(stopped.note!, /Stopped: ana paused agents in api \(incident 42\)/);
+    store.controls.resume(ana, 'project', 'api');
+  });
+});
+
 describe('bridge config', () => {
   it('fills defaults and resolves cwd against the config file', () => {
     const config = parseBridgeConfig(

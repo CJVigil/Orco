@@ -187,7 +187,7 @@ export class Approvals {
     if (row.kind === 'task') {
       const task = this.store.tasks.forApproval(id);
       this.store.tasks.resolveApproval(actor, id, decision, trimmedNote);
-      // Only the agent's owner can trust a requester; whoever confirms a webhook task cannot.
+      // Only the agent's owner can trust a requester; whoever confirms a webhook or over-budget task cannot.
       if (options.alwaysAllow && decision === 'approved' && task && this.store.participantByName(task.assignee)?.ownerId === actor.id) {
         const requester = this.store.participantByName(task.requester)!;
         const human = this.store.participantById(this.store.humanOf(requester))!;

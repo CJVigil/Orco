@@ -618,6 +618,101 @@ export const MIGRATIONS = [
   `
   ALTER TABLE hooks ADD COLUMN confirm_tasks INTEGER NOT NULL DEFAULT 0;
   `,
+  // 16: running many projects: roles and groups, budgets and pauses, policies, decisions, CI status, digests.
+  `
+  ALTER TABLE participants ADD COLUMN org_admin INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE participants ADD COLUMN system INTEGER NOT NULL DEFAULT 0;
+  UPDATE participants SET org_admin = 1 WHERE id = (SELECT min(id) FROM participants WHERE kind = 'user');
+  ALTER TABLE project_members ADD COLUMN role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('admin', 'member', 'viewer'));
+  UPDATE project_members SET role = 'admin' WHERE user_id = (
+    SELECT coalesce(c.owner_id, c.id) FROM projects p JOIN participants c ON c.id = p.created_by WHERE p.id = project_members.project_id
+  );
+
+  CREATE TABLE groups (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+  CREATE TABLE group_members (
+    group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES participants(id),
+    PRIMARY KEY (group_id, user_id)
+  );
+  CREATE TABLE project_groups (
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('admin', 'member', 'viewer')),
+    PRIMARY KEY (project_id, group_id)
+  );
+  CREATE VIEW project_access AS
+    SELECT project_id, user_id, role FROM project_members
+    UNION ALL
+    SELECT pg.project_id, gm.user_id, pg.role FROM project_groups pg JOIN group_members gm ON gm.group_id = pg.group_id;
+
+  CREATE TABLE budgets (
+    id INTEGER PRIMARY KEY,
+    scope TEXT NOT NULL CHECK (scope IN ('project', 'agent')),
+    target_id INTEGER NOT NULL,
+    monthly_cents INTEGER NOT NULL,
+    set_by INTEGER NOT NULL REFERENCES participants(id),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE (scope, target_id)
+  );
+  CREATE TABLE budget_alerts (
+    budget_id INTEGER NOT NULL REFERENCES budgets(id) ON DELETE CASCADE,
+    month TEXT NOT NULL,
+    level INTEGER NOT NULL,
+    PRIMARY KEY (budget_id, month, level)
+  );
+  CREATE TABLE pauses (
+    scope TEXT NOT NULL CHECK (scope IN ('all', 'project', 'agent')),
+    target_id INTEGER NOT NULL DEFAULT 0,
+    by_id INTEGER NOT NULL REFERENCES participants(id),
+    reason TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    PRIMARY KEY (scope, target_id)
+  );
+
+  CREATE TABLE policies (
+    project_id INTEGER REFERENCES projects(id),
+    body TEXT NOT NULL,
+    updated_by INTEGER NOT NULL REFERENCES participants(id),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+  CREATE UNIQUE INDEX policies_scope ON policies (ifnull(project_id, 0));
+
+  CREATE TABLE decisions (
+    id INTEGER PRIMARY KEY,
+    project_id INTEGER REFERENCES projects(id),
+    title TEXT NOT NULL,
+    context TEXT NOT NULL DEFAULT '',
+    options TEXT NOT NULL DEFAULT '[]',
+    decision TEXT NOT NULL,
+    tags TEXT NOT NULL DEFAULT '[]',
+    decided_by INTEGER NOT NULL REFERENCES participants(id),
+    superseded_by INTEGER REFERENCES decisions(id),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+  CREATE INDEX decisions_project ON decisions (project_id, created_at);
+
+  CREATE TABLE ci_status (
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    source TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('success', 'failure', 'pending')),
+    summary TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (project_id, source)
+  );
+
+  CREATE TABLE digests (
+    id INTEGER PRIMARY KEY,
+    project_id INTEGER REFERENCES projects(id),
+    week TEXT NOT NULL,
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+  CREATE UNIQUE INDEX digests_week ON digests (ifnull(project_id, 0), week);
+  `,
 ];
 
 export interface OpenOptions {

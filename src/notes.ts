@@ -67,7 +67,7 @@ export class Notes {
 
   /** Creates a note, or replaces the one with this id (or, without an id, the one with this title). */
   save(actor: Participant, project: string, input: { id?: number; title: string; body: string }): Note {
-    const proj = this.store.visibleProject(actor, project);
+    const proj = this.store.writableProject(actor, project);
     const title = input.title.trim().replace(/\s+/g, ' ');
     const body = input.body.trim();
     if (!title || title.length > MAX_TITLE) throw new OrcoError('invalid', `Note titles are 1-${MAX_TITLE} characters`);
@@ -108,7 +108,7 @@ export class Notes {
 
   delete(actor: Participant, project: string, id: number): void {
     if (actor.kind !== 'user') throw new OrcoError('forbidden', 'Only people can delete notes');
-    const proj = this.store.visibleProject(actor, project);
+    const proj = this.store.writableProject(actor, project);
     const note = this.row(proj, id);
     if (!note) throw new OrcoError('not_found', `No note ${id} in ${proj.name}`);
     this.store.db.prepare('DELETE FROM notes WHERE id = ?').run(id);

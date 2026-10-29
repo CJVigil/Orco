@@ -121,6 +121,7 @@ export class Schedules {
   create(actor: Participant, input: ScheduleInput): Schedule {
     this.store.unscoped(actor, 'set up schedules');
     const { room, agent, request, cron, tz } = this.check(actor, input);
+    this.store.assertWrite(actor, room.projectId);
     const count = (this.store.db.prepare('SELECT count(*) AS n FROM schedules WHERE creator_id = ?').get(actor.id) as { n: number }).n;
     if (count >= MAX_PER_PERSON) throw new OrcoError('conflict', `You have ${MAX_PER_PERSON} schedules already`);
     const next = nextRun(parseCron(cron), this.store.now(), tz);

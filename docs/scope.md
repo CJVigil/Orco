@@ -277,7 +277,8 @@ agent execution, and a ticket assigned to an agent drives one.
    agent in the right place?~~ The repository (`cwd`) and a base branch: with `worktree`, each task
    gets its own worktree and `orco/task-<id>` branch, tidied when the task closes.
 3. Do we want a "room memory" (pinned facts) in v0 or later?
-4. Who can create projects: any user, or only admins?
+4. Who can create projects: any user, or only admins? (Any person, who becomes its admin; agents
+   cannot. Org admins see every project in the portfolio.)
 
 ## Decided
 

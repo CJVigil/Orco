@@ -114,6 +114,32 @@ function fill(template: string, task: Task, prompt: string, note = '', connectio
   );
 }
 
+interface TaskContext {
+  policy: string[];
+  decisions: { id: number; title: string; decision: string; project: string | null }[];
+}
+
+/** The project's rules and the decisions in force, for the prompt. These come from people in the org. */
+function contextNote(context: TaskContext | null): string {
+  if (!context) return '';
+  let out = '';
+  if (context.policy.length) out += `\n\nRules your org set for this project (from people, not the requester; follow them):\n${context.policy.map((r) => `- ${r}`).join('\n')}`;
+  if (context.decisions.length) {
+    const lines = context.decisions.map((d) => `- #${d.id} ${d.title}: ${d.decision.replace(/\s+/g, ' ').slice(0, 240)}`);
+    out += `\n\nDecisions in force (look them up with the decisions tool; do not reopen them without a person):\n${lines.join('\n')}`;
+  }
+  return out;
+}
+
+interface PauseEvent {
+  scope: 'all' | 'project' | 'agent';
+  target: string | null;
+  paused: boolean;
+  projectId: number | null;
+  by?: string;
+  reason?: string;
+}
+
 interface Job {
   task: Task;
   mode: 'start' | 'resume' | 'reminder';
@@ -129,6 +155,12 @@ class AgentRunner {
   private readonly stopping = new Set<number>();
   /** Model runs, which have no process to kill: aborting one stops its tool loop. */
   private readonly aborts = new Map<number, AbortController>();
+  /** Tasks of running agents, to match a pause against their project. */
+  private readonly runningTasks = new Map<number, Task>();
+  /** Why a run was stopped by a pause, for the note on the task. */
+  private readonly pausedNotes = new Map<number, string>();
+  /** Work not started because of a pause; started when the pause is lifted. */
+  private readonly held = new Map<number, Job>();
   private stream: EventStream | null = null;
   private stopped = false;
 
@@ -162,6 +194,7 @@ class AgentRunner {
       onEvent: ({ event, data }) => {
         if (event === 'task') this.offer(data as Task);
         if (event === 'wake') void this.wake(data as { taskId: number; note: string });
+        if (event === 'pause') this.onPause(data as PauseEvent);
       },
     });
     void this.stream.start();
@@ -248,6 +281,33 @@ class AgentRunner {
     }
   }
 
+  /** The kill switch: stop running agents it covers, or start held work when it is lifted. */
+  private onPause(event: PauseEvent): void {
+    if (this.stopped) return;
+    if (!event.paused) {
+      const jobs = [...this.held.values()];
+      this.held.clear();
+      if (jobs.length) this.log.info(`[${this.config.name}] ${event.scope === 'all' ? 'agents' : event.target} resumed; starting ${jobs.length} held task(s)`);
+      for (const job of jobs) this.queue.push(job);
+      this.pump();
+      return;
+    }
+    for (const [id, task] of this.runningTasks) {
+      const covered = event.scope === 'all' || (event.scope === 'agent' && event.target === this.config.name) || (event.scope === 'project' && event.projectId === task.projectId);
+      if (!covered || this.stopping.has(id)) continue;
+      const what = event.scope === 'all' ? 'all agents' : event.scope === 'project' ? `agents in ${event.target}` : this.config.name;
+      this.pausedNotes.set(id, `Stopped: ${event.by ?? 'someone'} paused ${what}${event.reason ? ` (${event.reason})` : ''}.`);
+      this.stopping.add(id);
+      this.log.info(`[${this.config.name}] task #${id}: paused; stopping the agent`);
+      this.aborts.get(id)?.abort();
+      const child = this.running.get(id);
+      if (child) {
+        child.kill('SIGTERM');
+        setTimeout(() => child.kill('SIGKILL'), KILL_GRACE_MS).unref();
+      }
+    }
+  }
+
   private pump(): void {
     while (!this.stopped && this.running.size < this.config.max_concurrent && this.queue.length > 0) {
       void this.prepare(this.queue.shift()!);
@@ -258,6 +318,18 @@ class AgentRunner {
   private async prepare(job: Job): Promise<void> {
     const { task } = job;
     this.running.set(task.id, null);
+    try {
+      const { paused } = (await this.api(`/pauses/check?task_id=${task.id}`)) as { paused: { by: string; scope: string } | null };
+      if (paused) {
+        this.running.delete(task.id);
+        this.held.set(task.id, job);
+        this.log.info(`[${this.config.name}] task #${task.id} waits: ${paused.scope === 'all' ? 'all agents are' : 'paused by'} ${paused.scope === 'all' ? `paused by ${paused.by}` : paused.by}`);
+        this.pump();
+        return;
+      }
+    } catch {
+      // An older server without pauses: go ahead.
+    }
     let token = this.token;
     if (this.config.task_tokens) {
       try {
@@ -289,17 +361,19 @@ class AgentRunner {
       this.pump();
       return;
     }
-    this.run(job, token, workspace);
+    const context = (await this.api(`/tasks/${task.id}/context`).catch(() => null)) as TaskContext | null;
+    this.run(job, token, workspace, context);
   }
 
-  private run({ task, mode, note }: Job, token: string, workspace: Workspace | null): void {
+  private run({ task, mode, note }: Job, token: string, workspace: Workspace | null, context: TaskContext | null = null): void {
     const template = mode === 'resume' ? RESUME_PROMPT : mode === 'reminder' ? REMINDER_PROMPT : (this.config.prompt_template ?? DEFAULT_PROMPT);
     const checkpoint = task.checkpoint ? `\n\nYour last checkpoint on this task (${task.checkpoint.at}):\n${task.checkpoint.text}` : '';
     const where = workspace ? WORKSPACE_NOTE.replace('{path}', workspace.path).replace('{branch}', workspace.branch).replace('{base}', workspace.base) : '';
-    const prompt = fill(template, task, '', note) + checkpoint + where;
+    const prompt = fill(template, task, '', note) + checkpoint + where + contextNote(context);
     const what = { start: 'starting', resume: 'resuming with the answer', reminder: 'waking for a reminder' }[mode];
     const output = new RunOutput();
     const startedAt = new Date();
+    this.runningTasks.set(task.id, task);
     if (this.config.model) {
       this.log.info(`[${this.config.name}] task #${task.id} from ${task.requester}: ${what} model ${this.config.model.name}`);
       void this.runModelJob(task, token, prompt, mode, output);
@@ -382,9 +456,12 @@ class AgentRunner {
       if (!this.stopped && tail.trim() && reason !== 'code 0') {
         this.log.error(`[${this.config.name}] last output of task #${task.id}:\n${tail.trimEnd()}`);
       }
-      const outcome = timedOut ? `stopped after ${this.config.timeout_seconds}s` : reason;
+      this.runningTasks.delete(task.id);
+      const pausedNote = this.pausedNotes.get(task.id);
+      this.pausedNotes.delete(task.id);
+      const outcome = pausedNote ? 'stopped: paused' : timedOut ? `stopped after ${this.config.timeout_seconds}s` : reason;
       const report = this.report(task, mode, startedAt, outcome, output, workspace, token);
-      if (this.config.lifecycle === 'bridge' && reason === 'code 0' && !timedOut) {
+      if (this.config.lifecycle === 'bridge' && reason === 'code 0' && !timedOut && !pausedNote) {
         // The tool cannot report back, so its own summary becomes the result.
         const summary = maskSecrets(tail.trim().slice(-1500), this.secrets(token)) || 'Finished.';
         void report
@@ -394,9 +471,9 @@ class AgentRunner {
           .finally(() => this.afterRun(task));
         return;
       }
-      const note = timedOut
-        ? `The agent was stopped after ${this.config.timeout_seconds}s without finishing the task.`
-        : `The agent exited (${reason}) without finishing the task.`;
+      const note =
+        pausedNote ??
+        (timedOut ? `The agent was stopped after ${this.config.timeout_seconds}s without finishing the task.` : `The agent exited (${reason}) without finishing the task.`);
       void report.then(() => this.finish(task, note)).finally(() => this.afterRun(task));
     };
     child.on('error', (err) => done(`could not start: ${err.message}`));
@@ -431,14 +508,16 @@ class AgentRunner {
         ? `The model stopped without closing the task.${run.lastText ? ` Its last words: ${run.lastText.slice(0, 500)}` : ''}`
         : `The model used its ${model.max_turns} turns without closing the task.`;
     } catch (err) {
-      const message = abort.signal.aborted ? `stopped after ${this.config.timeout_seconds}s or cancelled` : (err as Error).message;
+      const message = this.pausedNotes.get(task.id) ?? (abort.signal.aborted ? `stopped after ${this.config.timeout_seconds}s or cancelled` : (err as Error).message);
       this.log.error(`[${this.config.name}] task #${task.id} model run failed: ${message}`);
-      note = `The model run failed: ${message}`;
+      note = this.pausedNotes.get(task.id) ?? `The model run failed: ${message}`;
+      this.pausedNotes.delete(task.id);
       outcome = `failed: ${message}`.slice(0, 200);
       output.note(`! ${message}`);
     } finally {
       clearTimeout(timer);
       this.aborts.delete(task.id);
+      this.runningTasks.delete(task.id);
       this.running.delete(task.id);
       this.stopping.delete(task.id);
     }

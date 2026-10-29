@@ -357,7 +357,7 @@ export class Tickets {
   /* Tickets */
 
   create(actor: Participant, project: string, input: TicketInput & { title: string }, options: { dispatch?: boolean } = {}): Written {
-    const proj = this.project(actor, project);
+    const proj = this.writable(actor, project);
     this.store.checkRate(actor, 'post');
     const title = this.title(input.title);
     const description = this.description(input.description ?? '');
@@ -422,6 +422,7 @@ export class Tickets {
 
   update(actor: Participant, ref: string, input: TicketInput): Written {
     const row = this.byRef(actor, ref);
+    this.store.assertWrite(actor, row.project_id);
     this.store.checkRate(actor, 'post');
     const sets: string[] = [];
     const params: (string | number | null)[] = [];
@@ -665,6 +666,7 @@ export class Tickets {
 
   comment(actor: Participant, ref: string, body: string): Ticket {
     const row = this.byRef(actor, ref);
+    this.store.assertWrite(actor, row.project_id);
     const text = body.trim();
     if (!text) throw new OrcoError('invalid', 'Comment is empty');
     if (text.length > MAX_COMMENT) throw new OrcoError('invalid', `Comment is over ${MAX_COMMENT} characters`);
@@ -682,6 +684,7 @@ export class Tickets {
    */
   claim(actor: Participant, ref: string, options: { start?: boolean } = {}): Ticket {
     const row = this.byRef(actor, ref);
+    this.store.assertWrite(actor, row.project_id);
     this.assignable(row.project_id, actor.name);
     const statuses = this.statuses(row.project_id);
     const current = statuses.find((s) => s.id === row.status_id)!;
@@ -710,6 +713,7 @@ export class Tickets {
 
   startTask(actor: Participant, ref: string): Written {
     const row = this.byRef(actor, ref);
+    this.store.assertWrite(actor, row.project_id);
     if (row.assignee_kind !== 'agent') throw new OrcoError('invalid', `Assign ${refOf(row)} to an agent first`);
     if (row.task_id !== null && OPEN_STATES.includes(taskState(row)!)) {
       throw new OrcoError('conflict', `${row.assignee} already has task #${row.task_id} for ${refOf(row)}`);
@@ -882,7 +886,7 @@ export class Tickets {
 
   /** Anyone in the project, agents included, may add a label; only people delete them. */
   createLabel(actor: Participant, project: string, name: string, color?: string): Label {
-    const proj = this.project(actor, project);
+    const proj = this.writable(actor, project);
     this.store.checkRate(actor, 'post');
     const clean = name.trim();
     if (!LABEL_NAME.test(clean)) throw new OrcoError('invalid', 'Label names are 1-32 letters, digits, spaces or . _ / -');
@@ -910,7 +914,7 @@ export class Tickets {
   }
 
   createMilestone(actor: Participant, project: string, input: { name: string; description?: string; targetDate?: string | null }): Milestone {
-    const proj = this.project(actor, project);
+    const proj = this.writable(actor, project);
     this.store.checkRate(actor, 'post');
     const name = input.name.trim();
     if (!name || name.length > 80) throw new OrcoError('invalid', 'Milestone names are 1-80 characters');
@@ -930,7 +934,7 @@ export class Tickets {
   }
 
   updateMilestone(actor: Participant, project: string, id: number, input: { name?: string; description?: string; targetDate?: string | null }): Milestone {
-    const proj = this.project(actor, project);
+    const proj = this.writable(actor, project);
     this.store.checkRate(actor, 'post');
     const current = this.milestones(proj.id).find((m) => m.id === id);
     if (!current) throw new OrcoError('not_found', `No milestone ${id} in ${proj.name}`);
@@ -960,7 +964,7 @@ export class Tickets {
   }
 
   createCycle(actor: Participant, project: string, input: { startsOn?: string; endsOn?: string } = {}): Cycle {
-    const proj = this.project(actor, project);
+    const proj = this.writable(actor, project);
     this.store.checkRate(actor, 'post');
     const existing = this.cycles(proj.id);
     const last = existing.at(-1);
@@ -978,7 +982,7 @@ export class Tickets {
   }
 
   completeCycle(actor: Participant, project: string, id: number): { cycle: Cycle; movedTo: number | null; moved: number } {
-    const proj = this.project(actor, project);
+    const proj = this.writable(actor, project);
     this.store.checkRate(actor, 'post');
     const list = this.cycles(proj.id);
     const cycle = list.find((c) => c.id === id);
@@ -1161,7 +1165,14 @@ export class Tickets {
 
   private planner(actor: Participant, name: string): Project {
     if (actor.kind !== 'user') throw new OrcoError('forbidden', 'Only people change workflow statuses or delete labels and milestones');
-    return this.project(actor, name);
+    return this.writable(actor, name);
+  }
+
+  /** A project the actor may change tickets in (not read-only). */
+  private writable(actor: Participant, name: string): Project {
+    const project = this.project(actor, name);
+    this.store.assertWrite(actor, project.id);
+    return project;
   }
 
   private byRef(actor: Participant, ref: string): TicketRow {

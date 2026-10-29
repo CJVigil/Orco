@@ -68,6 +68,7 @@ export class Locks {
   constructor(private readonly store: Store) {}
 
   acquire(actor: Participant, project: string, name: string, ttlSeconds = 300, note?: string): Lock {
+    this.store.writableProject(actor, project);
     if (!LOCK_NAME.test(name)) {
       throw new OrcoError('invalid', 'Lock name must be 1-64 lowercase letters, digits or ":._/-", like "deploy:prod"');
     }

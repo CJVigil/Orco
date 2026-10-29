@@ -75,6 +75,43 @@ export function forgeOf(headers: Record<string, string | undefined>): { name: 'G
   return null;
 }
 
+/**
+ * The CI result in a forge delivery, for the portfolio: one entry per repository and workflow (or
+ * status context), on the default branch only, so failing feature branches do not turn a project red.
+ */
+export function ciStatusOf(payload: unknown, headers: Record<string, string | undefined>): { source: string; state: 'success' | 'failure' | 'pending'; summary: string } | null {
+  const forge = forgeOf(headers);
+  if (!forge) return null;
+  const body = obj(payload);
+  const repository = obj(body.repository);
+  const repo = str(repository.full_name);
+  const main = str(repository.default_branch);
+  const state = (conclusion: string, status: string): 'success' | 'failure' | 'pending' | null => {
+    if (['success', 'neutral', 'skipped'].includes(conclusion)) return 'success';
+    if (['failure', 'timed_out', 'startup_failure', 'action_required', 'error'].includes(conclusion)) return 'failure';
+    if (conclusion === 'cancelled' || conclusion === 'stale') return null;
+    return ['queued', 'in_progress', 'requested', 'waiting', 'pending', 'running'].includes(status) ? 'pending' : null;
+  };
+  let source: string;
+  let result: 'success' | 'failure' | 'pending' | null;
+  let branch = '';
+  if (forge.event === 'workflow_run' || forge.event === 'check_suite' || forge.event === 'check_run') {
+    const run = obj(body[forge.event]);
+    branch = str(run.head_branch) || str(obj(run.check_suite).head_branch);
+    source = `${repo} ${str(run.name) || str(obj(run.app).name) || forge.event}`;
+    result = state(str(run.conclusion), str(run.status));
+  } else if (forge.event === 'status') {
+    const names = Array.isArray(body.branches) ? (body.branches as Json[]).map((b) => str(obj(b).name)) : [];
+    if (main && names.length && !names.includes(main)) return null;
+    source = `${repo} ${str(body.context) || 'CI'}`;
+    result = str(body.state) === 'error' ? 'failure' : state(str(body.state), str(body.state));
+  } else {
+    return null;
+  }
+  if (!result || (main && branch && branch !== main)) return null;
+  return { source: source.trim().slice(0, 200), state: result, summary: summarize(payload, '', headers).slice(0, 200) };
+}
+
 /** One line saying what happened, for GitHub, Gitea and Forgejo events, and payloads with a text field. */
 export function summarize(payload: unknown, raw: string, headers: Record<string, string | undefined>): string {
   const body = obj(payload);
@@ -191,6 +228,15 @@ export class Hooks {
       skipRateLimit: true,
       external: { source: `webhook "${row.name}"${forgeOf(headers) ? ` (${forgeOf(headers)!.name})` : ''}`, text: details || '(empty body)' },
     });
+    const ci = row.project_id === null ? null : ciStatusOf(payload, headers);
+    if (ci) {
+      this.store.db
+        .prepare(
+          `INSERT INTO ci_status (project_id, source, state, summary, updated_at) VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT (project_id, source) DO UPDATE SET state = excluded.state, summary = excluded.summary, updated_at = excluded.updated_at`,
+        )
+        .run(row.project_id, ci.source, ci.state, ci.summary, new Date(now).toISOString());
+    }
     let taskId: number | null = null;
     const matches = !row.wake_match || `${title}\n${details}`.toLowerCase().includes(row.wake_match.toLowerCase());
     if (row.wake_agent && matches) {

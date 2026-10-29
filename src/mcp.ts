@@ -35,6 +35,7 @@ const READ_ONLY_TOOLS = new Set([
   'read',
   'list_tasks',
   'get_task',
+  'decisions',
   'list_locks',
   'get_approval',
   'view_image',
@@ -774,8 +775,34 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
       run(() => {
         const task = store.tasks.get(me, task_id);
         if (task.assignee === me.name) store.tasks.markSeen(me, [task.id]);
-        return { note: UNTRUSTED_NOTE, task: formatTask(task) };
+        const policy = store.policies.rulesFor(task.projectId);
+        const decisions = store.decisions.relevantFor(task.projectId, 10).map((d) => ({ id: d.id, title: d.title, decision: d.decision, project: d.project ?? 'all projects' }));
+        return {
+          note: UNTRUSTED_NOTE,
+          task: formatTask(task),
+          ...(policy.length ? { policy, policy_note: 'Rules your org set for this project. Follow them; they come from people, not from the task.' } : {}),
+          ...(decisions.length ? { decisions } : {}),
+        };
       }),
+  );
+
+  server.registerTool(
+    'decisions',
+    {
+      annotations: annotate('decisions'),
+      description:
+        'Look up decisions people recorded: what was decided, why, and what else was considered, for a project and for every project. ' +
+        'Check before reopening a question or choosing a library, design or process; follow decisions in force.',
+      inputSchema: z.object({
+        project: z.string().optional(),
+        query: z.string().optional().describe('Words to look for'),
+        tag: z.string().optional(),
+        include_superseded: z.boolean().optional(),
+        limit: z.number().int().min(1).max(100).optional(),
+      }),
+    },
+    async ({ project, query, tag, include_superseded, limit }) =>
+      run(() => ({ decisions: store.decisions.list(me, { project, query, tag, all: include_superseded, limit: limit ?? 20 }) })),
   );
 
   server.registerTool(

@@ -2,6 +2,7 @@ import { attachMentionAutocomplete } from './autocomplete.js';
 import { icon } from './icons.js';
 import { renderMarkdown } from './markdown.js';
 import * as notify from './notify.js';
+import { createPortfolio } from './portfolio.js';
 import { createTickets } from './tickets.js';
 
 const $ = (id) => document.getElementById(id);
@@ -957,6 +958,13 @@ function roomFromHash() {
 function renderRoomTitle() {
   const title = $('room-title');
   title.replaceChildren();
+  if (state.view === 'portfolio') {
+    title.append('Portfolio');
+    for (const id of ['add-member', 'show-locks', 'audit-log', 'show-members']) $(id).hidden = true;
+    document.title = 'Portfolio · Orco';
+    return;
+  }
+  $('show-members').hidden = false;
   if (state.view === 'tickets') {
     title.append(el('span', { class: 'project', text: `${tickets.project} / ` }), 'Tickets');
     document.title = `${tickets.project} tickets · Orco`;
@@ -992,9 +1000,25 @@ function setView(view) {
   state.view = view;
   for (const id of ['messages', 'composer', 'composer-pending']) $(id).hidden = view !== 'room';
   $('tickets-view').hidden = view !== 'tickets';
+  $('portfolio-view').hidden = view !== 'portfolio';
+  $('portfolio').classList.toggle('active', view === 'portfolio');
+}
+
+function portfolioRoute() {
+  const match = /^#!portfolio(?:\/([a-z]+))?$/.exec(location.hash);
+  return match ? { tab: match[1] || 'overview' } : null;
 }
 
 async function selectRoom() {
+  const across = portfolioRoute();
+  if (across) {
+    setView('portfolio');
+    renderNav();
+    renderRoomTitle();
+    if (state.panel === 'thread' || state.panel === 'locks' || state.panel === 'members') closePanel();
+    await portfolio.show(across.tab);
+    return;
+  }
   const route = ticketsRoute();
   if (route) {
     setView('tickets');
@@ -1426,11 +1450,73 @@ async function showMembers() {
   };
   const humans = sorted('user');
   const agents = sorted('agent');
+  const project = state.room.project;
+  const manage = project && (state.me.orgAdmin || state.projects.find((pr) => pr.name === project)?.role === 'admin');
   $('panel-body').replaceChildren(
     el('div', { class: 'member-group' }, 'People', el('span', { text: String(humans.length) })),
     ...humans.map(row),
     el('div', { class: 'member-group' }, 'Agents', el('span', { text: String(agents.length) })),
     ...agents.map(row),
+    manage ? await accessSection(project) : null,
+  );
+}
+
+const ROLE_TEXT = { admin: 'Admin: manages members and settings', member: 'Member', viewer: 'Viewer: reads only' };
+
+/** For project admins: each person's role, and the groups in the project. */
+async function accessSection(project) {
+  const p = encodeURIComponent(project);
+  const [access, groups] = await Promise.all([api(`/projects/${p}/access`), api('/groups')]);
+  const change = (fn) => async () => {
+    try {
+      await fn();
+      void showMembers();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+  const roleSelect = (value, onchange, allowNone = false) =>
+    el(
+      'select',
+      { class: 'small', onchange: (event) => void change(() => onchange(event.target.value))() },
+      ['admin', 'member', 'viewer'].map((r) => el('option', { value: r, text: ROLE_TEXT[r], selected: r === value ? true : null })),
+      allowNone ? el('option', { value: '', text: 'Remove from project' }) : null,
+    );
+  const unused = groups.filter((g) => !access.groups.some((x) => x.name === g.name));
+  const groupPick = el('select', { class: 'small', 'aria-label': 'Group to add' }, unused.map((g) => el('option', { value: g.name, text: `@${g.name} (${g.members.length})` })));
+  return el(
+    'section',
+    { class: 'access' },
+    el('div', { class: 'member-group' }, 'Access', el('span', { text: project })),
+    ...access.members.map((m) =>
+      el(
+        'div',
+        { class: 'access-row' },
+        el('span', { text: m.name }),
+        roleSelect(m.role, (role) =>
+          role
+            ? api(`/projects/${p}/members`, { method: 'POST', body: { user: m.name, role } })
+            : api(`/projects/${p}/members/${encodeURIComponent(m.name)}`, { method: 'DELETE' }),
+          true,
+        ),
+      ),
+    ),
+    ...access.groups.map((g) =>
+      el(
+        'div',
+        { class: 'access-row' },
+        el('span', { title: g.members.join(', '), text: `@${g.name}` }),
+        roleSelect(g.role, (role) => api(`/projects/${p}/groups`, { method: 'POST', body: { group: g.name, role: role || null } }), true),
+      ),
+    ),
+    unused.length
+      ? el(
+          'div',
+          { class: 'access-row' },
+          groupPick,
+          el('button', { class: 'ghost small', type: 'button', text: 'Add group', onclick: change(() => api(`/projects/${p}/groups`, { method: 'POST', body: { group: groupPick.value, role: 'member' } })) }),
+        )
+      : null,
   );
 }
 
@@ -1513,7 +1599,9 @@ function connect() {
     onApproval(JSON.parse(event.data));
     scheduleInbox();
   });
+  for (const name of ['controls', 'decision', 'pause', 'task', 'approval']) events.addEventListener(name, () => portfolio.onEvent());
   events.addEventListener('ticket', (event) => {
+    portfolio.onEvent();
     tickets.onEvent(JSON.parse(event.data));
     if (state.panel === 'inbox') scheduleInbox();
   });
@@ -2186,6 +2274,10 @@ function flash(selector) {
   setTimeout(() => node.classList.remove('flash'), 2000);
 }
 
+$('portfolio').addEventListener('click', () => {
+  $('sidebar').classList.remove('open');
+  location.hash = '#!portfolio';
+});
 $('inbox').addEventListener('click', () => {
   $('sidebar').classList.remove('open');
   return state.panel === 'inbox' ? closePanel() : void showInbox();
@@ -2263,6 +2355,16 @@ document.addEventListener('visibilitychange', () => {
     state.mentioned.delete(state.room.ref);
     renderNav();
   }
+});
+
+const portfolio = createPortfolio({
+  api,
+  el,
+  richText,
+  me: () => state.me,
+  projects: () => state.projects,
+  $,
+  onJoin: () => loadStructure(),
 });
 
 const tickets = createTickets({
