@@ -59,6 +59,8 @@ export async function runModel(options: {
   log: (message: string) => void;
   /** Collects the run's log and token usage. */
   output?: RunOutput;
+  /** Asked before each turn with what this run has cost so far (micro-dollars): a reason stops the run. */
+  beforeTurn?: (runCostMicros: number) => string | null;
 }): Promise<ModelRun> {
   const { model } = options;
   const client = new Client({ name: `orco-bridge-${options.agent}`, version: '1.0.0' });
@@ -81,6 +83,8 @@ export async function runModel(options: {
     let lastText = '';
     for (let turn = 1; turn <= model.max_turns; turn++) {
       if (options.signal.aborted) throw new Error('stopped');
+      const stop = options.beforeTurn?.(options.output?.usage.costMicros ?? 0);
+      if (stop) throw new Error(stop);
       const { message: reply, usage } = await chat(model, options.apiKey, messages, functions, options.signal);
       if (usage && options.output) {
         const input = Number(usage.prompt_tokens) || 0;

@@ -48,6 +48,12 @@ const MAX_INSTRUCTIONS = 4000;
 export const DEFAULT_BUDGET_CENTS = 500;
 /** The most a person who is not an org admin may let a hosted agent spend a month: it is the org's key. */
 export const MAX_MEMBER_BUDGET_CENTS = 5000;
+/** How many agents a person who is not an org admin may run on the org's models. */
+export const MAX_MEMBER_AGENTS = 3;
+/** How many hosted agents one server runs at most: each is a loop inside the server process. */
+export const MAX_HOSTED_AGENTS = 50;
+const TRY_PER_HOUR = 20;
+const TRY_MAX_TOKENS = 300;
 
 export interface ModelProvider {
   name: string;
@@ -72,6 +78,7 @@ export interface HostedAgent {
 
 /** What the runner needs to run a hosted agent: never sent to a browser. */
 export interface HostedRun {
+  agentId: number;
   name: string;
   baseUrl: string;
   model: string;
@@ -93,6 +100,9 @@ interface ProviderRow {
   price_out: number | null;
   shared: number;
 }
+
+/** A model key is sealed for its provider and the origin it was given for. */
+const keyAad = (name: string, origin: string) => `model:${name}:${origin}`;
 
 const toProvider = (row: ProviderRow): ModelProvider => ({
   name: row.name,
@@ -149,14 +159,26 @@ export class Hosted {
       return value;
     };
     const existing = this.store.db.prepare('SELECT * FROM model_providers WHERE name = ?').get(name) as unknown as ProviderRow | undefined;
+    const baseUrl = url.toString().replace(/\/+$/, '');
+    // A stored key is bound to the address it was given for: sending it somewhere new takes typing it
+    // again, so nobody can point a provider at their own server and collect a key they never knew.
+    if (existing?.ciphertext && new URL(existing.base_url).origin !== url.origin && typeof input.apiKey !== 'string') {
+      throw new OrcoError('invalid', 'Enter the API key again to use it at a new address');
+    }
     // A key typed in replaces the stored one; leaving it out keeps it; an empty string removes it.
     let sealed: { ciphertext: Buffer | Uint8Array | null; iv: Buffer | Uint8Array | null; tag: Buffer | Uint8Array | null } = existing
       ? { ciphertext: existing.ciphertext, iv: existing.iv, tag: existing.tag }
       : { ciphertext: null, iv: null, tag: null };
     if (typeof input.apiKey === 'string') {
-      sealed = input.apiKey.trim() ? this.store.secrets.seal(input.apiKey.trim(), `model:${name}`) : { ciphertext: null, iv: null, tag: null };
+      sealed = input.apiKey.trim() ? this.store.secrets.seal(input.apiKey.trim(), keyAad(name, url.origin)) : { ciphertext: null, iv: null, tag: null };
     }
-    const values = [url.toString().replace(/\/+$/, ''), model, sealed.ciphertext, sealed.iv, sealed.tag, price(input.priceIn, 'Input price'), price(input.priceOut, 'Output price'), input.shared ? 1 : 0];
+    const priceIn = price(input.priceIn, 'Input price');
+    const priceOut = price(input.priceOut, 'Output price');
+    // A model someone pays for needs prices, or no budget could ever stop its agents.
+    if (sealed.ciphertext && (priceIn === null || priceOut === null)) {
+      throw new OrcoError('invalid', 'A model with an API key needs its prices (US dollars per million input and output tokens), so budgets can stop its agents');
+    }
+    const values = [baseUrl, model, sealed.ciphertext, sealed.iv, sealed.tag, priceIn, priceOut, input.shared ? 1 : 0];
     if (existing) {
       this.store.db
         .prepare('UPDATE model_providers SET base_url = ?, model = ?, ciphertext = ?, iv = ?, tag = ?, price_in = ?, price_out = ?, shared = ? WHERE id = ?')
@@ -189,6 +211,13 @@ export class Hosted {
   ): HostedAgent {
     if (actor.kind !== 'user' || actor.scope) throw new OrcoError('forbidden', 'Only people make agents');
     const provider = this.usableProvider(actor, input.provider);
+    const admin = this.store.isOrgAdmin(actor);
+    const total = (this.store.db.prepare('SELECT count(*) AS n FROM hosted_agents').get() as { n: number }).n;
+    if (total >= MAX_HOSTED_AGENTS) throw new OrcoError('conflict', `This Orco runs ${MAX_HOSTED_AGENTS} agents already; remove one first`);
+    if (!admin) {
+      const mine = (this.store.db.prepare('SELECT count(*) AS n FROM hosted_agents h JOIN participants a ON a.id = h.agent_id WHERE a.owner_id = ?').get(actor.id) as { n: number }).n;
+      if (mine >= MAX_MEMBER_AGENTS) throw new OrcoError('conflict', `You run ${MAX_MEMBER_AGENTS} agents on Orco already; remove one, or ask an org admin`);
+    }
     const template = this.template(input.template);
     const instructions = this.instructions(input.instructions);
     const projectIds = this.projectIds(actor, input.projects ?? []);
@@ -204,8 +233,8 @@ export class Hosted {
       // Safe defaults: tasks from anyone else wait for the owner's yes, and spending is capped low.
       this.store.setTaskPolicy(actor, agent.name, input.policy ?? 'ask');
       const budget = input.budgetCents === undefined ? DEFAULT_BUDGET_CENTS : input.budgetCents;
-      if (!this.store.isOrgAdmin(actor) && (budget === null || budget > MAX_MEMBER_BUDGET_CENTS)) {
-        throw new OrcoError('invalid', `Agents on the org's models need a monthly budget of at most $${MAX_MEMBER_BUDGET_CENTS / 100}; an org admin can raise it`);
+      if (!admin && (budget === null || budget + this.memberBudgets(actor.id, agent.id) > MAX_MEMBER_BUDGET_CENTS)) {
+        throw new OrcoError('invalid', `Your agents on the org's models can have at most $${MAX_MEMBER_BUDGET_CENTS / 100} a month between them; an org admin can raise it`);
       }
       if (budget !== null) this.store.controls.setBudget(actor, 'agent', agent.name, budget);
       this.store.audit.record(actor, 'hosted.create', { subject: `agent:${agent.name}`, detail: { provider: provider.name, template, projects: input.projects ?? [] } });
@@ -237,6 +266,9 @@ export class Hosted {
     const { changes } = this.store.db.prepare('DELETE FROM hosted_agents WHERE agent_id = ?').run(agent.id);
     if (!changes) throw new OrcoError('not_found', `${name} does not run on Orco`);
     this.store.rotateToken(name); // the runner's token stops working at once
+    // What only made sense on Orco goes too: its project limits and the budget on the org's model.
+    this.store.db.prepare('DELETE FROM agent_projects WHERE agent_id = ?').run(agent.id);
+    this.store.db.prepare("DELETE FROM budgets WHERE scope = 'agent' AND target_id = ?").run(agent.id);
     this.store.audit.record(actor, 'hosted.remove', { subject: `agent:${name}` });
     this.onChange(name);
   }
@@ -272,10 +304,16 @@ export class Hosted {
     const template = TEMPLATES[row.template as TemplateName] ?? TEMPLATES.questions;
     let apiKey: string | undefined;
     if (provider.ciphertext && provider.iv && provider.tag) {
-      apiKey = this.store.secrets.open({ ciphertext: provider.ciphertext, iv: provider.iv, tag: provider.tag }, `model:${provider.name}`);
+      const sealed = { ciphertext: provider.ciphertext, iv: provider.iv, tag: provider.tag };
+      try {
+        apiKey = this.store.secrets.open(sealed, keyAad(provider.name, new URL(provider.base_url).origin));
+      } catch {
+        apiKey = this.store.secrets.open(sealed, `model:${provider.name}`); // stored before keys were bound to an address
+      }
     }
     const prompt = [template.prompt, row.instructions ? `Your owner's instructions:\n${row.instructions}` : ''].filter(Boolean).join('\n\n');
     return {
+      agentId,
       name: agent.name,
       baseUrl: provider.base_url,
       model: provider.model,
@@ -294,6 +332,14 @@ export class Hosted {
     this.store.checkRate(actor, 'post');
     const run = this.runFor(agent.id);
     if (!run) throw new OrcoError('not_found', `${name} does not run on Orco`);
+    // Tries cost money too: limited per hour, short, and counted against its budget.
+    const hour = this.store.now() - 3600_000;
+    const recent = (this.tries.get(agent.id) ?? []).filter((t) => t > hour);
+    if (recent.length >= TRY_PER_HOUR) throw new OrcoError('rate_limited', `${name} can be tried ${TRY_PER_HOUR} times an hour`);
+    const left = this.store.controls.agentBudgetLeft(agent.id);
+    if (left !== null && left <= 0) throw new OrcoError('forbidden', `${name}'s monthly budget is used up`);
+    if (run.apiKey && !run.price) throw new OrcoError('conflict', `${name}'s model has no prices set; an org admin adds them so its budget can work`);
+    this.tries.set(agent.id, [...recent, this.store.now()]);
     const res = await fetch(`${run.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...(run.apiKey ? { Authorization: `Bearer ${run.apiKey}` } : {}) },
@@ -303,18 +349,52 @@ export class Hosted {
           { role: 'system', content: `You are ${name}, an AI agent in Orco, a team chat. ${run.prompt}\nThis is a quick test from your owner: answer briefly. You cannot use tools here.` },
           { role: 'user', content: text },
         ],
+        max_tokens: TRY_MAX_TOKENS,
       }),
+      redirect: 'error',
       signal: AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(60_000)]),
     }).catch((err: Error) => {
       throw new OrcoError('conflict', `Could not reach the model at ${new URL(run.baseUrl).host}: ${err.message}`);
     });
-    const data = (await res.json().catch(() => ({}))) as { choices?: { message?: { content?: string } }[]; error?: { message?: string } | string };
+    const data = (await res.json().catch(() => ({}))) as {
+      choices?: { message?: { content?: string } }[];
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
+      error?: { message?: string } | string;
+    };
     if (!res.ok) {
       const error = typeof data.error === 'string' ? data.error : data.error?.message;
       throw new OrcoError('conflict', `The model answered ${res.status}${error ? `: ${error.slice(0, 300)}` : ''}`);
     }
+    if (run.price) {
+      const cents = ((Number(data.usage?.prompt_tokens) || 0) * run.price.input_per_million + (Number(data.usage?.completion_tokens) || 0) * run.price.output_per_million) / 10_000;
+      if (cents > 0) this.store.db.prepare("INSERT INTO agent_spend (agent_id, cents, note) VALUES (?, ?, 'try it')").run(agent.id, cents);
+    }
     return { reply: String(data.choices?.[0]?.message?.content ?? '').slice(0, 8000) };
   }
+
+  /** The org admin who answers for a hosted agent's spending: whoever set up its model (or any org admin). */
+  providerCreatorOf(agent: Participant): Participant | null {
+    const row = this.store.db
+      .prepare('SELECT m.created_by FROM hosted_agents h JOIN model_providers m ON m.id = h.provider_id WHERE h.agent_id = ?')
+      .get(agent.id) as { created_by: number } | undefined;
+    if (!row) return null;
+    const creator = this.store.participantById(row.created_by);
+    return creator && this.store.isOrgAdmin(creator) ? creator : (this.store.orgAdmins()[0] ?? null);
+  }
+
+  /** What a person's other hosted agents may spend a month, together. */
+  memberBudgets(ownerId: number, except?: number): number {
+    return (
+      this.store.db
+        .prepare(
+          `SELECT coalesce(sum(b.monthly_cents), 0) AS cents FROM hosted_agents h JOIN participants a ON a.id = h.agent_id
+           JOIN budgets b ON b.scope = 'agent' AND b.target_id = a.id WHERE a.owner_id = ? AND a.id IS NOT ?`,
+        )
+        .get(ownerId, except ?? null) as { cents: number }
+    ).cents;
+  }
+
+  private readonly tries = new Map<number, number[]>();
 
   /* Helpers */
 

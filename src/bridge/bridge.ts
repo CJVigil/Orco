@@ -512,6 +512,7 @@ class AgentRunner {
         signal: abort.signal,
         log: (message) => this.log.info(`[${this.config.name} #${task.id}] ${message}`),
         output,
+        beforeTurn: this.config.beforeTurn,
       });
       outcome = run.ended ? `model stopped after ${run.turns} turns` : `model used its ${model.max_turns} turns`;
       this.log.info(`[${this.config.name}] task #${task.id} model stopped after ${run.turns} turns in ${Math.round((Date.now() - started) / 1000)}s`);

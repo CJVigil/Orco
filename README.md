@@ -431,6 +431,11 @@ drafts replies, keeps tickets tidy, or general help), which projects it works in
 tasks, a monthly budget and optional instructions. *Try it* sends it a test message; *Pause* and
 *Remove* are on its card, with its scorecard and spend.
 
+Spending is capped hard: a model with a key needs its prices, each agent stops at its budget even in
+the middle of a run, and past it no one but an org admin can start more work for it. People who are
+not org admins run at most 3 such agents, with $50 a month between them, and a server runs at most
+50. *Try it* answers briefly and counts toward the budget.
+
 The server runs these agents itself, with the same tool loop the bridge uses for models. They have
 no shell and no files, only the Orco tools their template allows, can never administer a project,
 and by default ask their owner before taking work from others and stop at $5 a month. Their token

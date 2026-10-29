@@ -50,7 +50,7 @@ function provider(): Server {
         if (req.headers.authorization !== `Basic ${Buffer.from('orco:shh').toString('base64')}`) return json({ error: 'invalid_client' }, 401);
         if (!grant || createHash('sha256').update(form.get('code_verifier') ?? '').digest('base64url') !== grant.challenge) return json({ error: 'invalid_grant' }, 400);
         const now = Math.floor(Date.now() / 1000);
-        json({ id_token: sign({ iss: issuer, aud: 'orco', sub: grant.email, email: grant.email, email_verified: grant.verified, nonce: grant.nonce, iat: now, exp: now + 300 }) });
+        json({ id_token: sign({ iss: issuer, aud: 'orco', sub: grant.email.toLowerCase(), email: grant.email, email_verified: grant.verified, nonce: grant.nonce, iat: now, exp: now + 300 }) });
       });
       return;
     }
@@ -138,15 +138,15 @@ describe('sign in with an OpenID provider', () => {
     nextUser = { email: 'carlos@example.com', verified: true };
     const start = await fetch(`${base}/auth/oidc/start`, { redirect: 'manual' });
     const back = await fetch((await fetch(start.headers.get('location')!, { redirect: 'manual' })).headers.get('location')!, { redirect: 'manual' });
-    assert.match(back.headers.get('location')!, /#!signin-error=.*did%20not%20start%20in%20this%20browser/);
+    assert.equal(back.headers.get('location'), '/#!signin-error=state', 'a fixed code, never text');
     assert.equal(back.headers.getSetCookie().some((c) => c.startsWith('orco_token=orco_s_')), false);
   });
 
   it('refuses unverified emails and other domains', async () => {
     nextUser = { email: 'carlos@example.com', verified: false };
-    assert.match(await signInWithProvider(new Map()), /signin-error=.*verified%20email/);
+    assert.equal(await signInWithProvider(new Map()), '/#!signin-error=unverified');
     nextUser = { email: 'eve@elsewhere.org', verified: true };
-    assert.match(await signInWithProvider(new Map()), /signin-error=.*not%20in%20a%20domain/);
+    assert.equal(await signInWithProvider(new Map()), '/#!signin-error=domain');
   });
 
   it('checks the ID token itself: signature, audience, issuer, expiry and nonce', async () => {
@@ -165,6 +165,26 @@ describe('sign in with an OpenID provider', () => {
     await assert.rejects(oidc.verify(sign(good, 'unknown-key'), 'n'), /key the issuer does not publish/);
     const none = `${b64({ alg: 'none' })}.${b64(good)}.`;
     await assert.rejects(oidc.verify(none, 'n'), /does not accept/);
+    await assert.rejects(oidc.verify(sign({ ...good, nbf: now + 86_400 }), 'n'), /not valid yet/);
+    await assert.rejects(oidc.verify(sign({ ...good, aud: ['orco', 'other'] }), 'n'), /another app/, 'several audiences need azp');
+    assert.equal((await oidc.verify(sign({ ...good, aud: ['orco', 'other'], azp: 'orco' }), 'n')).sub, 's');
+  });
+
+  it('ties a login to the provider account it first signed in with (#47)', async () => {
+    nextUser = { email: 'carlos@example.com', verified: true };
+    assert.equal(await signInWithProvider(new Map()), '/');
+    assert.equal((store.db.prepare("SELECT subject FROM identities WHERE identity = 'carlos@example.com'").get() as { subject: string }).subject, 'carlos@example.com');
+    // Someone else's account at the provider now claims the same address.
+    store.db.prepare("UPDATE identities SET subject = 'the-real-carlos' WHERE identity = 'carlos@example.com'").run();
+    assert.equal(await signInWithProvider(new Map()), '/#!signin-error=account');
+  });
+
+  it('does not let stray callbacks lock everyone out (#46)', async () => {
+    for (let i = 0; i < 15; i++) await fetch(`${base}/auth/oidc/callback?error=access_denied`, { redirect: 'manual' });
+    for (let i = 0; i < 15; i++) await fetch(`${base}/auth/oidc/callback?code=x&state=forged`, { redirect: 'manual' });
+    for (let i = 0; i < 600; i++) await fetch(`${base}/auth/oidc/start`, { redirect: 'manual' });
+    nextUser = { email: 'ana@example.com', verified: true };
+    assert.equal(await signInWithProvider(new Map()), '/', 'a real sign-in still works');
   });
 });
 

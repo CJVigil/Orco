@@ -49,6 +49,10 @@ export class HostedRunner {
     const agent = this.store.participantByName(name);
     const run = agent ? this.store.hosted.runFor(agent.id) : null;
     if (this.stopped || !run) return;
+    if (run.apiKey && !run.price) {
+      this.log.error(`hosted agent ${name} not started: its model has an API key but no prices, so no budget could stop it`);
+      return;
+    }
     const token = this.store.rotateToken(name);
     const tokenEnv = `ORCO_TOKEN_${name.toUpperCase().replace(/-/g, '_')}`;
     const config: BridgeAgentConfig = {
@@ -70,6 +74,11 @@ export class HostedRunner {
       task_tokens: true,
       retry_minutes: 30,
       run_logs: true,
+      // The budget is checked between turns too, so one long run cannot overshoot it by much.
+      beforeTurn: (runCostMicros) => {
+        const left = this.store.controls.agentBudgetLeft(run.agentId);
+        return left !== null && left * 10_000 - runCostMicros <= 0 ? `${name}'s monthly budget ran out during this run` : null;
+      },
     };
     const bridge = new Bridge(
       { server: this.server, agents: [config] },

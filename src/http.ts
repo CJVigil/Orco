@@ -22,7 +22,7 @@ import { importTickets, parseImport } from './import.js';
 import { SESSION_TTL_MS } from './signins.js';
 import { normalizeIdentity } from './identities.js';
 import { TEMPLATES } from './hosted.js';
-import type { Oidc } from './oidc.js';
+import { type Oidc, OidcError } from './oidc.js';
 import { SEARCH_KINDS, type SearchKind, searchAll } from './search.js';
 import { catchUp } from './catchup.js';
 import type { Wake } from './reminders.js';
@@ -320,13 +320,14 @@ export function createApp(store: Store, options: AppOptions = {}) {
   // A login an OpenID provider vouched for that is linked to nobody yet: kept briefly, for this browser
   // only, so signing in another way (and confirming) can link it.
   const oidc = options.oidc;
-  const oidcPending = new Map<string, { identity: string; expiresAt: number }>();
+  const oidcPending = new Map<string, { identity: string; issuer: string; subject: string; expiresAt: number }>();
   const now = () => (options.now ?? Date.now)();
-  const pendingLogin = (req: Request): string | null => {
+  const pendingEntry = (req: Request) => {
     const id = readCookie(req.headers.cookie, OIDC_PENDING_COOKIE);
     const entry = id ? oidcPending.get(id) : undefined;
-    return entry && entry.expiresAt > now() ? entry.identity : null;
+    return entry && entry.expiresAt > now() ? entry : null;
   };
+  const pendingLogin = (req: Request): string | null => pendingEntry(req)?.identity ?? null;
   /** The login this browser brings (the proxy's, or one an OpenID provider just vouched for), if any. */
   const vouchedLogin = (req: Request): { identity: string; label: string } | null => {
     const proxied = proxyIdentity(req);
@@ -357,7 +358,8 @@ export function createApp(store: Store, options: AppOptions = {}) {
       if (!binding) return;
       throw new OrcoError('conflict', `link needed: signing in as ${person.name} here links ${identity} to ${person.name}`);
     }
-    store.identities.link(person, person.name, identity);
+    const pending = binding ? null : pendingEntry(req);
+    store.identities.link(person, person.name, identity, pending ? { account: { issuer: pending.issuer, subject: pending.subject } } : {});
     const pendingId = readCookie(req.headers.cookie, OIDC_PENDING_COOKIE);
     if (pendingId) oidcPending.delete(pendingId);
   };
@@ -423,8 +425,8 @@ export function createApp(store: Store, options: AppOptions = {}) {
   // Sign-in with an OpenID Connect provider: off to the provider, then back with a code.
   app.get('/auth/oidc/start', async (_req, res) => {
     if (!oidc) throw new OrcoError('not_found', 'Sign-in with an OpenID provider is not set up on this Orco');
-    const { url, binding } = await oidc.start();
-    res.cookie(OIDC_COOKIE, binding, { httpOnly: true, sameSite: 'lax', secure: secureCookies(_req, options.publicUrl), path: '/auth/oidc', maxAge: 10 * 60_000 });
+    const { url, cookie } = await oidc.start();
+    res.cookie(OIDC_COOKIE, cookie, { httpOnly: true, sameSite: 'lax', secure: secureCookies(_req, options.publicUrl), path: '/auth/oidc', maxAge: 10 * 60_000 });
     res.redirect(302, url);
   });
   app.get('/auth/oidc/callback', async (req, res) => {
@@ -432,14 +434,18 @@ export function createApp(store: Store, options: AppOptions = {}) {
     res.clearCookie(OIDC_COOKIE, { path: '/auth/oidc' });
     const ip = req.ip ?? 'unknown';
     try {
-      if (logins.blocked(ip)) throw new OrcoError('rate_limited', 'Too many failed sign-ins. Wait 15 minutes and try again.');
-      const { identity } = await oidc.finish(req.query, readCookie(req.headers.cookie, OIDC_COOKIE));
+      if (logins.blocked(ip)) throw new OidcError('provider', 'Too many failed sign-ins. Wait 15 minutes and try again.', false);
+      const { identity, issuer, subject } = await oidc.finish(req.query, readCookie(req.headers.cookie, OIDC_COOKIE));
       const user = store.identities.userFor(identity);
+      if (user && !store.identities.checkAccount(identity, issuer, subject)) {
+        throw new OidcError('account', `${identity} now belongs to a different ${oidc.config.label} account than the one linked to ${user.name}`);
+      }
       if (!user) {
         // Known to the provider, not yet to Orco: remember it briefly so a sign-in another way can link it.
-        const id = randomBytes(24).toString('base64url');
-        oidcPending.set(id, { identity, expiresAt: now() + 10 * 60_000 });
         for (const [key, entry] of oidcPending) if (entry.expiresAt <= now()) oidcPending.delete(key);
+        if (oidcPending.size >= 1000) oidcPending.delete(oidcPending.keys().next().value!);
+        const id = randomBytes(24).toString('base64url');
+        oidcPending.set(id, { identity, issuer, subject, expiresAt: now() + 10 * 60_000 });
         res.cookie(OIDC_PENDING_COOKIE, id, { httpOnly: true, sameSite: 'lax', secure: secureCookies(req, options.publicUrl), path: '/', maxAge: 10 * 60_000 });
         res.redirect(302, '/#!signin=unlinked');
         return;
@@ -448,9 +454,14 @@ export function createApp(store: Store, options: AppOptions = {}) {
       store.audit.record(user, 'signin.oidc', { subject: `user:${user.name}`, detail: { identity, issuer: oidc.config.issuer } });
       res.redirect(302, '/');
     } catch (err) {
-      logins.hit(ip);
-      const message = err instanceof OrcoError ? err.message : 'The sign-in failed';
-      res.redirect(302, `/#!signin-error=${encodeURIComponent(message.slice(0, 200))}`);
+      // Only a sign-in that really came back to this browser counts against it: stray callbacks
+      // (no state, someone else's) cannot lock everyone behind a shared address out.
+      const bound = err instanceof OidcError ? err.bound : true;
+      if (bound) logins.hit(ip);
+      const reason = err instanceof OidcError ? err.reason : 'provider';
+      store.audit.record(null, 'signin.oidc_failed', { detail: { reason, error: (err as Error).message.slice(0, 200) } });
+      // The page shows its own words for the reason: nothing the provider (or a crafted link) wrote.
+      res.redirect(302, `/#!signin-error=${reason}`);
     }
   });
   app.post('/api/signin/proxy', express.json({ limit: '1kb' }), (req, res) => {
@@ -473,7 +484,8 @@ export function createApp(store: Store, options: AppOptions = {}) {
       const { participant, token } = store.onboarding.setup(options.setupCode, String(req.body?.code ?? ''), String(req.body?.name ?? ''));
       // Set up through the sign-in proxy (or right after an OpenID sign-in): that login becomes this person's.
       const identity = vouchedLogin(req)?.identity;
-      if (identity) store.identities.link(participant, participant.name, identity);
+      const pending = proxyIdentity(req) ? null : pendingEntry(req);
+      if (identity) store.identities.link(participant, participant.name, identity, pending ? { account: { issuer: pending.issuer, subject: pending.subject } } : {});
       res.cookie(COOKIE, store.signins.startSession(participant), { httpOnly: true, sameSite: 'strict', secure: secureCookies(req, options.publicUrl), path: '/', maxAge: SESSION_TTL_MS });
       res.status(201).json({ name: participant.name, token });
     } catch (err) {

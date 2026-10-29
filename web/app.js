@@ -2566,9 +2566,19 @@ async function showLogin() {
 
 /** What a sign-in with an OpenID provider came back with (#!signin-error=… or #!signin=unlinked), read once. */
 let signInError = null;
+/** Our own words for each way an OpenID sign-in can fail: the link carries only the code, never text. */
+const SIGNIN_ERRORS = {
+  state: 'That sign-in did not start in this browser, or took too long. Try again.',
+  denied: 'The sign-in was cancelled or refused at the provider.',
+  unverified: 'Your provider did not confirm your email address, so Orco cannot sign you in with it.',
+  domain: 'Your email address is not in a domain allowed to sign in here.',
+  token: 'The provider’s answer did not check out. Try again, or ask whoever runs Orco.',
+  provider: 'Orco could not finish signing you in with the provider. Try again in a moment.',
+  account: 'That email address now belongs to a different account at the provider than the one linked to you here. Ask whoever runs Orco.',
+};
 {
   const failed = /^#!signin-error=(.*)$/.exec(location.hash);
-  if (failed) signInError = decodeURIComponent(failed[1]).slice(0, 200);
+  if (failed) signInError = SIGNIN_ERRORS[failed[1]] ?? SIGNIN_ERRORS.provider;
   if (failed || location.hash === '#!signin=unlinked') history.replaceState(null, '', location.pathname + location.search);
 }
 

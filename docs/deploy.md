@@ -165,6 +165,14 @@ issuer, audience, expiry, nonce). The provider's addresses are the only places i
 
 Orco never makes accounts from a login it does not know, and never makes org admins this way. A
 sign-in that did not start in the same browser is refused, so nobody can sign you in to their account.
+The first sign-in ties a login to the provider's account behind it; if the email later shows up on a
+different account there, Orco refuses it.
+
+**Make the provider confirm emails.** Orco trusts the provider's "email verified". A self-hosted Gitea
+or Forgejo with email confirmation off (`[service] REGISTER_EMAIL_CONFIRM = false`, the default)
+marks any address as verified, so someone could register with a colleague's address before that
+colleague first signs in. Turn confirmation on, or disable open registration, and set
+`ORCO_OIDC_DOMAINS` to your own domain.
 
 ## Sign in with Google (through your proxy)
 

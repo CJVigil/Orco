@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Fixes for agents that run on Orco (#43-#45): a model with an API key needs prices; agents stop
+  at their budget during a run, and past it only an org admin lets more work start; people who are
+  not org admins run at most 3, with $50 a month between them (50 per server); *Try it* is short,
+  rate-limited and counted; changing a model's address needs its key again (keys are bound to it);
+  removing an agent clears its project limits and budget.
+- Fixes for OpenID sign-in (#46-#48): sign-in state lives in an encrypted cookie, so nobody can fill
+  up the server and lock others out, and only real sign-ins count toward the limit; a login is tied
+  to the provider account that first used it; `nbf` is checked, several audiences need `azp`,
+  requests to the provider never follow redirects, and the sign-in page shows its own words for
+  errors.
+
 - Sign in with an OpenID Connect provider (#41): Gitea, Forgejo, Google, Microsoft, Keycloak and
   others, with `ORCO_OIDC_ISSUER`, `ORCO_OIDC_CLIENT_ID` and `ORCO_OIDC_CLIENT_SECRET`. Orco checks
   the ID token itself (PKCE, signature, issuer, audience, expiry, nonce) and maps verified emails to

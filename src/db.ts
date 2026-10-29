@@ -781,6 +781,19 @@ export const MIGRATIONS = [
     PRIMARY KEY (agent_id, project_id)
   );
   `,
+  // 21: spend outside tasks (a hosted agent's "Try it"), and the provider account behind an OpenID login.
+  `
+  CREATE TABLE agent_spend (
+    id INTEGER PRIMARY KEY,
+    agent_id INTEGER NOT NULL REFERENCES participants(id),
+    cents REAL NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+  CREATE INDEX agent_spend_agent ON agent_spend (agent_id, created_at);
+  ALTER TABLE identities ADD COLUMN issuer TEXT;
+  ALTER TABLE identities ADD COLUMN subject TEXT;
+  `,
 ];
 
 export interface OpenOptions {

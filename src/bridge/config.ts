@@ -69,6 +69,8 @@ export type ModelConfig = z.infer<typeof modelSchema>;
 /** An agent as the bridge runs it: a preset resolved into its command, lifecycle and prompt. */
 export type BridgeAgentConfig = Omit<z.infer<typeof agentSchema>, 'command' | 'lifecycle' | 'worktree' | 'token_env'> & {
   token_env: string;
+  /** Set in code, never from a config file: asked before each model turn (see runModel). */
+  beforeTurn?: (runCostMicros: number) => string | null;
   command: string[];
   lifecycle: 'agent' | 'bridge';
   worktree?: WorktreeSettings;

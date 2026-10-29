@@ -16,7 +16,7 @@ let runner: HostedRunner;
 let modelUrl: string;
 let carlos: Participant;
 let ana: Participant;
-const seen: { auth: string | undefined; tools: string[]; withTools: boolean }[] = [];
+const seen: { auth: string | undefined; tools: string[]; withTools: boolean; maxTokens?: number }[] = [];
 
 const code = (fn: () => unknown) => {
   try {
@@ -34,7 +34,7 @@ function fakeModel(): Server {
     req.on('data', (c) => (raw += c));
     req.on('end', () => {
       const body = JSON.parse(raw) as { messages: { role: string; content: string | null }[]; tools?: { function: { name: string } }[] };
-      seen.push({ auth: req.headers.authorization, tools: (body.tools ?? []).map((t) => t.function.name), withTools: Boolean(body.tools) });
+      seen.push({ auth: req.headers.authorization, tools: (body.tools ?? []).map((t) => t.function.name), withTools: Boolean(body.tools), maxTokens: (body as { max_tokens?: number }).max_tokens });
       res.setHeader('Content-Type', 'application/json');
       const usage = { prompt_tokens: 100, completion_tokens: 20 };
       if (!body.tools) return res.end(JSON.stringify({ choices: [{ message: { content: 'Hello from the fake model' } }], usage }));
@@ -95,6 +95,8 @@ describe('hosted agents', () => {
     assert.ok(!JSON.stringify(store.db.prepare('SELECT * FROM model_providers').all()).includes('sk-test'), 'stored encrypted');
     assert.ok(!JSON.stringify(store.hosted.providers(ana)).includes('sk-test'));
     store.hosted.saveProvider(carlos, { name: 'private', baseUrl: modelUrl, model: 'big' });
+    assert.equal(code(() => store.hosted.saveProvider(carlos, { name: 'unpriced', baseUrl: modelUrl, model: 'x', apiKey: 'sk-test-0123456789abcdef' })), 'invalid', 'a paid key needs prices (#43)');
+    assert.equal(code(() => store.hosted.saveProvider(carlos, { name: 'fake', baseUrl: 'https://evil.example/v1', model: 'tiny', priceIn: 1, priceOut: 2, shared: true })), 'invalid', 'a new address needs the key again (#45)');
     assert.deepEqual(store.hosted.providers(ana).map((p) => p.name), ['fake'], 'only shared ones for people');
   });
 
@@ -128,9 +130,41 @@ describe('hosted agents', () => {
     assert.ok(store.tasks.get(ana, task.id).budget!.spentCents >= 0);
   });
 
-  it('answers a quick test message from its owner', async () => {
+  it('answers a quick test message from its owner, briefly and on its budget', async () => {
+    const before = store.controls.spentThisMonth('agent', store.participantByName('ana-helper')!.id);
     assert.deepEqual(await store.hosted.tryIt(ana, 'ana-helper', 'hi'), { reply: 'Hello from the fake model' });
+    assert.ok(store.controls.spentThisMonth('agent', store.participantByName('ana-helper')!.id) > before, 'tries count toward spend');
+    assert.equal(seen.at(-1)!.maxTokens, 300);
     await assert.rejects(store.hosted.tryIt(carlos.id === ana.id ? carlos : store.createUser('stranger').participant, 'ana-helper', 'hi'), /No agent/);
+  });
+
+  it('caps agents per person and their budgets together, and holds them past the budget whoever asks (#43, #44)', async () => {
+    const bea = store.createUser('bea').participant;
+    store.addMember(carlos, 'api', 'bea');
+    store.hosted.create(bea, { name: 'bea-one', provider: 'fake', template: 'replies', budgetCents: 3000 });
+    assert.equal(code(() => store.hosted.create(bea, { name: 'bea-two', provider: 'fake', template: 'replies', budgetCents: 3000 })), 'invalid', '$60 between them is over $50');
+    store.hosted.create(bea, { name: 'bea-two', provider: 'fake', template: 'replies', budgetCents: 1000 });
+    store.hosted.create(bea, { name: 'bea-three', provider: 'fake', template: 'replies', budgetCents: 500 });
+    assert.equal(code(() => store.hosted.create(bea, { name: 'bea-four', provider: 'fake', template: 'replies', budgetCents: 100 })), 'conflict', 'three each');
+    // Spent out: the owner's own tasks wait for an org admin too.
+    const one = store.participantByName('bea-one')!;
+    store.db.prepare("INSERT INTO agent_spend (agent_id, cents) VALUES (?, 3000)").run(one.id);
+    const held = store.tasks.create(bea, { agent: 'bea-one', room: 'api/general', request: 'x' });
+    assert.equal(held.state, 'awaiting_approval');
+    for (const n of ['bea-one', 'bea-two', 'bea-three']) store.hosted.remove(bea, n);
+  });
+
+  it('stops a run when the budget runs out partway through (#43)', async () => {
+    store.hosted.create(ana, { name: 'ana-meter', provider: 'fake', template: 'questions', budgetCents: 100 });
+    const meter = store.participantByName('ana-meter')!;
+    // 0.001 cents left: the first turn (140 micro-dollars) uses it up, so the second never starts.
+    store.db.prepare('INSERT INTO agent_spend (agent_id, cents) VALUES (?, 99.999)').run(meter.id);
+    await until(() => runner.running.includes('ana-meter'), 'the runner to start ana-meter');
+    const task = store.tasks.create(ana, { agent: 'ana-meter', room: 'api/general', request: 'Which port?' });
+    await until(() => ['failed', 'done'].includes(store.tasks.get(ana, task.id).state), 'the run to stop');
+    assert.equal(store.tasks.get(ana, task.id).state, 'failed');
+    assert.match(store.tasks.get(ana, task.id).note ?? '', /budget ran out/);
+    store.hosted.remove(ana, 'ana-meter');
   });
 
   it('stops running it here when removed, keeping the agent', async () => {

@@ -28,6 +28,21 @@ export class Identities {
     return user && user.kind === 'user' && !this.store.isSystem(user) ? user : null;
   }
 
+  /**
+   * Ties a login to the provider account behind it the first time it signs in that way, and checks it
+   * every time after: an email alone can move to another account (a self-hosted Gitea without email
+   * confirmation lets anyone claim an address), the provider's account id cannot.
+   */
+  checkAccount(identity: string, issuer: string, subject: string): boolean {
+    const row = this.store.db.prepare('SELECT issuer, subject FROM identities WHERE identity = ?').get(identity) as { issuer: string | null; subject: string | null } | undefined;
+    if (!row) return false;
+    if (row.subject === null) {
+      this.store.db.prepare('UPDATE identities SET issuer = ?, subject = ? WHERE identity = ?').run(issuer, subject, identity);
+      return true;
+    }
+    return row.issuer === issuer && row.subject === subject;
+  }
+
   of(userId: number): string[] {
     return (this.store.db.prepare('SELECT identity FROM identities WHERE user_id = ? ORDER BY identity').all(userId) as { identity: string }[]).map((r) => r.identity);
   }
@@ -36,7 +51,7 @@ export class Identities {
    * Links a login to a person. `actor` null is the server's operator; `invite` is an org admin adding
    * that person right now; otherwise a person links a login (vouched for by the proxy) to themselves.
    */
-  link(actor: Participant | null, userName: string, raw: string, options: { invite?: boolean } = {}): string {
+  link(actor: Participant | null, userName: string, raw: string, options: { invite?: boolean; account?: { issuer: string; subject: string } } = {}): string {
     const identity = normalizeIdentity(raw);
     if (!identity) throw new OrcoError('invalid', 'That is not a valid email or login');
     const user = this.store.participantByName(userName.trim().toLowerCase());
@@ -51,7 +66,9 @@ export class Identities {
     const taken = this.userFor(identity);
     if (taken && taken.id !== user.id) throw new OrcoError('conflict', `${identity} already signs in as ${taken.name}`);
     if (taken) return identity;
-    this.store.db.prepare('INSERT INTO identities (identity, user_id, created_by) VALUES (?, ?, ?)').run(identity, user.id, actor?.id ?? null);
+    this.store.db
+      .prepare('INSERT INTO identities (identity, user_id, created_by, issuer, subject) VALUES (?, ?, ?, ?, ?)')
+      .run(identity, user.id, actor?.id ?? null, options.account?.issuer ?? null, options.account?.subject ?? null);
     this.store.audit.record(actor, 'identity.link', { subject: `user:${user.name}`, detail: { identity } });
     return identity;
   }

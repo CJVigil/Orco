@@ -59,9 +59,11 @@ export class Controls {
     if (actor.kind !== 'user') throw new OrcoError('forbidden', 'Only people set budgets');
     const targetId = this.budgetTarget(actor, scope, name);
     // An agent that runs on the org's model keeps a capped budget unless an org admin says otherwise.
-    if (scope === 'agent' && !this.store.isOrgAdmin(actor) && this.store.hosted.of(this.store.participantById(targetId)!)) {
-      if (monthlyCents === null || monthlyCents > MAX_MEMBER_BUDGET_CENTS) {
-        throw new OrcoError('invalid', `${name} runs on the org's model: its monthly budget stays at most $${MAX_MEMBER_BUDGET_CENTS / 100}; an org admin can raise it`);
+    const agent = scope === 'agent' ? this.store.participantById(targetId)! : null;
+    if (agent && !this.store.isOrgAdmin(actor) && this.store.hosted.of(agent)) {
+      const others = this.store.hosted.memberBudgets(agent.ownerId!, agent.id);
+      if (monthlyCents === null || monthlyCents + others > MAX_MEMBER_BUDGET_CENTS) {
+        throw new OrcoError('invalid', `${name} runs on the org's model: your agents there can have at most $${MAX_MEMBER_BUDGET_CENTS / 100} a month between them; an org admin can raise it`);
       }
     }
     if (monthlyCents === null) {
@@ -112,9 +114,20 @@ export class Controls {
         ? this.store.db
             .prepare('SELECT coalesce(sum(t.spent_cents), 0) AS cents FROM tasks t JOIN rooms r ON r.id = t.room_id WHERE r.project_id = ? AND t.created_at >= ?')
             .get(targetId, since)
-        : this.store.db.prepare('SELECT coalesce(sum(spent_cents), 0) AS cents FROM tasks WHERE assignee_id = ? AND created_at >= ?').get(targetId, since)
+        : this.store.db
+            .prepare(
+              `SELECT (SELECT coalesce(sum(spent_cents), 0) FROM tasks WHERE assignee_id = ? AND created_at >= ?)
+                    + (SELECT coalesce(sum(cents), 0) FROM agent_spend WHERE agent_id = ? AND created_at >= ?) AS cents`,
+            )
+            .get(targetId, since, targetId, since)
     ) as { cents: number };
     return row.cents;
+  }
+
+  /** What an agent may still spend this month, in cents, or null without a budget. */
+  agentBudgetLeft(agentId: number): number | null {
+    const row = this.budgetRow('agent', agentId);
+    return row ? row.monthly_cents - this.spentThisMonth('agent', agentId) : null;
   }
 
   /**
@@ -129,6 +142,13 @@ export class Controls {
       if (!row) continue;
       const spent = this.spentThisMonth(scope, id);
       if (spent < row.monthly_cents) continue;
+      // An agent on the org's model key: past its budget, only an org admin lets more work start,
+      // whoever asks (its owner included).
+      const provider = scope === 'agent' ? this.store.hosted.providerCreatorOf(assignee) : null;
+      if (provider) {
+        if (this.store.isOrgAdmin(this.store.participantById(this.store.humanOf(actor))!)) continue;
+        return { approver: provider, reason: `${whose} monthly budget on the org's model is used up (${money(spent)} of ${money(row.monthly_cents)})` };
+      }
       let approver = this.store.participantById(row.set_by);
       if (!approver || (scope === 'project' && !this.store.canSee(approver, id))) approver = this.store.participantById(assignee.ownerId!);
       if (!approver || approver.id === this.store.humanOf(actor)) continue;
