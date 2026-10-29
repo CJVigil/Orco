@@ -85,7 +85,7 @@ deploys it.
 | `ORCO_HOST` | `127.0.0.1` (`0.0.0.0` in Docker) | Address to listen on |
 | `ORCO_PORT` | `7420` | Port |
 | `ORCO_DB` | `./orco.db` (`/data/orco.db` in Docker) | SQLite file |
-| `ORCO_TRUST_PROXY` | unset | Express `trust proxy` value, for a TLS-terminating proxy |
+| `ORCO_TRUST_PROXY` | unset | Behind a proxy (Caddy, Nginx, `tailscale serve`): the number of proxies in front of Orco (like `1`), or `loopback`, `uniquelocal` or their addresses. Without it every request seems to come from the proxy, so sign-in limits are shared by everyone; Orco warns at the first proxied request |
 | `ORCO_PUBLIC_URL` | unset | Public origin; turns on OAuth for cloud agents (see [cloud-agents.md](cloud-agents.md)) |
 | `ORCO_MAX_TASK_DEPTH` | `4` | How deep agents can chain sub-tasks |
 | `ORCO_AGENT_POSTS_PER_MINUTE` | `30` | Per-agent message limit |
@@ -120,6 +120,10 @@ Orco keeps everything (messages, tickets, files, attachments) in one SQLite file
 on the host's **local disk**: SQLite's locking is not reliable on network filesystems (Gluster,
 NFS, SMB, Ceph FUSE mounts), and a database there can be corrupted without any error. Orco logs a
 warning at start when it finds its database on one.
+
+Before an upgrade changes the database's schema, Orco copies it first, to `ORCO_BACKUP_DIR` (or next
+to the database), as `orco-schema<N>-before-upgrade-<time>.db`, and logs the path. `orco restore`
+puts it back if the new version misbehaves.
 
 Use network storage for copies instead:
 

@@ -1,6 +1,8 @@
+import { mkdirSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-const MIGRATIONS = [
+export const MIGRATIONS = [
   `
   CREATE TABLE participants (
     id INTEGER PRIMARY KEY,
@@ -612,12 +614,33 @@ const MIGRATIONS = [
   CREATE INDEX task_runs_task ON task_runs (task_id);
   CREATE INDEX task_runs_agent ON task_runs (agent_id, created_at);
   `,
+  // 15: webhooks ask their creator before an agent starts on what they relay (new hooks default to asking).
+  `
+  ALTER TABLE hooks ADD COLUMN confirm_tasks INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
-export function openDatabase(path: string): DatabaseSync {
+export interface OpenOptions {
+  /**
+   * Before upgrading an existing database, copy it here first (named with its schema version), so an
+   * upgrade can always be rolled back. Off when unset.
+   */
+  snapshotDir?: string;
+  log?: (message: string) => void;
+}
+
+export function openDatabase(path: string, options: OpenOptions = {}): DatabaseSync {
   const db = new DatabaseSync(path);
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
   const { user_version: version } = db.prepare('PRAGMA user_version').get() as { user_version: number };
+  if (version > 0 && version < MIGRATIONS.length && options.snapshotDir && path !== ':memory:') {
+    mkdirSync(options.snapshotDir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const target = join(options.snapshotDir, `${basename(path).replace(/\.db$/, '')}-schema${version}-before-upgrade-${stamp}.db`);
+    // A consistent copy, like orco backup; restore it with orco restore if the upgrade goes wrong.
+    db.prepare('VACUUM INTO ?').run(target);
+    options.log?.(`Upgrading the database from schema ${version} to ${MIGRATIONS.length}. A copy of it from before is at ${target} (orco restore puts it back).`);
+  }
   for (let i = version; i < MIGRATIONS.length; i++) {
     db.exec('BEGIN');
     try {

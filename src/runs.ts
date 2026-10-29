@@ -5,6 +5,11 @@ import type { Participant, Store } from './store.js';
 /** Logs are kept to this many bytes per run: the head and the tail, with the middle cut. */
 export const MAX_LOG_BYTES = 256 * 1024;
 const MAX_OUTCOME = 200;
+/** A bridge reports one run per agent start; these bound what one agent can make Orco store. */
+const MAX_RUNS_PER_MINUTE = 20;
+const MAX_RUNS_PER_TASK = 300;
+/** Only the newest runs of a task keep their logs. */
+const LOGS_KEPT_PER_TASK = 20;
 
 export type RunMode = 'start' | 'resume' | 'reminder';
 
@@ -134,7 +139,15 @@ export class Runs {
     const outputTokens = count(input.outputTokens, 'output_tokens');
     const costMicros = count(input.costMicros, 'cost_micros');
     // The bridge masks what it knows; this catches tokens and keys of well-known shapes it may have missed.
-    const log = input.log ? capLog(maskSecrets(String(input.log))) : null;
+    const recent = this.store.db
+      .prepare('SELECT count(*) AS n FROM task_runs WHERE agent_id = ? AND created_at > ?')
+      .get(actor.id, new Date(this.store.now() - 60_000).toISOString()) as { n: number };
+    if (recent.n >= MAX_RUNS_PER_MINUTE) throw new OrcoError('rate_limited', `At most ${MAX_RUNS_PER_MINUTE} run reports a minute`);
+    const total = this.store.db.prepare('SELECT count(*) AS n FROM task_runs WHERE task_id = ?').get(taskId) as { n: number };
+    if (total.n >= MAX_RUNS_PER_TASK) throw new OrcoError('conflict', `Task ${taskId} already has ${MAX_RUNS_PER_TASK} runs; close it and start a new task`);
+    // The bridge masks what it knows; this also hides secrets the agent was shown through a lease, and
+    // tokens and keys of well-known shapes.
+    const log = input.log ? capLog(maskSecrets(String(input.log), this.store.secrets.revealedTo(actor.id))) : null;
     const { lastInsertRowid } = this.store.db
       .prepare(
         `INSERT INTO task_runs (task_id, agent_id, mode, started_at, seconds, outcome, input_tokens, output_tokens, cost_micros, branch, workspace, log, log_bytes, log_cut, created_at)
@@ -158,6 +171,12 @@ export class Runs {
         new Date(this.store.now()).toISOString(),
       );
     const id = Number(lastInsertRowid);
+    this.store.db
+      .prepare(
+        `UPDATE task_runs SET log = NULL, log_bytes = 0 WHERE task_id = ? AND log IS NOT NULL
+         AND id NOT IN (SELECT id FROM task_runs WHERE task_id = ? ORDER BY id DESC LIMIT ${LOGS_KEPT_PER_TASK})`,
+      )
+      .run(taskId, taskId);
     this.store.audit.record(actor, 'task.run', {
       projectId: task.projectId,
       subject: `task:${taskId}`,
@@ -175,6 +194,8 @@ export class Runs {
 
   /** A run's log, for anyone who can see its task. */
   log(actor: Participant, runId: number): { run: Run; log: string } {
+    // Logs hold whatever the agent printed; people review them, agents have no need to.
+    if (actor.kind !== 'user') throw new OrcoError('forbidden', 'Only people read run logs');
     const row = this.store.db.prepare('SELECT task_id, log FROM task_runs WHERE id = ?').get(runId) as { task_id: number; log: string | null } | undefined;
     if (!row) throw new OrcoError('not_found', `No run ${runId}`);
     try {

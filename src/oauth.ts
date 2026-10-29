@@ -97,7 +97,22 @@ function validRedirectUri(raw: unknown): string {
   if (url.protocol !== 'https:' && !(url.protocol === 'http:' && isLoopback(url.hostname))) {
     throw new OAuthError('invalid_redirect_uri', 'Redirect URIs must use https, or http on localhost');
   }
+  const allowed = allowedRedirectHosts();
+  if (allowed && !isLoopback(url.hostname) && !allowed.some((host) => (host.startsWith('*.') ? url.hostname.endsWith(host.slice(1)) : url.hostname === host))) {
+    throw new OAuthError('invalid_redirect_uri', `This Orco only connects apps that return to ${allowed.join(', ')} (or this computer)`);
+  }
   return raw;
+}
+
+/**
+ * ORCO_OAUTH_REDIRECT_HOSTS: if set, apps may only register redirects to these hosts (a leading "*."
+ * allows subdomains) or to loopback. Without it, any https app can register, and the consent page says
+ * that it is unverified.
+ */
+export function allowedRedirectHosts(): string[] | null {
+  const raw = process.env.ORCO_OAUTH_REDIRECT_HOSTS?.trim();
+  if (!raw) return null;
+  return raw.split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
 }
 
 function normalizeResource(raw: string): string {

@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { maskSecrets } from '../mask.js';
 import type { Task } from '../tasks.js';
@@ -53,6 +53,13 @@ another reminder with remind_me if you need to check again later, and close the 
 work is finished.`;
 
 const KILL_GRACE_MS = 10_000;
+
+/** A folder only this user can read, for per-run files holding a task token. */
+function runDir(): string {
+  const dir = join(homedir(), '.orco', 'run');
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  return dir;
+}
 const OUTPUT_TAIL = 2_000;
 const OPEN = ['awaiting_approval', 'requested', 'accepted', 'needs_input'];
 
@@ -298,10 +305,10 @@ class AgentRunner {
       void this.runModelJob(task, token, prompt, mode, output);
       return;
     }
-    // Tools that take their MCP settings from a file get a private one for this run, holding the task's token.
-    const mcpConfig = this.config.command.some((part) => part.includes('{mcp_config}'))
-      ? join(tmpdir(), `orco-mcp-${randomBytes(8).toString('hex')}.json`)
-      : '';
+    // Tools that take their MCP settings from a file get a private one for this run, holding the task's
+    // token. It goes in ~/.orco/run rather than the system temp folder: mode 0600 means nothing on
+    // Windows, where the user's own profile folder is what keeps other accounts out.
+    const mcpConfig = this.config.command.some((part) => part.includes('{mcp_config}')) ? join(runDir(), `mcp-${randomBytes(8).toString('hex')}.json`) : '';
     if (mcpConfig) {
       writeFileSync(
         mcpConfig,

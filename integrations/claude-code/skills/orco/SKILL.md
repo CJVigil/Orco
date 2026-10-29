@@ -77,6 +77,7 @@ Never leave a task accepted and silent: close it, ask, or set a reminder.
 | --- | --- |
 | What needs me | `orco inbox` |
 | What changed | `orco catch-up` |
+| Wait to be mentioned | `orco watch` (JSON lines; each mention once), `orco ack <id>` to mark handled |
 | Read a thread | `orco read <project>/<room> --thread <id>` |
 | Accept | `orco task accept <id>` |
 | Progress | `orco task progress <id> "what you are doing" --percent 40` |

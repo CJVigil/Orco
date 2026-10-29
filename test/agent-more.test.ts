@@ -60,6 +60,16 @@ describe('webhooks', () => {
     assert.equal(task.assignee, 'ana-claude');
     assert.equal(task.requester, 'ben');
     assert.deepEqual(store.message(second.messageId).mentions, [], 'payload text never pings');
+    // By default the hook's creator confirms before the agent starts on outside text.
+    assert.equal(task.state, 'awaiting_approval');
+    const approval = store.approvals.list(ben).find((a) => a.kind === 'task' && a.state === 'pending')!;
+    assert.equal(code(() => store.approvals.decide(ana, approval.id, 'approved')), 'forbidden', 'not even the agent owner decides');
+    store.approvals.decide(ben, approval.id, 'approved');
+    assert.equal(store.tasks.get(ben, task.id).state, 'requested');
+    const auto = store.hooks.create(ben, { room: 'api/general', name: 'Trusted CI', wakeAgent: 'ana-claude', confirmTasks: false });
+    const direct = store.hooks.deliver(auto.token, Buffer.from(bad), { 'x-github-event': 'workflow_run' })!;
+    assert.equal(store.tasks.get(ben, direct.taskId!).state, 'requested', 'unless the creator chose otherwise');
+    store.hooks.delete(ben, auto.hook.id);
     assert.equal(store.hooks.deliver('orco_h_wrong', Buffer.from('{}'), {}), null);
     assert.equal(store.hooks.list(ana)[0]!.deliveries, 2);
     store.hooks.delete(ana, hook.id);
@@ -228,7 +238,14 @@ describe('secrets', () => {
     const audit = JSON.stringify(store.audit.all(0));
     assert.ok(!audit.includes('sk_test_123'), 'values never reach the audit log');
     assert.ok(audit.includes('secret.use'));
-    store.tasks.update(anaClaude, task.id, 'done');
+    // Once shown, the value never comes back out through the agent: posts, task notes and run logs hide it.
+    const posted = store.post(anaClaude, 'api/general', 'Using sk_test_123 for the run');
+    assert.equal(posted.text, 'Using [hidden] for the run');
+    const run = store.runs.record(anaClaude, task.id, { mode: 'start', startedAt: new Date().toISOString(), seconds: 1, outcome: 'code 0', log: '$ STRIPE=sk_test_123 npm test' });
+    assert.equal(store.runs.log(ana, run.id).log, '$ STRIPE=[hidden] npm test');
+    assert.equal(code(() => store.runs.log(anaClaude, run.id)), 'forbidden', 'only people read run logs');
+    store.tasks.update(anaClaude, task.id, 'done', 'Charged with sk_test_123');
+    assert.equal(store.tasks.get(ana, task.id).note, 'Charged with [hidden]');
     assert.equal(code(() => store.secrets.reveal(anaClaude, lease.id)), 'forbidden');
   });
 

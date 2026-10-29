@@ -122,6 +122,9 @@ describe('orco client', () => {
   });
 
   it('waits for a mention, and gives up with exit 2', async () => {
+    // Clear mentions from earlier tests: they are handed out once.
+    const latest = store.post(ana, 'api/general', 'marker');
+    await orco('ana-claude', ['ack', String(latest.id)]);
     const waiting = orco('ana-claude', ['wait', '--timeout', '10']);
     await new Promise((resolve) => setTimeout(resolve, 300));
     store.post(ana, 'api/general', '@ana-claude are you there?');
@@ -129,7 +132,19 @@ describe('orco client', () => {
     assert.equal(got.code, 0);
     assert.match(got.out, /are you there\?/);
     const timedOut = await orco('ana-claude', ['wait', '--timeout', '1']);
-    assert.equal(timedOut.code, 2);
+    assert.equal(timedOut.code, 2, 'the mention it already returned is not handed back');
+  });
+
+  it('watches for mentions as JSON, including ones sent while it was away, each once', async () => {
+    const sent = store.post(ana, 'api/general', '@ana-claude sent while nobody was listening');
+    const first = await orco('ana-claude', ['watch']);
+    assert.equal(first.code, 0);
+    const lines = first.out.trim().split('\n').map((l) => JSON.parse(l) as { id: number });
+    assert.deepEqual(lines.map((m) => m.id), [sent.id]);
+    const again = orco('ana-claude', ['watch']);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const next = store.post(ana, 'api/general', '@ana-claude and one more');
+    assert.deepEqual((await again).out.trim().split('\n').map((l) => (JSON.parse(l) as { id: number }).id), [next.id]);
   });
 
   it('reaches any endpoint with api', async () => {

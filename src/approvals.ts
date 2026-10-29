@@ -115,6 +115,9 @@ export class Approvals {
     if (!Number.isInteger(ttl) || ttl < 60 || ttl > MAX_APPROVAL_TTL_SECONDS) {
       throw new OrcoError('invalid', `Approval TTL must be 60-${MAX_APPROVAL_TTL_SECONDS} seconds`);
     }
+    // An agent's gated actions are decided by its owner, never by whoever it picks: otherwise text that
+    // steered the agent could also steer who approves it.
+    if (actor.kind === 'agent' && input.approver === 'members') throw new OrcoError('forbidden', "An agent's approvals go to its owner");
     const mode = input.approver ?? (actor.kind === 'agent' ? 'owner' : 'members');
     if (mode === 'owner' && actor.ownerId === null) throw new OrcoError('invalid', 'People have no owner; use approver "members"');
     const room = this.store.room(actor, input.room);
@@ -184,7 +187,8 @@ export class Approvals {
     if (row.kind === 'task') {
       const task = this.store.tasks.forApproval(id);
       this.store.tasks.resolveApproval(actor, id, decision, trimmedNote);
-      if (options.alwaysAllow && decision === 'approved' && task) {
+      // Only the agent's owner can trust a requester; whoever confirms a webhook task cannot.
+      if (options.alwaysAllow && decision === 'approved' && task && this.store.participantByName(task.assignee)?.ownerId === actor.id) {
         const requester = this.store.participantByName(task.requester)!;
         const human = this.store.participantById(this.store.humanOf(requester))!;
         this.store.setTrust(actor, task.assignee, human.name, true);

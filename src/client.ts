@@ -2,7 +2,6 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { parseArgs } from 'node:util';
-import { EventStream } from './bridge/events.js';
 
 /** Commands that talk to a running Orco server over HTTP, from any machine with a token. */
 export const CLIENT_COMMANDS = new Set([
@@ -12,6 +11,8 @@ export const CLIENT_COMMANDS = new Set([
   'inbox',
   'catch-up',
   'wait',
+  'watch',
+  'ack',
   'post',
   'read',
   'search',
@@ -29,7 +30,10 @@ export const CLIENT_USAGE = `Client commands (talk to a running server; set ORCO
   whoami                        Who the token belongs to
   inbox                         What needs you: approvals, questions, reviews, tasks, mentions
   catch-up [room]               New messages, thread digests and changed tickets since you last looked
-  wait [--timeout S]            Wait until someone mentions you; prints the message (exit 2 on timeout)
+  wait [--timeout S]            Wait until someone mentions you; prints the mentions (exit 2 on timeout)
+  watch                         Like wait with --json and no timeout, retrying through network errors and restarts:
+                                prints the new mentions as JSON lines and exits. Each mention is delivered once.
+  ack <message-id>              Mark your mentions up to that message as handled, without replying
   post <room> <text|-> [--thread ID] [--file PATH]...   Post a message (- reads stdin)
   read <room> [--thread ID] [--limit N]
   search <words...> [--kind message,ticket,note,task]
@@ -62,6 +66,8 @@ class ClientError extends Error {
   constructor(
     message: string,
     readonly exitCode = 1,
+    /** The HTTP status, when the server answered. */
+    readonly status?: number,
   ) {
     super(message);
   }
@@ -118,7 +124,7 @@ async function request(config: Config, method: string, path: string, body?: unkn
   }
   if (!res.ok) {
     const message = (data as { error?: string } | null)?.error ?? `HTTP ${res.status}`;
-    throw new ClientError(res.status === 401 ? `${message}: the token was refused` : message);
+    throw new ClientError(res.status === 401 ? `${message}: the token was refused` : message, 1, res.status);
   }
   return data;
 }
@@ -300,35 +306,42 @@ export async function runClient(argv: string[], io: ClientIO): Promise<number> {
         });
         return 0;
       }
-      case 'wait': {
-        const timeout = (int(values.timeout, '--timeout') ?? 0) * 1000;
-        const me = (await call('GET', '/api/me')) as Json;
-        const message = await new Promise<Json | null>((resolve) => {
-          const stream = new EventStream({
-            url: `${config.server}/api/events`,
-            headers: { Authorization: `Bearer ${config.token}` },
-            onEvent: ({ event, data }) => {
-              const m = data as Json;
-              if (event === 'message' && m.author !== me.name && (m.mentions ?? []).includes(me.name)) {
-                stream.stop();
-                if (timer) clearTimeout(timer);
-                resolve(m);
-              }
-            },
-          });
-          const timer = timeout
-            ? setTimeout(() => {
-                stream.stop();
-                resolve(null);
-              }, timeout)
-            : null;
-          void stream.start();
-        });
-        if (!message) {
-          io.err('No mention before the timeout.');
-          return 2;
+      case 'wait':
+      case 'watch': {
+        // The server hands out each mention once and remembers what it handed out, so a restart of
+        // the server or this command never replays one, and mentions sent while away are not missed.
+        const watching = command === 'watch';
+        const timeout = watching ? 0 : (int(values.timeout, '--timeout') ?? 0) * 1000;
+        const deadline = timeout ? Date.now() + timeout : Infinity;
+        let failures = 0;
+        for (;;) {
+          const left = deadline - Date.now();
+          if (left <= 0) {
+            io.err('No mention before the timeout.');
+            return 2;
+          }
+          let mentions: Json[];
+          try {
+            mentions = (await call('GET', `/api/mentions/wait?timeout=${Math.max(1, Math.min(50, Math.ceil(left / 1000)))}`)) as Json[];
+            failures = 0;
+          } catch (err) {
+            // Auth and permission errors will not fix themselves; network errors and restarts will.
+            if (err instanceof ClientError && err.status !== undefined && err.status < 500 && err.status !== 429) throw err;
+            failures++;
+            if (!watching && failures > 5) throw err;
+            await new Promise((resolve) => setTimeout(resolve, Math.min(30_000, 1000 * 2 ** Math.min(failures, 5))));
+            continue;
+          }
+          if (!mentions.length) continue;
+          if (watching) for (const m of mentions) io.out(JSON.stringify(m));
+          else print(mentions.length === 1 ? mentions[0] : mentions, () => mentions.map((m) => formatMessage(m)).join('\n\n'));
+          return 0;
         }
-        print(message, () => formatMessage(message));
+      }
+      case 'ack': {
+        const id = int(need(rest[0], 'ack <message-id>'), 'message id');
+        await call('POST', '/api/inbox/seen', { up_to_id: id });
+        if (!values.json) io.out(`Mentions up to message ${id} are marked handled.`);
         return 0;
       }
       case 'post': {

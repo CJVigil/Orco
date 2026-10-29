@@ -593,6 +593,7 @@ export class Store {
 
   createProject(actor: Participant, name: string): Project {
     this.unscoped(actor, 'create projects');
+    if (actor.kind !== 'user') throw new OrcoError('forbidden', 'Only people create projects');
     checkName('Project', name);
     const userId = this.humanOf(actor);
     this.db.exec('BEGIN');
@@ -639,6 +640,8 @@ export class Store {
 
   addMember(actor: Participant, projectName: string, userName: string): void {
     this.unscoped(actor, 'add project members');
+    // Who is in a project decides who can see it and approve things there: people decide that, not agents.
+    if (actor.kind !== 'user') throw new OrcoError('forbidden', 'Only people add project members');
     const project = this.visibleProject(actor, projectName);
     const user = this.participantByName(userName);
     if (!user || user.kind !== 'user') throw new OrcoError('not_found', `No user named ${userName}`);
@@ -707,9 +710,9 @@ export class Store {
       external?: ExternalContent;
     } = {},
   ): Message {
-    const trimmed = text.trim();
+    const trimmed = this.hideSecrets(actor, text.trim());
     const attachmentIds = options.attachmentIds ?? [];
-    const external = options.external ? checkExternal(options.external) : null;
+    const external = options.external ? checkExternal({ ...options.external, text: this.hideSecrets(actor, options.external.text) }) : null;
     if (!trimmed && attachmentIds.length === 0 && !external) throw new OrcoError('invalid', 'Message text is empty');
     if (trimmed.length > MAX_TEXT) throw new OrcoError('invalid', `Message is over ${MAX_TEXT} characters`);
     const room = this.room(actor, roomRef);
@@ -874,6 +877,14 @@ export class Store {
       if (isUniqueViolation(err)) throw new OrcoError('conflict', `The name ${name} is taken`);
       throw err;
     }
+  }
+
+  /** An agent never writes a leased secret's value into Orco, even by accident (see secrets.ts). */
+  hideSecrets(actor: Participant, text: string): string {
+    if (actor.kind !== 'agent' || !text) return text;
+    let out = text;
+    for (const value of this.secrets.revealedTo(actor.id)) if (value.length >= 6) out = out.split(value).join('[hidden]');
+    return out;
   }
 
   humanOf(actor: Participant): number {

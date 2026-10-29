@@ -118,7 +118,7 @@ describe('web session', () => {
 describe('live events', () => {
   it('streams only messages from rooms the user can see', async () => {
     const anaClaude = store.authenticate(tokens['ana-claude']!)!;
-    store.createProject(anaClaude, 'private');
+    store.createProject(store.authenticate(tokens.ana!)!, 'private');
     const cookie = await login('ben');
     const events = await readEvents(cookie, (event) => event === 'message', async () => {
       store.post(anaClaude, 'private/general', 'secret plans');

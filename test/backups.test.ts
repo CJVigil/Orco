@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { Backups, filesystemOf, networkFilesystemWarning, restore } from '../src/backups.js';
-import { openDatabase } from '../src/db.js';
+import { MIGRATIONS, openDatabase } from '../src/db.js';
 import { type OrcoError, Store } from '../src/store.js';
 
 const code = (fn: () => unknown) => {
@@ -103,5 +103,29 @@ describe('network filesystem warning', () => {
     assert.match(networkFilesystemWarning('/srv/nfs/orco.db', mounts) ?? '', /nfs4/);
     assert.equal(networkFilesystemWarning('/srv/data/orco.db', mounts), null);
     assert.equal(networkFilesystemWarning(':memory:', mounts), null);
+  });
+});
+
+describe('upgrades', () => {
+  it('copies the database before migrating it, and only then', async () => {
+    const { DatabaseSync } = await import('node:sqlite');
+    const dir = mkdtempSync(join(tmpdir(), 'orco-upgrade-'));
+    const path = join(dir, 'orco.db');
+    openDatabase(join(dir, 'fresh.db'), { snapshotDir: join(dir, 'snaps') }).close();
+    assert.ok(!existsSync(join(dir, 'snaps')), 'a new database needs no copy');
+    // A database from the release before: every migration but the last.
+    const latest = MIGRATIONS.length;
+    const old = new DatabaseSync(path);
+    for (const sql of MIGRATIONS.slice(0, -1)) old.exec(sql);
+    old.exec(`PRAGMA user_version = ${latest - 1}`);
+    old.close();
+    const logs: string[] = [];
+    openDatabase(path, { snapshotDir: join(dir, 'snaps'), log: (m) => logs.push(m) }).close();
+    const copies = readdirSync(join(dir, 'snaps'));
+    assert.equal(copies.length, 1);
+    assert.match(copies[0]!, new RegExp(`^orco-schema${latest - 1}-before-upgrade-`));
+    assert.match(logs[0]!, /orco restore puts it back/);
+    openDatabase(path, { snapshotDir: join(dir, 'snaps') }).close();
+    assert.equal(readdirSync(join(dir, 'snaps')).length, 1, 'no copy when nothing changes');
   });
 });

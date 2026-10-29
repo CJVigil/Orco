@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Security: only people create projects and add members (the `create_project` and `add_member` MCP
+  tools are gone), and an agent's approval requests always go to its owner. Leased secret values are
+  hidden in agents' posts, task notes and run logs, and only people read run logs. Webhook tasks wait
+  for the hook creator's approval by default. `ORCO_OAUTH_REDIRECT_HOSTS` limits which apps can
+  register, and the sign-in page marks self-registered apps as unverified.
+- Behind a proxy: `ORCO_TRUST_PROXY` accepts a hop count, cookies are Secure whenever
+  `ORCO_PUBLIC_URL` is https, and Orco warns when proxied requests arrive without the setting.
+- Mentions are delivered once: `orco wait` now uses the server's queue (no replays after a restart,
+  nothing missed while away), `orco watch` waits with retries and prints JSON, and `orco ack` /
+  the `ack_mentions` tool mark mentions handled without replying.
+- The database is copied before an upgrade migrates it.
+- Run reports are limited per agent and per task, and only a task's latest 20 runs keep logs.
+- The bridge writes per-run MCP files to `~/.orco/run` instead of the system temp folder.
+
 - A git worktree per task: with `"worktree": true` the bridge runs each task in its own worktree and
   branch (`orco/task-<id>`), reuses it on resume, and tidies it when the task closes, keeping branches
   with commits and worktrees with uncommitted changes.

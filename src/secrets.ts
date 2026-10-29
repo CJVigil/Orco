@@ -173,6 +173,29 @@ export class Secrets {
     this.store.audit.record(actor, `secret.${decision === 'approved' ? 'grant' : 'deny'}`, { projectId: row.project_id, subject: `secret:${row.secret}`, detail: { leaseId: row.id, agent: row.agent, taskId: row.task_id } });
   }
 
+  /**
+   * Values of every secret this agent has been shown through a lease, to hide in what it writes
+   * (run logs, task notes). Empty without ORCO_SECRETS_KEY or if a value no longer decrypts.
+   */
+  revealedTo(agentId: number): string[] {
+    if (!this.key) return [];
+    const rows = this.store.db
+      .prepare(
+        `SELECT DISTINCT s.ciphertext, s.iv, s.tag, s.project_id, s.name FROM secret_leases l JOIN secrets s ON s.id = l.secret_id
+         WHERE l.agent_id = ? AND l.uses > 0`,
+      )
+      .all(agentId) as { ciphertext: Uint8Array; iv: Uint8Array; tag: Uint8Array; project_id: number; name: string }[];
+    const values: string[] = [];
+    for (const row of rows) {
+      try {
+        values.push(this.decrypt(row, `${row.project_id}:${row.name}`));
+      } catch {
+        // Stored under an older key: nothing to compare against.
+      }
+    }
+    return values;
+  }
+
   /** The value, for the agent holding a granted lease on an open task. */
   reveal(actor: Participant, leaseId: number): { name: string; value: string; expiresAt: string } {
     this.requireKey();

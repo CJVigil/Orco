@@ -206,6 +206,11 @@ export interface AppOptions {
   now?: () => number;
 }
 
+/** Cookies are Secure on HTTPS, and whenever Orco's public address is HTTPS (a proxy may speak HTTP to it). */
+export function secureCookies(req: Request, publicUrl?: string): boolean {
+  return req.secure || (publicUrl ?? process.env.ORCO_PUBLIC_URL ?? '').startsWith('https://');
+}
+
 export function createApp(store: Store, options: AppOptions = {}) {
   const presence = options.presence ?? new Presence();
   const oauth = options.publicUrl ? new OAuth(store, options.publicUrl) : undefined;
@@ -213,6 +218,19 @@ export function createApp(store: Store, options: AppOptions = {}) {
   const registrations = new RateLimiter(20, 3600_000, options.now);
   const app = express();
   app.disable('x-powered-by');
+  // Behind a proxy without ORCO_TRUST_PROXY, every request looks like it comes from the proxy: sign-in
+  // limits are then shared by everyone, and cookies may lose their Secure flag. Say so once.
+  let warnedProxy = false;
+  app.use((req, _res, next) => {
+    if (!warnedProxy && !app.get('trust proxy') && req.headers['x-forwarded-for']) {
+      warnedProxy = true;
+      console.warn(
+        'Requests are arriving through a proxy (X-Forwarded-For), but ORCO_TRUST_PROXY is not set: sign-in limits apply to the proxy ' +
+          'as a whole. Set ORCO_TRUST_PROXY to the number of proxies in front of Orco (like 1), or to loopback, uniquelocal or their addresses.',
+      );
+    }
+    next();
+  });
   const mcp = createMcpHandler(
     ({ requestInfo, authInfo }) => {
       // The authenticated participant, scope and all (a task token sees one project only).
@@ -273,7 +291,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
     res.cookie(COOKIE, token, {
       httpOnly: true,
       sameSite: 'strict',
-      secure: req.secure,
+      secure: secureCookies(req, options.publicUrl),
       path: '/',
       maxAge: 30 * 24 * 3600 * 1000,
     });
@@ -460,6 +478,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
       name: str(b.name, 'name') ?? '',
       wakeAgent: nullableStr(b.wakeAgent, 'wakeAgent'),
       wakeMatch: str(b.wakeMatch, 'wakeMatch'),
+      confirmTasks: b.confirmTasks !== false,
     });
     res.status(201).json({ hook, token, path: `/hooks/${token}` });
   });
@@ -890,6 +909,19 @@ export function createApp(store: Store, options: AppOptions = {}) {
         unseenMentions: mentions.filter((m) => !m.seen && m.approval?.state !== 'pending' && !m.question && m.review?.state !== 'pending').length,
       },
     });
+  });
+  // Long-poll for new mentions. Each is returned once: the server keeps the caller's seen position,
+  // so a restart on either side never hands back a mention that was already delivered.
+  api.get('/mentions/wait', async (req, res) => {
+    const seconds = Math.min(Math.max(optionalInt(req.query.timeout) ?? 50, 0), 120);
+    const stop = new AbortController();
+    req.on('close', () => stop.abort());
+    const release = presence.hold(req.participant!.id, 'waiting');
+    try {
+      res.json(await store.waitForMentions(req.participant!, seconds * 1000, stop.signal));
+    } finally {
+      release();
+    }
   });
   api.post('/inbox/seen', (req, res) => {
     const upTo = optionalInt(req.body?.up_to_id);

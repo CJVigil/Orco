@@ -111,6 +111,18 @@ describe('client registration', () => {
     assert.equal(oauthCode(() => register({ redirect_uris: [] })), 'invalid_redirect_uri');
   });
 
+  it('only accepts listed hosts when ORCO_OAUTH_REDIRECT_HOSTS is set', () => {
+    process.env.ORCO_OAUTH_REDIRECT_HOSTS = 'claude.ai, *.example.org';
+    try {
+      assert.ok(register({ redirect_uris: ['https://claude.ai/api/mcp/auth_callback'] }).client_id);
+      assert.ok(register({ redirect_uris: ['https://apps.example.org/cb'] }).client_id);
+      assert.ok(register({ redirect_uris: ['http://localhost:9999/cb'] }).client_id, 'loopback is always allowed');
+      assert.equal(oauthCode(() => register({ redirect_uris: ['https://claude.ai.evil.example/cb'] })), 'invalid_redirect_uri');
+    } finally {
+      delete process.env.ORCO_OAUTH_REDIRECT_HOSTS;
+    }
+  });
+
   it('gives confidential clients a secret and requires it at the token endpoint', () => {
     const client = register({ token_endpoint_auth_method: 'client_secret_post' });
     assert.ok(client.client_secret?.startsWith('orco_cs_'));

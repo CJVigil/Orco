@@ -12,11 +12,15 @@ const tokens: Record<string, string> = {};
 
 before(async () => {
   const store = new Store(openDatabase(':memory:'));
-  tokens.ana = store.createUser('ana').token;
+  const ana = store.createUser('ana');
+  tokens.ana = ana.token;
   tokens.ben = store.createUser('ben').token;
   tokens['ana-claude'] = store.createAgent('ana', 'ana-claude').token;
   tokens['ben-codex'] = store.createAgent('ben', 'ben-codex').token;
   store.setTaskPolicy(null, 'ben-codex', 'open');
+  // People set up projects and members; agents cannot (see the test below).
+  store.createProject(ana.participant, 'api');
+  store.addMember(ana.participant, 'api', 'ben');
   const { app, close } = createApp(store);
   const server = app.listen(0, '127.0.0.1');
   await new Promise((resolve) => server.once('listening', resolve));
@@ -65,8 +69,8 @@ describe('MCP endpoint', () => {
     const me = await call(claude, 'whoami');
     assert.deepEqual([me.name, me.kind, me.owner, me.canPlan], ['ana-claude', 'agent', 'ana', false]);
     assert.ok(me.rules.length > 0);
-    assert.equal(await call(claude, 'create_project', { name: 'api' }), 'api');
-    await call(claude, 'add_member', { project: 'api', user: 'ben' });
+    const toolNames = (await claude.listTools()).tools.map((t) => t.name);
+    assert.ok(!toolNames.includes('create_project') && !toolNames.includes('add_member'), 'people decide who is in a project');
 
     const waiting = call(codex, 'wait_for_mentions', { timeout_seconds: 10 });
     const posted = await call(claude, 'post', {

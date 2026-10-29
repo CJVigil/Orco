@@ -1335,6 +1335,7 @@ export function createTickets(ctx) {
     const hookRoom = el('select', { 'aria-label': 'Room' }, projectRooms.map((r) => el('option', { value: r.ref, text: `#${r.name}`, selected: r.name === 'general' })));
     const hookAgent = el('select', { 'aria-label': 'Agent to wake' }, el('option', { value: '', text: 'Wake nobody' }), agents.map((a) => el('option', { value: a.name, text: `Wake ${a.name}` })));
     const hookMatch = el('input', { placeholder: 'Optional, like failure', maxlength: '100', 'aria-label': 'Wake only on matching text' });
+    const hookConfirm = el('input', { type: 'checkbox', checked: true });
     const hookForm = el(
       'form',
       {
@@ -1342,7 +1343,7 @@ export function createTickets(ctx) {
         onsubmit: async (event) => {
           event.preventDefault();
           try {
-            const created = await api('/hooks', { method: 'POST', body: { room: hookRoom.value, name: hookName.value, wakeAgent: hookAgent.value || null, wakeMatch: hookMatch.value } });
+            const created = await api('/hooks', { method: 'POST', body: { room: hookRoom.value, name: hookName.value, wakeAgent: hookAgent.value || null, wakeMatch: hookMatch.value, confirmTasks: hookConfirm.checked } });
             await load();
             const url = `${location.origin}${created.path}`;
             const box = root.querySelector('.hook-reveal');
@@ -1363,6 +1364,12 @@ export function createTickets(ctx) {
         el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Wake an agent' }), hookAgent),
         el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Only when it mentions' }), hookMatch),
       ),
+      el(
+        'label',
+        { class: 'check small', title: 'Payloads come from outside Orco. Without this, a payload can set the agent to work on its own.' },
+        hookConfirm,
+        'Ask me before the agent starts',
+      ),
       el('div', { class: 'row-end' }, el('button', { class: 'primary small', type: 'submit', text: 'Create webhook' })),
     );
     const hookRows = hooks.map((h) =>
@@ -1370,7 +1377,7 @@ export function createTickets(ctx) {
         'div',
         { class: 'file-row' },
         el('strong', { text: h.name }),
-        el('span', { class: 'muted small', text: `#${h.room.split('/').pop()}${h.wakeAgent ? ` · wakes ${h.wakeAgent}${h.wakeMatch ? ` on “${h.wakeMatch}”` : ''}` : ''} · ${h.deliveries} deliveries${h.lastAt ? `, last ${ago(h.lastAt)}` : ''}` }),
+        el('span', { class: 'muted small', text: `#${h.room.split('/').pop()}${h.wakeAgent ? ` · wakes ${h.wakeAgent}${h.wakeMatch ? ` on “${h.wakeMatch}”` : ''}${h.confirmTasks ? ' after you approve' : ''}` : ''} · ${h.deliveries} deliveries${h.lastAt ? `, last ${ago(h.lastAt)}` : ''}` }),
         el('span', { class: 'spacer' }),
         el('button', { class: 'ghost small danger', type: 'button', text: 'Remove', onclick: () => confirm(`Remove the ${h.name} webhook? Its URL stops working.`) && void act(() => api(`/hooks/${h.id}`, { method: 'DELETE' })) }),
       ),

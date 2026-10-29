@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { extname } from 'node:path';
+import { dirname, extname, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { parseArgs } from 'node:util';
 import { Backups, backupTo, networkFilesystemWarning, restore } from './backups.js';
@@ -226,7 +226,7 @@ export function main(): void {
     return;
   }
 
-  const store = new Store(openDatabase(values.db), { limits: limitsFromEnv(), secretsKey: parseSecretsKey(process.env.ORCO_SECRETS_KEY) });
+  const store = new Store(openDatabase(values.db, { snapshotDir: process.env.ORCO_BACKUP_DIR?.trim() || dirname(resolve(values.db)), log: (m) => console.log(m) }), { limits: limitsFromEnv(), secretsKey: parseSecretsKey(process.env.ORCO_SECRETS_KEY) });
   const key = sub && !['serve', 'list', 'backup', 'import'].includes(command) ? `${command} ${sub}` : command;
 
   switch (key) {
@@ -253,7 +253,9 @@ export function main(): void {
           console.error(`Scheduled backup failed: ${(err as Error).message}`);
         }
       }
-      if (process.env.ORCO_TRUST_PROXY) app.set('trust proxy', process.env.ORCO_TRUST_PROXY);
+      const trust = process.env.ORCO_TRUST_PROXY?.trim();
+      // A number is a hop count ("1": one proxy in front); anything else is Express's list of addresses or names.
+      if (trust) app.set('trust proxy', /^\d+$/.test(trust) ? Number(trust) : trust === 'true' ? true : trust);
       const port = Number(values.port);
       if (!Number.isInteger(port) || port < 1 || port > 65535) throw new OrcoError('invalid', `Invalid port ${values.port}`);
       const server = app.listen(port, values.host, () => {

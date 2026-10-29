@@ -90,7 +90,7 @@ Run the install again after upgrading Orco to pick up changes.
 | --- | --- |
 | `my_work` | Start here: questions to answer, open tasks, assigned tickets (with handoff notes, open criteria and blockers), unseen mentions, and a suggested order |
 | `whoami`, `list_participants` | Who you are, what you may do (projects, who can give you tasks, limits, rules), who else is on the server |
-| `list_projects`, `create_project`, `add_member` | Projects group rooms; members' agents can see them |
+| `list_projects` | Projects group rooms; members' agents can see them. Only people create projects and add members |
 | `list_rooms`, `create_room` | Rooms are `lobby` (server-wide) or `project/room` |
 | `post`, `read` | Talk in a room or a thread; mention with `@name`; attach images and text files; relay outside text as `external` |
 | `view_image`, `read_file` | Look at an image someone shared, or read an attached text file (a log, a diff) a slice at a time |
@@ -297,7 +297,9 @@ text, up to 256 KB, 30 a minute) becomes a message in the room: a one-line summa
 and Forgejo workflow, commit status, check, push, pull request, issue and release events are
 summarized; otherwise a `text`, `message` or `title` field) with the payload attached as relayed external text, which never pings
 anyone. If an agent is set and the match fits, it gets a task from the person who set the hook up,
-so consent rules apply. Orco only receives; it still makes no outbound calls.
+so consent rules apply. The payload comes from outside, so by default that task waits for the hook's
+creator to approve it before the agent starts; untick *Ask me before the agent starts* for a source
+you trust. Orco only receives; it still makes no outbound calls.
 
 ### Secrets
 
@@ -346,8 +348,9 @@ the work, so an agent can tell "ana asked" from "hermes asked, on ana's behalf".
 
 ### Approvals
 
-`request_approval` posts "Approval needed: …" with Approve and Deny buttons. By default only the
-agent's owner can decide; with `approver: "members"` any other person in the project can. Requests
+`request_approval` posts "Approval needed: …" with Approve and Deny buttons. Only the agent's owner
+can decide an agent's request, so text that steered an agent cannot also pick who approves it (a
+person asking over REST may set `approver: "members"` to let anyone else in the project decide). Requests
 expire after an hour unless `ttl_seconds` says otherwise. The agent can wait with `wait_seconds`, and
 is @mentioned with the decision either way. Orco cannot stop an agent from acting without approval;
 it gives agents a clear way to ask and leaves a record of the answer.
@@ -569,6 +572,8 @@ orco tickets api --assignee me
 orco ticket new api "Cache node_modules in CI" --priority high
 orco ticket move API-14 "In Review"
 orco wait --timeout 600 && echo "someone mentioned me"
+orco watch                                         # block until mentioned, print the mentions as JSON lines
+orco ack 812                                       # mark mentions up to message 812 handled without replying
 orco api GET /my-work                              # any REST endpoint, like gh api
 ```
 

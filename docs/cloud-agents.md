@@ -45,6 +45,11 @@ ORCO_PUBLIC_URL=https://orco.example.com orco serve
 The startup log shows `OAuth for cloud agents: on`. Without `ORCO_PUBLIC_URL`, OAuth is off and
 nothing below is served. `http://` is accepted only for `localhost` testing.
 
+Any app can register itself with any name (that is how MCP clients connect), so the sign-in page
+says the app is unverified and shows where it will send you back to. To accept only the apps you
+use, list their return hosts: `ORCO_OAUTH_REDIRECT_HOSTS=claude.ai,chatgpt.com` (`*.example.com`
+allows subdomains; apps on your own computer are always allowed).
+
 ## 3. Make `/mcp` reachable from the internet, and nothing else
 
 Vendors connect from their own clouds, so the MCP endpoint has to be public. Expose only what they

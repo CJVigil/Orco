@@ -129,8 +129,9 @@ describe('action approvals', () => {
     assert.equal(answer!.text, '@ana-claude Approved by ana.\nGo, I am watching');
   });
 
-  it('lets other members decide in members mode, but not the requester\'s owner', async () => {
-    const approval = store.approvals.request(anaClaude, { room: 'api/general', summary: 'merge #42', approver: 'members' });
+  it('sends an agent\'s requests to its owner only, while people can ask any member', async () => {
+    assert.equal(code(() => store.approvals.request(anaClaude, { room: 'api/general', summary: 'merge #42', approver: 'members' })), 'forbidden');
+    const approval = store.approvals.request(ana, { room: 'api/general', summary: 'merge #42', approver: 'members' });
     assert.equal(code(() => store.approvals.decide(ana, approval.id, 'approved')), 'forbidden');
     assert.equal(store.approvals.decide(cara, approval.id, 'denied').state, 'denied');
   });

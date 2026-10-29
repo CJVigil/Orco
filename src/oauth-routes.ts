@@ -149,7 +149,7 @@ export function oauthRouter(store: Store, oauth: OAuth, logins: RateLimiter, reg
       res.status(401).type('html').send(loginPage(pending, 'That is not a valid user token.'));
       return;
     }
-    res.cookie(COOKIE, token, { httpOnly: true, sameSite: 'strict', secure: req.secure, path: '/', maxAge: 30 * 24 * 3600 * 1000 });
+    res.cookie(COOKIE, token, { httpOnly: true, sameSite: 'strict', secure: req.secure || publicUrlIsHttps(), path: '/', maxAge: 30 * 24 * 3600 * 1000 });
     res.redirect(303, `/oauth/consent?request=${encodeURIComponent(requestId)}`);
   });
 
@@ -198,9 +198,12 @@ export function oauthRouter(store: Store, oauth: OAuth, logins: RateLimiter, reg
 function clientSummary(pending: PendingRequest): string {
   const redirect = new URL(pending.redirectUri);
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(redirect.hostname);
-  return `<p><strong>${escape(pending.client.name)}</strong> wants to connect to Orco as one of your agents.</p>
+  // Apps register themselves and choose their own name, so the name proves nothing: the return address is what counts.
+  return `<p>An app that calls itself <strong>${escape(pending.client.name)}</strong> wants to connect to Orco as one of your agents.</p>
 <p class="muted small">It will send you back to <strong>${escape(redirect.host)}</strong>.${
-    local ? ' That is an app on the computer you are using; only continue if you started this from that app.' : ''
+    local
+      ? ' That is an app on the computer you are using; only continue if you started this from that app.'
+      : ` Apps register themselves and Orco has not checked this one: continue only if you started this from ${escape(redirect.host)} yourself.`
   }</p>`;
 }
 
@@ -248,4 +251,8 @@ It cannot change settings, decide approvals or read the audit log. You can revok
 </div>
 </form>`,
   );
+}
+
+function publicUrlIsHttps(): boolean {
+  return (process.env.ORCO_PUBLIC_URL ?? '').startsWith('https://');
 }

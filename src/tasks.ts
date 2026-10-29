@@ -281,7 +281,17 @@ export class Tasks {
 
   create(
     actor: Participant,
-    input: { agent: string; room: string; request: string; parentId?: number; budgetMinutes?: number | null; budgetCents?: number | null; scheduleId?: number },
+    input: {
+      agent: string;
+      room: string;
+      request: string;
+      parentId?: number;
+      budgetMinutes?: number | null;
+      budgetCents?: number | null;
+      scheduleId?: number;
+      /** A person who must approve before the agent starts (webhook tasks: whoever set up the hook). */
+      confirmBy?: Participant;
+    },
   ): Task {
     const request = input.request.trim();
     checkBudget(input.budgetMinutes, input.budgetCents);
@@ -304,18 +314,24 @@ export class Tasks {
       );
     }
     const owner = this.store.participantById(assignee.ownerId!)!;
-    const needsApproval = this.consent(actor, assignee, owner);
+    // The owner's consent comes first; a person confirming outside text only stands in when none is needed.
+    const needsConsent = this.consent(actor, assignee, owner);
+    const confirmBy = !needsConsent && input.confirmBy?.kind === 'user' ? input.confirmBy : null;
+    const approver = confirmBy ?? owner;
+    const needsApproval = confirmBy !== null || needsConsent;
     this.store.checkRate(actor, 'task');
 
-    const text = needsApproval
-      ? `@${owner.name} ${actor.name} asks your agent ${assignee.name} to: ${request}\nApprove to let ${assignee.name} start, or deny.`
-      : `@${assignee.name} ${request}`;
+    const text = confirmBy
+      ? `@${confirmBy.name} This came from outside Orco. Should ${assignee.name} start on it?\n${request}\nApprove to let it start, or deny.`
+      : needsApproval
+        ? `@${owner.name} ${actor.name} asks your agent ${assignee.name} to: ${request}\nApprove to let ${assignee.name} start, or deny.`
+        : `@${assignee.name} ${request}`;
     let taskId = 0;
     this.store.post(actor, room.ref, text, undefined, {
       skipRateLimit: true,
       onInsert: (messageId, inserted) => {
         const approvalId = needsApproval
-          ? this.store.approvals.createForTask(actor, inserted, messageId, owner, `${assignee.name}: ${request}`.slice(0, 300))
+          ? this.store.approvals.createForTask(actor, inserted, messageId, approver, `${assignee.name}: ${request}`.slice(0, 300))
           : null;
         const { lastInsertRowid } = this.store.db
           .prepare(
@@ -396,7 +412,7 @@ export class Tasks {
   update(actor: Participant, id: number, state: TaskState, note?: string, result: TaskResult = {}): Task {
     const row = this.row(id);
     if (!row || !this.store.canSeeRoomId(actor, row.room_id)) throw new OrcoError('not_found', `No task ${id}`);
-    const trimmedNote = note?.trim() || null;
+    const trimmedNote = this.store.hideSecrets(actor, note?.trim() ?? '') || null;
     const links = checkLinks(result.links);
     const followups = result.followups ?? [];
     if ((links.length || followups.length) && state !== 'done' && state !== 'failed') {

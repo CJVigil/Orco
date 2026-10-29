@@ -177,6 +177,21 @@ describe('task runs', () => {
     assert.throws(() => store.runs.scorecard(ben, 'ana-bot'), (e: OrcoError) => e.code === 'not_found');
   });
 
+  it('limits how fast and how much one agent can store', () => {
+    clock += 61_000; // past earlier tests' reports
+    const t = task('chatty');
+    const report = () => store.runs.record(bot, t.id, { mode: 'reminder', startedAt: new Date(clock).toISOString(), seconds: 1, outcome: 'code 0', log: 'x' });
+    for (let i = 0; i < 20; i++) report();
+    assert.throws(report, (e: OrcoError) => e.code === 'rate_limited');
+    clock += 61_000;
+    report();
+    const runs = store.runs.list(ana, t.id);
+    assert.equal(runs.length, 21);
+    assert.equal(runs.filter((r) => r.logBytes > 0).length, 20, 'only the newest runs keep their logs');
+    assert.equal(runs[0]!.logBytes, 0);
+    clock += 61_000; // leave the rate window clear for the bridge tests
+  });
+
   it('caps logs at the head and the tail', () => {
     const { text, cut } = capLog(`START\n${'x'.repeat(600_000)}\nEND`);
     assert.ok(cut && text.startsWith('START') && text.endsWith('END') && Buffer.byteLength(text) < 270_000);

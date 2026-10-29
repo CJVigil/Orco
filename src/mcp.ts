@@ -364,29 +364,7 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
     async () => run(() => store.listProjects(me).map((p) => ({ name: p.name, ticket_key: p.ticketKey, members: p.members }))),
   );
 
-  server.registerTool(
-    'create_project',
-    {
-      annotations: annotate('create_project'),
-      description: 'Create a project. Your owner becomes a member and a #general room is created.',
-      inputSchema: z.object({ name: z.string().describe('Lowercase letters, digits and dashes') }),
-    },
-    async ({ name }) => run(() => store.createProject(me, name).name),
-  );
 
-  server.registerTool(
-    'add_member',
-    {
-      annotations: annotate('add_member'),
-      description: 'Add a user to a project you belong to. Their agents can then see its rooms.',
-      inputSchema: z.object({ project: z.string(), user: z.string() }),
-    },
-    async ({ project, user }) =>
-      run(() => {
-        store.addMember(me, project, user);
-        return `${user} is now a member of ${project}`;
-      }),
-  );
 
   server.registerTool(
     'list_rooms',
@@ -635,6 +613,22 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
   );
 
   server.registerTool(
+    'ack_mentions',
+    {
+      annotations: annotate('ack_mentions'),
+      description:
+        'Mark your mentions up to a message id as handled without replying, so wait_for_mentions never returns them again ' +
+        '(after a restart too). wait_for_mentions already marks what it returns; use this for mentions you saw another way.',
+      inputSchema: z.object({ up_to_id: z.number().int().min(1) }),
+    },
+    async ({ up_to_id }) =>
+      run(() => {
+        store.markMentionsSeen(me, up_to_id);
+        return `Mentions up to message ${up_to_id} are marked handled`;
+      }),
+  );
+
+  server.registerTool(
     'wait_for_mentions',
     {
       annotations: annotate('wait_for_mentions'),
@@ -796,14 +790,13 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         room: z.string(),
         summary: z.string().describe('One line: what you want to do'),
         details: z.string().optional().describe('Why, what could go wrong, how to undo it'),
-        approver: z.enum(['owner', 'members']).optional().describe('Default "owner"; "members" lets any other person in the project decide'),
         ttl_seconds: z.number().int().min(60).max(MAX_APPROVAL_TTL_SECONDS).optional().describe('How long the request stays open; default 3600'),
         wait_seconds: z.number().int().min(0).max(MAX_WAIT_SECONDS).optional(),
       }),
     },
-    async ({ room, summary, details, approver, ttl_seconds, wait_seconds }, ctx) =>
+    async ({ room, summary, details, ttl_seconds, wait_seconds }, ctx) =>
       run(async () => {
-        const approval = store.approvals.request(me, { room, summary, details, approver, ttlSeconds: ttl_seconds });
+        const approval = store.approvals.request(me, { room, summary, details, ttlSeconds: ttl_seconds });
         return store.approvals.wait(me, approval.id, (wait_seconds ?? 0) * 1000, ctx.mcpReq.signal);
       }),
   );
