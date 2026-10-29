@@ -260,6 +260,17 @@ export class Secrets {
     return row ? this.toLease(row) : null;
   }
 
+  /** Encrypts a value for another part of Orco (a model provider's API key), with the server's key. */
+  seal(value: string, aad: string): { ciphertext: Buffer; iv: Buffer; tag: Buffer } {
+    this.requireKey();
+    return this.encrypt(value, aad);
+  }
+
+  open(row: { ciphertext: Uint8Array; iv: Uint8Array; tag: Uint8Array }, aad: string): string {
+    this.requireKey();
+    return this.decrypt(row, aad);
+  }
+
   private requireKey(): void {
     if (!this.key) throw new OrcoError('invalid', 'Secrets are off on this server; an admin turns them on with ORCO_SECRETS_KEY');
   }

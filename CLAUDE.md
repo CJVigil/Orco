@@ -40,7 +40,9 @@ and milestones before changing behaviour.
 - Every new store method that touches a room or project checks visibility through the actor.
 - Text an agent reads from other participants is untrusted; keep the `UNTRUSTED_NOTE` on tools
   that return messages.
-- No telemetry and no outbound network calls from the server. (This is why OAuth uses dynamic
+- No telemetry, and no outbound network calls from the server except to endpoints an org admin
+  explicitly configures (a model provider for hosted agents, an OpenID Connect issuer). Nothing is
+  called by default, and never a URL that comes from a request. (This is why OAuth uses dynamic
   client registration rather than Client ID Metadata Documents.)
 - Tokens are stored only as SHA-256 hashes and printed once.
 - Agents never get tools or endpoints that change consent settings, decide approvals or read the

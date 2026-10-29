@@ -329,10 +329,71 @@ export function createPortfolio(ctx) {
   async function controls() {
     const admin = isAdmin();
     const administered = admin ? projects().map((pr) => pr.name) : adminOf();
-    const [state, agents, groups, setup] = await Promise.all([api('/controls'), api('/agents'), admin ? api('/groups') : Promise.resolve([]), admin ? api('/setup') : Promise.resolve({})]);
+    const [state, agents, groups, setup, models] = await Promise.all([api('/controls'), api('/agents'), admin ? api('/groups') : Promise.resolve([]), admin ? api('/setup') : Promise.resolve({}), admin ? api('/models') : Promise.resolve(null)]);
     if (!p.policyProject && administered[0] && !admin) p.policyProject = administered[0];
     const policy = p.policyProject || admin ? await api(`/policy${p.policyProject ? `?project=${encodeURIComponent(p.policyProject)}` : ''}`) : null;
-    return [pausesCard(state.pauses, administered, agents), budgetsCard(state.budgets, administered, agents), admin ? peopleCard(setup.proxy) : null, policy ? policyCard(policy, administered) : null, admin ? groupsCard(groups) : null];
+    return [pausesCard(state.pauses, administered, agents), budgetsCard(state.budgets, administered, agents), admin ? peopleCard(setup.proxy) : null, admin ? modelsCard(models) : null, policy ? policyCard(policy, administered) : null, admin ? groupsCard(groups) : null];
+  }
+
+  /**
+   * AI models for agents that run on Orco: an OpenAI-compatible API, its key (stored encrypted) and
+   * prices. These addresses are the only places the server calls out to.
+   */
+  function modelsCard(models) {
+    const field = (placeholder, label, props = {}) => el('input', { placeholder, 'aria-label': label, ...props });
+    const name = field('Name, like openai', 'Provider name');
+    const url = field('API address, like https://api.openai.com/v1', 'API address');
+    const model = field('Model, like gpt-4o-mini', 'Model');
+    const key = field('API key', 'API key', { type: 'password', autocomplete: 'off' });
+    const priceIn = field('$ per 1M input tokens', 'Input price', { inputmode: 'decimal' });
+    const priceOut = field('$ per 1M output tokens', 'Output price', { inputmode: 'decimal' });
+    const shared = el('input', { type: 'checkbox', checked: true });
+    const save = () =>
+      void act(() =>
+        api('/models', {
+          method: 'POST',
+          body: { name: name.value.trim(), base_url: url.value.trim(), model: model.value.trim(), api_key: key.value, price_in: priceIn.value.trim(), price_out: priceOut.value.trim(), shared: shared.checked },
+        }),
+      );
+    return el(
+      'section',
+      { class: 'plan-card' },
+      el('h3', { text: 'AI models' }),
+      el('p', {
+        class: 'small muted',
+        text: 'For agents that run on Orco, made by people in the browser: any OpenAI-compatible API (OpenAI, OpenRouter, Ollama, vLLM, LM Studio). Keys are stored encrypted. Orco calls only these addresses.',
+      }),
+      models?.secrets
+        ? null
+        : el('p', { class: 'small warn-text', text: 'Turn on ORCO_SECRETS_KEY on the server first: model keys are stored encrypted with it.' }),
+      models?.providers?.length
+        ? el(
+            'ul',
+            { class: 'pf-list' },
+            models.providers.map((m) =>
+              el(
+                'li',
+                {},
+                el('strong', { text: m.name }),
+                el('span', { class: 'muted small', text: ` ${m.model} at ${m.baseUrl}${m.hasKey ? '' : ' · no key'}${m.shared ? ' · everyone' : ' · org admins only'}` }),
+                el('span', { class: 'spacer' }),
+                el('button', { class: 'ghost small', type: 'button', text: 'Remove', onclick: () => confirm(`Remove ${m.name}?`) && void act(() => api(`/models/${encodeURIComponent(m.name)}`, { method: 'DELETE', body: {} })) }),
+              ),
+            ),
+          )
+        : el('p', { class: 'small', text: 'No models yet.' }),
+      models?.secrets
+        ? el(
+            'div',
+            { class: 'pf-stack' },
+            el('div', { class: 'pf-row' }, name, model),
+            el('div', { class: 'pf-row' }, url),
+            el('div', { class: 'pf-row' }, key, priceIn, priceOut),
+            el('label', { class: 'check small' }, shared, 'Everyone may make agents on it (otherwise org admins only)'),
+            el('div', { class: 'row-end' }, el('button', { class: 'small', type: 'button', text: 'Save model', onclick: save })),
+          )
+        : null,
+    );
   }
 
   /** Org admins invite people with a sign-in link, or by their email when Orco sits behind a sign-in proxy. */

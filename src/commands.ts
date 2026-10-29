@@ -1,3 +1,4 @@
+import { HostedRunner } from './hosted-runner.js';
 import { normalizeIdentity } from './identities.js';
 import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
@@ -348,7 +349,12 @@ export function main(): void {
           console.log(`  ${base}/#setup=${setupCode}`);
           console.log('  (or run: orco user add <your-name>)');
         }
+        // Agents that run on Orco itself: they reach this server over loopback, like any bridge.
+        const local = values.host === '0.0.0.0' || !values.host ? '127.0.0.1' : values.host === '::' ? '[::1]' : values.host.includes(':') ? `[${values.host}]` : values.host;
+        hosted = new HostedRunner(store, `http://${local}:${port}`, { info: (m) => console.log(`${new Date().toISOString()} ${m}`), error: (m) => console.error(`${new Date().toISOString()} ${m}`) });
+        hosted.start().catch((err: Error) => console.error(`Hosted agents did not start: ${err.message}`));
       });
+      let hosted: HostedRunner | null = null;
       server.on('error', (err) => {
         console.error(`Could not listen on ${values.host}:${port}: ${err.message}`);
         process.exit(1);
@@ -356,6 +362,7 @@ export function main(): void {
       const shutdown = (signal: string) => {
         console.log(`${signal} received, shutting down`);
         if (backupTimer) clearInterval(backupTimer);
+        void hosted?.stop();
         server.close();
         server.closeAllConnections();
         void close().finally(() => {

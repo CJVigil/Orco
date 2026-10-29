@@ -43,7 +43,7 @@ const GLOSSARY = [
 ];
 
 export function createGuide(ctx) {
-  const { api, el, $, me, room, openPanel, panel, loadStructure, newProject, showMyAgents } = ctx;
+  const { api, el, $, me, room, projects, openPanel, panel, loadStructure, newProject, showMyAgents } = ctx;
   const origin = location.origin;
 
   /** The one command that joins a computer: through npx when this server hands out Orco, so nothing needs installing. */
@@ -292,12 +292,178 @@ export function createGuide(ctx) {
   }
 
   /** Make an agent, then show how to connect it. */
-  function addAgent() {
+  /** Add an agent: one that runs on Orco (no setup at all), or one on your own computer. */
+  async function addAgent() {
+    const models = await api('/models').catch(() => ({ providers: [], templates: {}, secrets: false }));
+    const ready = models.secrets && models.providers.length > 0;
+    const dialog = modal(
+      'Add an agent',
+      el('p', { class: 'small muted', text: 'An agent is an AI helper you own. Where should it run?' }),
+      el(
+        'div',
+        { class: 'choice-cards' },
+        el(
+          'button',
+          {
+            class: 'choice-card',
+            type: 'button',
+            disabled: ready ? null : true,
+            onclick: () => {
+              dialog.close();
+              addHostedAgent(models);
+            },
+          },
+          el('strong', { text: 'On Orco' }),
+          el('span', { class: 'small muted', text: 'Nothing to install. It answers questions, writes summaries, drafts replies or keeps tickets tidy, using Orco only: no shell, no files on any computer.' }),
+          ready ? null : el('span', { class: 'small warn-text', text: 'An org admin sets up an AI model first (Portfolio → Controls → AI models).' }),
+        ),
+        el(
+          'button',
+          {
+            class: 'choice-card',
+            type: 'button',
+            onclick: () => {
+              dialog.close();
+              addComputerAgent();
+            },
+          },
+          el('strong', { text: 'On my computer' }),
+          el('span', { class: 'small muted', text: 'Claude Code, Codex and other tools that work in your code. You run one command there to connect it.' }),
+        ),
+      ),
+    );
+  }
+
+  /** An agent that runs on Orco: a model, what it does, where it works, who may ask it, and a budget. */
+  function addHostedAgent(models) {
+    const here = room()?.project;
+    const name = el('input', { required: true, value: `${me().name}-helper`, pattern: '[a-z0-9][a-z0-9\\-]{0,31}', 'aria-label': 'Agent name' });
+    const model = el('select', { 'aria-label': 'AI model' }, models.providers.map((p) => el('option', { value: p.name, text: `${p.name} (${p.model})` })));
+    const templates = Object.entries(models.templates).map(([key, t], i) =>
+      el(
+        'label',
+        { class: 'template-option' },
+        el('input', { type: 'radio', name: 'hosted-template', value: key, checked: i === 0 ? true : null }),
+        el('span', {}, el('strong', { text: t.title }), el('span', { class: 'small muted', text: ` ${t.description}` })),
+      ),
+    );
+    const mine = projects().filter((p) => p.role !== 'viewer');
+    const projectBoxes = mine.map((p) =>
+      el('label', { class: 'check small' }, el('input', { type: 'checkbox', value: p.name, checked: p.name === here ? true : null }), p.name),
+    );
+    const policy = el(
+      'select',
+      { 'aria-label': 'Who may give it tasks' },
+      el('option', { value: 'ask', text: 'Anyone, but I approve each request from others' }),
+      el('option', { value: 'owner_only', text: 'Only me (and my agents)' }),
+      el('option', { value: 'open', text: 'Anyone in its projects, without asking' }),
+    );
+    const budget = el('input', { inputmode: 'decimal', value: '5', 'aria-label': 'Monthly budget in dollars' });
+    const instructions = el('textarea', { rows: '3', placeholder: 'Anything it should always do or know (optional), like “Answer in Spanish” or “Our API docs are in docs/api.md”.' });
+    const problem = error();
+    const dialog = modal(
+      'An agent on Orco',
+      el(
+        'form',
+        {
+          class: 'guide-form',
+          onsubmit: async (event) => {
+            event.preventDefault();
+            const dollars = budget.value.trim() ? Number(budget.value.replace(/[$,\s]/g, '')) : null;
+            if (dollars !== null && !(dollars >= 1)) return showError(problem, new Error('A monthly budget is at least $1 (or leave it empty for none)'));
+            try {
+              const made = await api('/agents', {
+                method: 'POST',
+                body: {
+                  name: name.value.trim(),
+                  hosted: {
+                    model: model.value,
+                    template: dialog.querySelector('input[name="hosted-template"]:checked')?.value,
+                    projects: projectBoxes.map((b) => b.querySelector('input')).filter((i) => i.checked).map((i) => i.value),
+                    policy: policy.value,
+                    budget_cents: dollars === null ? null : Math.round(dollars * 100),
+                    instructions: instructions.value,
+                  },
+                },
+              });
+              dialog.close();
+              void loadStructure();
+              if (panel() === 'agents') void showMyAgents();
+              ctx.onChange?.();
+              tryAgent(made.name, true);
+            } catch (err) {
+              showError(problem, err);
+            }
+          },
+        },
+        el('label', { text: 'Name' }),
+        name,
+        el('label', { text: 'AI model' }),
+        model,
+        el('label', { text: 'What it does' }),
+        el('div', { class: 'template-options' }, templates),
+        el('label', { text: 'Where it works' }),
+        mine.length ? el('div', { class: 'project-checks' }, projectBoxes) : el('p', { class: 'small muted', text: 'You are in no projects yet; it will work in the ones you join.' }),
+        el('p', { class: 'small muted', text: 'Leave all unticked for every project you are in.' }),
+        el('label', { text: 'Who may give it tasks' }),
+        policy,
+        el('label', { text: 'Monthly budget ($)' }),
+        budget,
+        el('p', { class: 'small muted', text: 'Past it, new tasks wait for your approval.' }),
+        el('label', { text: 'Instructions' }),
+        instructions,
+        problem,
+        el('div', { class: 'row-end' }, el('button', { class: 'primary', type: 'submit', text: 'Make agent' })),
+      ),
+    );
+    name.select();
+  }
+
+  /** Send a hosted agent a test message and show its reply. */
+  function tryAgent(name, justMade = false) {
+    const message = el('input', { value: 'Hi! In one sentence, what can you help me with?', 'aria-label': 'Message' });
+    const reply = el('div', { class: 'try-reply small', hidden: true });
+    const problem = error();
+    const send = el('button', { class: 'primary', type: 'submit', text: 'Send' });
+    modal(
+      justMade ? `${name} is running on Orco` : `Try ${name}`,
+      justMade ? el('p', { class: 'small', text: 'Say hello to check it works. Then ask it for something real with Ask an agent in a room.' }) : null,
+      el(
+        'form',
+        {
+          class: 'guide-form',
+          onsubmit: async (event) => {
+            event.preventDefault();
+            send.disabled = true;
+            send.textContent = 'Waiting…';
+            problem.hidden = true;
+            try {
+              const answer = await api(`/agents/${encodeURIComponent(name)}/try`, { method: 'POST', body: { message: message.value } });
+              reply.replaceChildren(el('strong', { text: `${name}: ` }), answer.reply || '(no answer)');
+              reply.hidden = false;
+            } catch (err) {
+              showError(problem, err);
+            } finally {
+              send.disabled = false;
+              send.textContent = 'Send';
+            }
+          },
+        },
+        message,
+        reply,
+        problem,
+        el('p', { class: 'small muted', text: 'A quick test: it answers without tools and without seeing your projects.' }),
+        el('div', { class: 'row-end' }, send),
+      ),
+    );
+  }
+
+  function addComputerAgent() {
     const name = el('input', { required: true, value: `${me().name}-claude`, pattern: '[a-z0-9][a-z0-9\\-]{0,31}', 'aria-label': 'Agent name' });
     const problem = error();
     const dialog = modal(
-      'Add an agent',
-      el('p', { class: 'small muted', text: 'An agent is an AI helper you own, like Claude Code or Codex. Name it after you and the tool, so people know whose it is.' }),
+      'An agent on my computer',
+      el('p', { class: 'small muted', text: 'Like Claude Code or Codex. Name it after you and the tool, so people know whose it is.' }),
       el(
         'form',
         {
@@ -636,5 +802,5 @@ export function createGuide(ctx) {
     );
   }
 
-  return { stepsDismissed: dismissed, signInLink, showOtherDevice, showWelcome, copyBlock, showSetup, addAgent, showConnect, connectComputer, askAgent, refreshSteps, showSteps, showHelp };
+  return { tryAgent, stepsDismissed: dismissed, signInLink, showOtherDevice, showWelcome, copyBlock, showSetup, addAgent, showConnect, connectComputer, askAgent, refreshSteps, showSteps, showHelp };
 }

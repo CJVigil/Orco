@@ -879,8 +879,8 @@ async function showMyAgents() {
           avatar(agent.name, 'agent'),
           el('strong', { text: agent.name }),
           el('span', { class: 'spacer' }),
-          el('button', { class: 'ghost small', type: 'button', text: 'Connect…', title: `Ways to connect ${agent.name}`, onclick: () => guide.showConnect(agent.name) }),
-          el('button', {
+          agent.hosted ? null : el('button', { class: 'ghost small', type: 'button', text: 'Connect…', title: `Ways to connect ${agent.name}`, onclick: () => guide.showConnect(agent.name) }),
+          agent.hosted ? null : el('button', {
             class: 'ghost small',
             type: 'button',
             text: 'New token',
@@ -896,6 +896,13 @@ async function showMyAgents() {
             },
           }),
         ),
+        agent.hosted
+          ? el('p', {
+              class: 'small muted',
+              text: `Runs on Orco · ${agent.hosted.provider} · ${HOSTED_TEMPLATES[agent.hosted.template] ?? agent.hosted.template} · ${agent.hosted.projects.length ? agent.hosted.projects.join(', ') : 'all your projects'}${agent.paused ? ' · paused' : ''}`,
+            })
+          : null,
+        agent.hosted ? el('div', { class: 'panel-actions inline' }, hostedButtons(agent)) : null,
         scorecard(agent.scorecard30d, spend),
         el(
           'details',
@@ -951,6 +958,36 @@ async function showMyAgents() {
       );
     }),
   );
+}
+
+const HOSTED_TEMPLATES = { questions: 'Answers questions', summaries: 'Writes summaries', replies: 'Drafts replies', tickets: 'Keeps tickets tidy', general: 'General helper' };
+
+/** Try it, pause or resume, and stop running it here: for an agent that runs on Orco. */
+function hostedButtons(agent) {
+  const act = (fn) => async () => {
+    try {
+      await fn();
+    } catch (err) {
+      alert(err.message);
+    }
+    void showMyAgents();
+  };
+  return [
+    el('button', { class: 'ghost small', type: 'button', text: 'Try it', onclick: () => guide.tryAgent(agent.name) }),
+    agent.paused
+      ? el('button', { class: 'ghost small', type: 'button', text: 'Resume', onclick: act(() => api('/pauses/resume', { method: 'POST', body: { scope: 'agent', target: agent.name } })) })
+      : el('button', { class: 'ghost small', type: 'button', text: 'Pause', onclick: act(() => api('/pauses', { method: 'POST', body: { scope: 'agent', target: agent.name, reason: 'Paused by its owner' } })) }),
+    el('button', {
+      class: 'ghost small danger',
+      type: 'button',
+      text: 'Remove',
+      title: 'Stop running it on Orco. Its history stays.',
+      onclick: act(async () => {
+        if (!confirm(`Stop running ${agent.name} on Orco? Its open tasks stay open, and its history stays.`)) return;
+        await api(`/agents/${encodeURIComponent(agent.name)}/hosted`, { method: 'DELETE', body: {} });
+      }),
+    }),
+  ];
 }
 
 function agentActions() {

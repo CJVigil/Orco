@@ -14,6 +14,7 @@ import { Decisions } from './decisions.js';
 import { Groups } from './groups.js';
 import { SignIns } from './signins.js';
 import { Identities } from './identities.js';
+import { Hosted } from './hosted.js';
 import { Onboarding } from './onboarding.js';
 import { Policies } from './policies.js';
 import { Portfolios } from './portfolio.js';
@@ -254,6 +255,7 @@ export class Store {
   readonly onboarding: Onboarding;
   readonly signins: SignIns;
   readonly identities: Identities;
+  readonly hosted: Hosted;
   readonly controls: Controls;
   readonly policies: Policies;
   readonly decisions: Decisions;
@@ -292,6 +294,7 @@ export class Store {
     this.onboarding = new Onboarding(this);
     this.signins = new SignIns(this);
     this.identities = new Identities(this);
+    this.hosted = new Hosted(this);
     this.controls = new Controls(this);
     this.policies = new Policies(this);
     this.decisions = new Decisions(this);
@@ -622,9 +625,22 @@ export class Store {
 
   /** SQL (and its parameters) limiting `column` to projects the actor can see, honouring a task token's scope. */
   projectFilter(actor: Participant, column: string): { sql: string; params: number[] } {
-    const sql = `${column} IN (SELECT project_id FROM project_access WHERE user_id = ?)`;
-    if (!actor.scope) return { sql, params: [this.humanOf(actor)] };
-    return { sql: `(${sql} AND ${column} IS ?)`, params: [this.humanOf(actor), actor.scope.projectId ?? -1] };
+    let sql = `${column} IN (SELECT project_id FROM project_access WHERE user_id = ?)`;
+    const params = [this.humanOf(actor)];
+    // An agent limited to some of its owner's projects sees only those.
+    if (actor.kind === 'agent') {
+      sql = `(${sql} AND (NOT EXISTS (SELECT 1 FROM agent_projects WHERE agent_id = ?) OR ${column} IN (SELECT project_id FROM agent_projects WHERE agent_id = ?)))`;
+      params.push(actor.id, actor.id);
+    }
+    if (!actor.scope) return { sql, params };
+    return { sql: `(${sql} AND ${column} IS ?)`, params: [...params, actor.scope.projectId ?? -1] };
+  }
+
+  /** Whether an agent may work in a project: all its owner's, unless it was limited to some (agent_projects). */
+  agentAllows(actor: Participant, projectId: number): boolean {
+    if (actor.kind !== 'agent') return true;
+    const limited = this.db.prepare('SELECT project_id FROM agent_projects WHERE agent_id = ?').all(actor.id) as { project_id: number }[];
+    return limited.length === 0 || limited.some((r) => r.project_id === projectId);
   }
 
   participantByName(name: string): Participant | null {
@@ -767,6 +783,7 @@ export class Store {
   /** The actor's role in a project (an agent has its owner's), or null if not a member. */
   roleIn(actor: Participant, projectId: number): ProjectRole | null {
     if (actor.scope && actor.scope.projectId !== projectId) return null;
+    if (!this.agentAllows(actor, projectId)) return null;
     const rows = this.db.prepare('SELECT role FROM project_access WHERE project_id = ? AND user_id = ?').all(projectId, this.humanOf(actor)) as { role: ProjectRole }[];
     return rows.reduce<ProjectRole | null>((best, r) => (best === null || ROLE_RANK[r.role] > ROLE_RANK[best] ? r.role : best), null);
   }
@@ -1117,6 +1134,7 @@ export class Store {
   canSee(actor: Participant, projectId: number | null): boolean {
     if (projectId === null) return true;
     if (actor.scope && projectId !== actor.scope.projectId) return false;
+    if (!this.agentAllows(actor, projectId)) return false;
     return (
       this.db
         .prepare('SELECT 1 FROM project_access WHERE project_id = ? AND user_id = ?')

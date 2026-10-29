@@ -21,6 +21,7 @@ import { byWorkOrder, type Priority, type StatusCategory, type TicketFilter, typ
 import { importTickets, parseImport } from './import.js';
 import { SESSION_TTL_MS } from './signins.js';
 import { normalizeIdentity } from './identities.js';
+import { TEMPLATES } from './hosted.js';
 import { SEARCH_KINDS, type SearchKind, searchAll } from './search.js';
 import { catchUp } from './catchup.js';
 import type { Wake } from './reminders.js';
@@ -555,9 +556,67 @@ export function createApp(store: Store, options: AppOptions = {}) {
     res.json(store.onboarding.approve(req.participant!, String(req.params.code), Array.isArray(b.agents) ? b.agents : []));
   });
   // People add their own agents, and org admins add people, from the browser. Tokens are shown once.
+  // Agents that run on Orco itself, and the model providers they run on (see hosted.ts).
+  api.get('/models', (req, res) => {
+    res.json({ providers: store.hosted.providers(req.participant!), templates: TEMPLATES, secrets: store.secrets.enabled });
+  });
+  api.post('/models', (req, res) => {
+    const b = req.body ?? {};
+    const num = (v: unknown) => (v === undefined || v === null || v === '' ? null : Number(v));
+    res.status(201).json(
+      store.hosted.saveProvider(req.participant!, {
+        name: String(b.name ?? ''),
+        baseUrl: String(b.base_url ?? ''),
+        model: String(b.model ?? ''),
+        apiKey: typeof b.api_key === 'string' ? b.api_key : undefined,
+        priceIn: num(b.price_in),
+        priceOut: num(b.price_out),
+        shared: b.shared === true,
+      }),
+    );
+  });
+  api.delete('/models/:name', (req, res) => {
+    store.hosted.removeProvider(req.participant!, String(req.params.name));
+    res.status(204).end();
+  });
+  api.post('/agents/:name/hosted', (req, res) => {
+    const b = req.body ?? {};
+    res.json(
+      store.hosted.update(req.participant!, String(req.params.name), {
+        provider: b.model === undefined ? undefined : String(b.model),
+        template: b.template === undefined ? undefined : String(b.template),
+        instructions: b.instructions === undefined ? undefined : String(b.instructions),
+        projects: b.projects,
+      }),
+    );
+  });
+  api.delete('/agents/:name/hosted', (req, res) => {
+    store.hosted.remove(req.participant!, String(req.params.name));
+    res.status(204).end();
+  });
+  api.post('/agents/:name/try', async (req, res) => {
+    res.json(await store.hosted.tryIt(req.participant!, String(req.params.name), String(req.body?.message ?? '')));
+  });
   api.post('/agents', (req, res) => {
     const me = req.participant!;
     if (me.kind !== 'user' || me.scope) throw new OrcoError('forbidden', 'Only people add agents');
+    // "Runs on Orco": made with a model provider and a template, and started by the hosted runner.
+    if (req.body?.hosted) {
+      const h = req.body.hosted;
+      const budget = h.budget_cents === undefined ? undefined : h.budget_cents === null ? null : Number(h.budget_cents);
+      res.status(201).json(
+        store.hosted.create(me, {
+          name: String(req.body.name ?? ''),
+          provider: String(h.model ?? ''),
+          template: String(h.template ?? ''),
+          instructions: h.instructions === undefined ? undefined : String(h.instructions),
+          projects: h.projects,
+          policy: h.policy,
+          budgetCents: budget,
+        }),
+      );
+      return;
+    }
     const { participant, token } = store.createAgent(me.name, String(req.body?.name ?? '').trim().toLowerCase());
     res.status(201).json({ name: participant.name, token });
   });
@@ -1373,6 +1432,8 @@ export function createApp(store: Store, options: AppOptions = {}) {
           spend30d: store.tasks.spendOf(participant.id, 30),
           scorecard30d: store.runs.scorecard(req.participant!, agent.name, 30),
           memory: store.memory.list(req.participant!, agent.name).length,
+          hosted: store.hosted.of(participant),
+          paused: store.controls.pausedFor(participant, null)?.scope === 'agent',
         };
       }),
     );

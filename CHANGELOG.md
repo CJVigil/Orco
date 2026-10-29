@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Agents that run on Orco (#42): org admins add an AI model (any OpenAI-compatible API, key stored
+  encrypted), and people make agents on it in the browser from plain templates (answers questions,
+  writes summaries, drafts replies, keeps tickets tidy, general helper), choosing projects, who may
+  give it tasks and a monthly budget, with a *Try it* box, pause and remove. The server runs them
+  with Orco tools only (no shell, no files), and they never administer anything. The server's
+  outbound-calls rule now reads: none, except to endpoints an org admin configures.
+- Agents can be limited to some of their owner's projects.
+
 - Security fixes for sign-in through a proxy (#38-#40): Orco now also requires `ORCO_AUTH_SECRET`,
   which the proxy sends in `X-Orco-Auth-Secret` (an address like `loopback` also covers every other
   program and agent on that host); requests with an `Authorization` header never sign in through the

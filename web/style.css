@@ -3594,3 +3594,76 @@ button:disabled {
   font-family: var(--mono);
   letter-spacing: 0.08em;
 }
+
+/* Agents that run on Orco */
+
+.choice-cards {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.choice-card {
+  display: grid;
+  gap: 0.25rem;
+  text-align: left;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.choice-card:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.choice-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.75;
+}
+
+.template-options,
+.project-checks,
+.pf-stack {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.template-option {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  font-weight: 400 !important;
+}
+
+.project-checks {
+  grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+}
+
+.try-reply {
+  padding: 0.6rem 0.75rem;
+  border-radius: var(--radius);
+  background: var(--bg-hover);
+  white-space: pre-wrap;
+}
+
+.ask label.template-option,
+.ask label.check {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-weight: 400;
+}
+
+.guide-form .template-option input,
+.guide-form .project-checks input,
+.guide-form label.check input {
+  width: auto;
+  flex: none;
+  margin: 0.2rem 0 0;
+}
+
+.panel-actions.inline {
+  padding: 0;
+}

@@ -1,3 +1,4 @@
+import { MAX_MEMBER_BUDGET_CENTS } from './hosted.js';
 import { OrcoError } from './errors.js';
 import type { Participant, Room, Store } from './store.js';
 
@@ -57,6 +58,12 @@ export class Controls {
   setBudget(actor: Participant, scope: BudgetScope, name: string, monthlyCents: number | null): Budget | null {
     if (actor.kind !== 'user') throw new OrcoError('forbidden', 'Only people set budgets');
     const targetId = this.budgetTarget(actor, scope, name);
+    // An agent that runs on the org's model keeps a capped budget unless an org admin says otherwise.
+    if (scope === 'agent' && !this.store.isOrgAdmin(actor) && this.store.hosted.of(this.store.participantById(targetId)!)) {
+      if (monthlyCents === null || monthlyCents > MAX_MEMBER_BUDGET_CENTS) {
+        throw new OrcoError('invalid', `${name} runs on the org's model: its monthly budget stays at most $${MAX_MEMBER_BUDGET_CENTS / 100}; an org admin can raise it`);
+      }
+    }
     if (monthlyCents === null) {
       this.store.db.prepare('DELETE FROM budgets WHERE scope = ? AND target_id = ?').run(scope, targetId);
       this.store.audit.record(actor, 'budget.clear', { projectId: scope === 'project' ? targetId : null, subject: `${scope}:${name}` });

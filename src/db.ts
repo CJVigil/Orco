@@ -750,6 +750,37 @@ export const MIGRATIONS = [
   );
   CREATE INDEX identities_user ON identities (user_id);
   `,
+  // 20: agents that run on Orco itself (a model behind an API an org admin configured), and agents
+  // limited to some of their owner's projects.
+  `
+  CREATE TABLE model_providers (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    base_url TEXT NOT NULL,
+    model TEXT NOT NULL,
+    ciphertext BLOB,
+    iv BLOB,
+    tag BLOB,
+    price_in REAL,
+    price_out REAL,
+    shared INTEGER NOT NULL DEFAULT 0,
+    created_by INTEGER NOT NULL REFERENCES participants(id),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+  CREATE TABLE hosted_agents (
+    agent_id INTEGER PRIMARY KEY REFERENCES participants(id),
+    provider_id INTEGER NOT NULL REFERENCES model_providers(id),
+    template TEXT NOT NULL,
+    instructions TEXT NOT NULL DEFAULT '',
+    created_by INTEGER NOT NULL REFERENCES participants(id),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+  CREATE TABLE agent_projects (
+    agent_id INTEGER NOT NULL REFERENCES participants(id),
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    PRIMARY KEY (agent_id, project_id)
+  );
+  `,
 ];
 
 export interface OpenOptions {

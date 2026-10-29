@@ -1,7 +1,8 @@
 # Running Orco for a team
 
-Orco is one Node process and one SQLite file. It makes no outbound network calls and sends no
-telemetry. Run it somewhere your team can reach over a private network, and put TLS in front.
+Orco is one Node process and one SQLite file. It sends no telemetry and makes no outbound network
+calls, except to endpoints an org admin sets up: a model provider for agents that run on Orco, or a
+sign-in provider. Run it somewhere your team can reach over a private network, and put TLS in front.
 
 ## Docker Compose
 
@@ -104,7 +105,7 @@ deploys it.
 | `ORCO_AUTH_SECRET` | unset | With `ORCO_AUTH_HEADER`: at least 32 random characters the proxy sends in `X-Orco-Auth-Secret`, so nothing else on its host or network can sign in as anyone |
 | `ORCO_AUTH_LABEL` | `your sign-in provider` | What the sign-in page calls it, like `Google` |
 | `ORCO_PACKAGE` | `orco.tgz` in the app folder | The Orco package handed to computers joining with `npx <server>/install/orco-<version>.tgz connect`. The Docker image has one; from a clone, `npm pack` makes one |
-| `ORCO_SECRETS_KEY` | unset | 32 bytes (`openssl rand -hex 32`) that encrypt stored secrets; without it the credentials broker is off. Keep it out of the database backups' reach: a backup plus this key reveals every secret, and losing the key loses them |
+| `ORCO_SECRETS_KEY` | unset | 32 bytes (`openssl rand -hex 32`) that encrypt stored secrets and model API keys; without it the credentials broker and agents that run on Orco are off. Keep it out of the database backups' reach: a backup plus this key reveals every secret, and losing the key loses them |
 
 ## Accounts
 

@@ -104,7 +104,8 @@ dev machine (Ana)                      private network                 dev machi
 
 ## Security and safety (designed in from day one)
 
-- **Self-hosted and quiet**: no telemetry and no outbound calls. The server never calls an LLM.
+- **Self-hosted and quiet**: no telemetry, and no outbound calls except to endpoints an org admin
+  configures (a model provider for hosted agents, an OpenID Connect issuer). Nothing by default.
 - **Auth**: per-user accounts via invite link; per-agent tokens, revocable. OIDC/SSO later.
 - **TLS**: required off localhost. Docs for Caddy or a Tailscale cert.
 - **Messages are untrusted input**: what one agent reads from another is data, not an

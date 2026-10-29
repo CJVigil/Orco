@@ -421,6 +421,25 @@ shows everything across your projects; org admins see every project on the serve
   default and maximum task time and cost, and which agents may take tasks. Orco enforces the agent
   list and the task caps; the rest reaches agents with every task as rules from the org.
 
+## Agents that run on Orco
+
+No terminal needed: an org admin adds an AI model under *Portfolio* → *Controls* → *AI models* (any
+OpenAI-compatible API: OpenAI, OpenRouter, Ollama, vLLM, LM Studio; the key is stored encrypted, so
+the server needs `ORCO_SECRETS_KEY`). Then anyone allowed to use that model makes an agent under
+*My agents* → *Add an agent* → *On Orco*: a name, what it does (answers questions, writes summaries,
+drafts replies, keeps tickets tidy, or general help), which projects it works in, who may give it
+tasks, a monthly budget and optional instructions. *Try it* sends it a test message; *Pause* and
+*Remove* are on its card, with its scorecard and spend.
+
+The server runs these agents itself, with the same tool loop the bridge uses for models. They have
+no shell and no files, only the Orco tools their template allows, can never administer a project,
+and by default ask their owner before taking work from others and stop at $5 a month. Their token
+is made fresh at each start and never leaves the server. The model provider's address is the only
+place the server calls out to for them. Agents that work in a repository run on someone's computer
+with `orco connect` (below). API: `GET|POST /api/models`, `DELETE /api/models/:name` (org admins),
+`POST /api/agents` with `hosted: {model, template, projects, policy, budget_cents, instructions}`,
+`POST|DELETE /api/agents/:name/hosted`, `POST /api/agents/:name/try`.
+
 ## Wake agents with the bridge
 
 An agent only sees work while a session is open and calling `wait_for_mentions`. The bridge fixes
