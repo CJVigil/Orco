@@ -24,6 +24,21 @@ export interface ConnectIO {
   out: (text: string) => void;
 }
 
+const AGENT_NAME = /^[a-z0-9][a-z0-9-]{0,31}$/;
+
+/**
+ * Makes a file readable by its owner only. On Windows the mode bits mean nothing, so the file's ACL is
+ * set instead: inheritance off, full control for the current user only.
+ */
+export function privateFile(path: string, target = platform(), run: typeof spawnSync = spawnSync): void {
+  chmodSync(path, 0o600);
+  if (target !== 'win32') return;
+  const user = process.env.USERNAME ? `${process.env.USERDOMAIN ? `${process.env.USERDOMAIN}\\` : ''}${process.env.USERNAME}` : null;
+  if (!user) throw new Error(`Could not tell who you are to protect ${path}; set USERNAME`);
+  const result = run('icacls', [path, '/inheritance:r', '/grant:r', `${user}:F`], { stdio: 'ignore', windowsHide: true });
+  if (result.error || result.status !== 0) throw new Error(`Could not limit ${path} to your account (icacls failed); delete it and try again`);
+}
+
 export const DEFAULT_CONFIG = join(homedir(), '.config', 'orco', 'bridge.json');
 export const DEFAULT_TOKEN_DIR = join(homedir(), '.config', 'orco', 'tokens');
 
@@ -61,15 +76,15 @@ export async function connect(options: ConnectOptions, io: ConnectIO): Promise<{
   const started = await call(server, 'POST', '/api/pair', { host: hostname(), tools, cwd: options.dir });
   const { id, code, secret } = started as { id: string; code: string; secret: string };
   io.out('');
-  io.out(`  To connect this computer, open ${server}/#pair=${code}`);
-  io.out(`  or in Orco go to My agents → Connect a computer and enter ${code}`);
+  io.out(`  To connect this computer, open ${server}/#pair and enter ${code}`);
+  io.out('  (or in Orco: My agents → Connect a computer). Only enter a code shown on your own screen.');
   io.out('  The code works for 10 minutes. Waiting…');
 
   let result: { state: string; approvedBy?: string; agents?: { name: string; token: string; preset: string }[] };
   for (;;) {
     await new Promise((done) => setTimeout(done, options.pollMs ?? 2000));
     try {
-      result = (await call(server, 'GET', `/api/pair/${encodeURIComponent(id)}?secret=${encodeURIComponent(secret)}`)) as typeof result;
+      result = (await call(server, 'POST', `/api/pair/${encodeURIComponent(id)}/poll`, { secret })) as typeof result;
     } catch (err) {
       if ((err as Error).message.includes('expired')) throw err;
       continue; // a restart or a blip: keep waiting until the code expires
@@ -85,10 +100,18 @@ export async function connect(options: ConnectOptions, io: ConnectIO): Promise<{
     throw new Error(`${options.config} is set up for ${file.server}; pass --config with another file for ${server}`);
   }
   const names: string[] = [];
+  // What the server sends back decides file names: check it as if it were hostile (a fake server, or
+  // someone in the middle on plain http), before anything is written.
   for (const agent of result.agents ?? []) {
-    const tokenFile = join(options.tokenDir, agent.name);
+    if (typeof agent.name !== 'string' || !AGENT_NAME.test(agent.name)) throw new Error(`The server sent an invalid agent name (${JSON.stringify(agent.name).slice(0, 40)}); nothing was written`);
+    if (!PRESET_NAMES.includes(agent.preset)) throw new Error(`The server sent an unknown tool (${JSON.stringify(agent.preset).slice(0, 40)}); nothing was written`);
+    if (typeof agent.token !== 'string' || !/^orco_a_[A-Za-z0-9_-]{20,}$/.test(agent.token)) throw new Error('The server sent an invalid token; nothing was written');
+  }
+  for (const agent of result.agents ?? []) {
+    const tokenFile = resolve(options.tokenDir, agent.name);
+    if (dirname(tokenFile) !== resolve(options.tokenDir)) throw new Error(`Refusing to write outside ${options.tokenDir}`);
     writeFileSync(tokenFile, `${agent.token}\n`, { mode: 0o600 });
-    chmodSync(tokenFile, 0o600);
+    privateFile(tokenFile);
     const entry = { name: agent.name, preset: agent.preset, token_file: tokenFile, cwd: options.dir };
     const at = file.agents.findIndex((a) => a.name === agent.name);
     if (at >= 0) file.agents[at] = { ...file.agents[at], ...entry, token_env: undefined };

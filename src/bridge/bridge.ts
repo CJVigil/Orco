@@ -161,8 +161,6 @@ class AgentRunner {
   private readonly runningTasks = new Map<number, Task>();
   /** Why a run was stopped by a pause, for the note on the task. */
   private readonly pausedNotes = new Map<number, string>();
-  /** Consecutive out-of-usage runs per task. */
-  private readonly limitStreak = new Map<number, number>();
   /** Work not started because of a pause; started when the pause is lifted. */
   private readonly held = new Map<number, Job>();
   private stream: EventStream | null = null;
@@ -487,7 +485,6 @@ class AgentRunner {
       const note =
         pausedNote ??
         (timedOut ? `The agent was stopped after ${this.config.timeout_seconds}s without finishing the task.` : `The agent exited (${reason}) without finishing the task.`);
-      if (!limit) this.limitStreak.delete(task.id);
       void report.then(() => (limit ? this.outOfUsage(task, limit, note, token) : this.finish(task, note))).finally(() => this.afterRun(task));
     };
     child.on('error', (err) => done(`could not start: ${err.message}`));
@@ -537,7 +534,6 @@ class AgentRunner {
       this.stopping.delete(task.id);
     }
     const limit = this.pausedNotes.has(task.id) ? null : output.limit;
-    if (!limit) this.limitStreak.delete(task.id);
     await this.report(task, mode, startedAt, limit ? `out of usage: ${outcome}`.slice(0, 200) : outcome, output, null, token);
     await (limit ? this.outOfUsage(task, limit, note, token) : this.finish(task, note));
     this.afterRun(task);
@@ -551,17 +547,17 @@ class AgentRunner {
     if (this.stopped) return;
     // The tool's message may echo a key or header: it goes into the task masked, like the run log.
     const message = maskSecrets(limit.message, this.secrets(token));
-    const streak = (this.limitStreak.get(task.id) ?? 0) + 1;
-    this.limitStreak.set(task.id, streak);
-    if (streak > MAX_LIMIT_RETRIES) {
-      this.limitStreak.delete(task.id);
-      this.log.error(`[${this.config.name}] task #${task.id}: out of usage ${streak} times in a row; giving up`);
-      await this.finish(task, `${note} It ran out of usage ${streak} times in a row, so the bridge stopped retrying: ${message}`);
-      return;
-    }
     try {
-      const current = (await this.api(`/tasks/${task.id}`)) as Task;
+      // The server counts the runs in a row that ran out (this one is already reported), so the limit
+      // holds across bridge restarts.
+      const current = (await this.api(`/tasks/${task.id}`)) as Task & { usageLimitRuns?: number };
       if (!OPEN.includes(current.state)) return;
+      const streak = current.usageLimitRuns ?? 1;
+      if (streak > MAX_LIMIT_RETRIES) {
+        this.log.error(`[${this.config.name}] task #${task.id}: out of usage ${streak} times in a row; giving up`);
+        await this.finish(task, `${note} It ran out of usage ${streak} times in a row, so the bridge stopped retrying: ${message}`);
+        return;
+      }
       const until = limit.resetAt ? ` until ${new Date(limit.resetAt).toLocaleString()}` : '';
       if (this.config.fallback) {
         try {

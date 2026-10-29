@@ -1113,8 +1113,9 @@ function portfolioRoute() {
 
 /** Links that open a dialog or panel over whatever is showing, then put the address back. */
 function overlayRoute() {
-  const pair = /^#pair=([A-Za-z0-9-]{4,12})$/.exec(location.hash);
-  if (pair) void guide.openPairCode(pair[1]);
+  // #pair opens the code form empty: a code is typed from the joining computer's own screen, never
+  // carried in a link someone could send you.
+  if (/^#pair(=.*)?$/.test(location.hash)) void guide.connectComputer();
   else if (location.hash === '#!help') guide.showHelp();
   else return false;
   history.replaceState(null, '', state.viewHash || location.pathname + location.search);
@@ -2068,6 +2069,16 @@ function renderNotifyButton() {
 }
 
 $('other-device').addEventListener('click', () => void guide.showOtherDevice());
+$('logout-all').addEventListener('click', async () => {
+  if (!confirm('Sign out of Orco in every browser, including this one, and cancel sign-in links you have not used? Your token for the command line keeps working.')) return;
+  try {
+    await api('/sessions', { method: 'DELETE', body: {} });
+  } catch (err) {
+    alert(err.message);
+    return;
+  }
+  location.reload();
+});
 
 $('notify').addEventListener('click', async () => {
   try {
@@ -2597,7 +2608,13 @@ async function boot() {
   let signedIn = null;
   let problem = null;
   try {
-    signedIn = await api('/signin', { method: 'POST', body: { code: link[1] } });
+    // Already signed in? Say whose link this is and ask, so nobody is quietly switched into someone
+    // else's account (where what they type would land).
+    const current = await api('/me').catch(() => null);
+    const target = current ? await api('/signin/peek', { method: 'POST', body: { code: link[1] } }) : null;
+    if (current && target.name === current.name) problem = null;
+    else if (current && !confirm(`This link signs you in as ${target.name}. You are signed in as ${current.name}.\n\nOnly continue if you asked for this link. Switch to ${target.name}?`)) problem = null;
+    else signedIn = await api('/signin', { method: 'POST', body: { code: link[1] } });
   } catch (err) {
     problem = err.message;
   }

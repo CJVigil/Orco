@@ -349,7 +349,7 @@ export function createGuide(ctx) {
       'Connect a computer',
       el('p', { class: 'small', text: 'On the computer where your agents should work, in the folder of your code, run:' }),
       join,
-      el('p', { class: 'small muted', text: 'It shows a code. Enter it here (or open the link it prints).' }),
+      el('p', { class: 'small muted', text: 'It shows a code. Type it here from that computer’s screen; never enter a code someone sent you.' }),
       el(
         'form',
         {
@@ -374,13 +374,6 @@ export function createGuide(ctx) {
     code.focus();
   }
 
-  async function openPairCode(value) {
-    try {
-      approveComputer(await api(`/pair/code/${encodeURIComponent(value)}`));
-    } catch (err) {
-      modal('Connect a computer', el('p', { class: 'error', text: err.message }), el('p', { class: 'small muted', text: 'Run the connect command again for a new code.' }));
-    }
-  }
 
   /** Pick which agents run on a computer that asked to join. */
   async function approveComputer(view) {
@@ -388,10 +381,17 @@ export function createGuide(ctx) {
     const tools = view.tools.length ? view.tools : ['claude'];
     const rows = tools.map((tool, i) => {
       const use = el('input', { type: 'checkbox', checked: i === 0 || view.tools.length > 0 ? true : null });
-      const suggested = mine.find((n) => n.endsWith(`-${tool}`)) ?? `${me().name}-${tool}`;
+      // Reusing an agent ends its current token, so only suggest one for a request from your own network.
+      const existing = view.sameNetwork ? mine.find((n) => n.endsWith(`-${tool}`)) : undefined;
+      let suggested = existing ?? `${me().name}-${tool}`;
+      for (let n = 2; !existing && mine.includes(suggested); n++) suggested = `${me().name}-${tool}-${n}`;
       const name = el('input', { value: suggested, pattern: '[a-z0-9][a-z0-9\\-]{0,31}', 'aria-label': `Agent for ${TOOL_NAMES[tool] ?? tool}` });
       const note = el('span', { class: 'muted small' });
-      const explain = () => (note.textContent = mine.includes(name.value.trim()) ? 'your existing agent; its old token stops working' : 'a new agent');
+      const explain = () => {
+        const reuse = mine.includes(name.value.trim());
+        note.textContent = reuse ? 'your existing agent: approving ends its current token, so wherever it runs now stops until you reconnect it' : 'a new agent';
+        note.classList.toggle('warn-text', reuse);
+      };
       name.addEventListener('input', explain);
       explain();
       const preset = view.tools.length
@@ -402,7 +402,15 @@ export function createGuide(ctx) {
     const problem = error();
     const dialog = modal(
       'Connect a computer',
-      el('p', { class: 'small' }, el('strong', { text: view.host }), ` wants to run your agents${view.cwd ? ` in ${view.cwd}` : ''}.`),
+      el('p', { class: 'small' }, 'A computer calling itself ', el('strong', { text: view.host }), ` wants to run your agents${view.cwd ? ` in ${view.cwd}` : ''}.`),
+      el('p', { class: 'small muted', text: `The request came from ${view.from}${view.sameNetwork ? ', the same network as you.' : '.'}` }),
+      view.sameNetwork
+        ? null
+        : el('p', {
+            class: 'small warn-text',
+            role: 'alert',
+            text: 'That is not the network you are on. If you did not just run the connect command on that computer yourself, decline: someone may be trying to get a token for your agents.',
+          }),
       el('p', {
         class: 'small muted',
         text: view.tools.length
@@ -628,5 +636,5 @@ export function createGuide(ctx) {
     );
   }
 
-  return { stepsDismissed: dismissed, signInLink, showOtherDevice, showWelcome, copyBlock, showSetup, addAgent, showConnect, connectComputer, openPairCode, askAgent, refreshSteps, showSteps, showHelp };
+  return { stepsDismissed: dismissed, signInLink, showOtherDevice, showWelcome, copyBlock, showSetup, addAgent, showConnect, connectComputer, askAgent, refreshSteps, showSteps, showHelp };
 }

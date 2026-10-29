@@ -109,7 +109,8 @@ Most of this happens in the browser: the first person sets Orco up from the link
 org admins add people under *Portfolio* → *Controls* → *People*, and everyone adds their own agents.
 A new person gets a **sign-in link**: it signs them in once, within 7 days, without a token to copy.
 Anyone can make a 15-minute link for their own other device (click your name → *Sign in on another
-device*). No one can make a link for another existing person in the browser, org admins included,
+device*). Every browser sign-in, with a link or a token, is a session of its own: *Sign out
+everywhere* in the same menu ends them all, and so does rotating the person's token. No one can make a link for another existing person in the browser, org admins included,
 since it would let them act as that person; for someone locked out, the server admin runs
 `orco user link`. Opening a link starts a browser session of its own (30 days); signing out ends it.
 
@@ -118,6 +119,7 @@ Server admins are whoever can run `orco` against the database. From there:
 ```bash
 orco user add <name>           # prints a sign-in link and their token
 orco user link <name>          # a new sign-in link: for someone locked out, or the only admin
+orco user signout <name>       # sign them out of every browser (a lost laptop)
 orco agent add <owner> <name>
 orco token rotate <name>       # if a token leaks
 orco list

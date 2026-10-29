@@ -40,6 +40,16 @@ export class SignIns {
     return { code, expiresAt };
   }
 
+  /** Who a link is for, without spending it: so a browser already signed in can ask before switching. */
+  peek(code: string): { name: string } {
+    const row = this.store.db
+      .prepare('SELECT user_id FROM signin_links WHERE code_hash = ? AND used_at IS NULL AND expires_at > ?')
+      .get(hashToken(code), new Date(this.store.now()).toISOString()) as { user_id: number } | undefined;
+    const participant = row ? this.store.participantById(row.user_id) : null;
+    if (!participant) throw new OrcoError('not_found', 'This sign-in link has been used or has expired; ask for a new one');
+    return { name: participant.name };
+  }
+
   /** Spends a link: the person it is for, a new session token for the cookie, and whether this is their first sign-in. */
   use(code: string): { participant: Participant; session: string; firstTime: boolean } {
     const now = new Date(this.store.now()).toISOString();
@@ -53,12 +63,23 @@ export class SignIns {
     if (!participant) throw new OrcoError('not_found', 'This sign-in link has been used or has expired; ask for a new one');
     const firstTime = this.store.db.prepare('SELECT 1 FROM web_sessions WHERE user_id = ? LIMIT 1').get(row.user_id) === undefined;
     this.store.db.prepare('UPDATE signin_links SET used_at = ? WHERE id = ?').run(now, row.id);
+    const session = this.startSession(participant);
+    this.store.audit.record(participant, 'signin_link.use', { subject: `user:${participant.name}` });
+    return { participant, session, firstTime };
+  }
+
+  /**
+   * A browser session for a person: what the web app's cookie holds, however they signed in (a link,
+   * their token, first-run setup), so the token itself never sits in a browser and signing out
+   * everywhere reaches every browser.
+   */
+  startSession(participant: Participant): string {
+    if (participant.kind !== 'user') throw new OrcoError('forbidden', 'Only people sign in to the web app');
     const session = `${SESSION_PREFIX}${randomBytes(32).toString('base64url')}`;
     this.store.db
       .prepare('INSERT INTO web_sessions (user_id, token_hash, expires_at) VALUES (?, ?, ?)')
-      .run(row.user_id, hashToken(session), new Date(this.store.now() + SESSION_TTL_MS).toISOString());
-    this.store.audit.record(participant, 'signin_link.use', { subject: `user:${participant.name}` });
-    return { participant, session, firstTime };
+      .run(participant.id, hashToken(session), new Date(this.store.now() + SESSION_TTL_MS).toISOString());
+    return session;
   }
 
   /** The person a browser session belongs to; sessions only ever come from the cookie. */
@@ -73,6 +94,12 @@ export class SignIns {
 
   isSession(token: string): boolean {
     return token.startsWith(SESSION_PREFIX);
+  }
+
+  /** Signs a person out of every browser (and spends their unused links). Returns how many sessions ended. */
+  endAll(userId: number): number {
+    this.store.db.prepare("UPDATE signin_links SET used_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE user_id = ? AND used_at IS NULL").run(userId);
+    return Number(this.store.db.prepare('DELETE FROM web_sessions WHERE user_id = ?').run(userId).changes);
   }
 
   end(token: string): void {

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Security fixes (#25-#31): `orco connect` checks the agent names, tools and tokens a server sends
+  before writing anything, and keeps token files inside their folder (on Windows, locked to your
+  account with an ACL). Pairing shows the address a request came from and warns when it is not your
+  network; codes are typed from the joining computer's screen (links no longer carry them), and
+  reusing an existing agent says plainly that its current token ends. The pairing secret moved out
+  of the URL. Every browser sign-in is now its own session, ended by *Sign out everywhere*,
+  `orco user signout` or rotating the token. Opening a sign-in link while signed in asks before
+  switching accounts. Agents see only the people and agents they share a project with. The
+  usage-limit retry count is kept by the server, so a bridge restart does not reset it.
+
 - Security fixes (#16-#20, #22, #24): agents and task tokens never administer a project, whatever
   their owner's role (groups, members, roles, budgets, pauses, policies); an agent's reported cost can
   only raise a task's spend, never lower what the bridge measured; decisions are superseded only from

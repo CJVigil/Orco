@@ -23,6 +23,8 @@ interface Pairing {
   host: string;
   tools: string[];
   cwd: string;
+  /** The address the request came from, as the server saw it. */
+  ip: string;
   expiresAt: number;
   state: 'pending' | 'approved' | 'denied';
   approvedBy?: string;
@@ -35,6 +37,9 @@ export interface PairingView {
   host: string;
   tools: string[];
   cwd: string;
+  /** Where the request came from, and whether that looks like the approver's own network. */
+  from: string;
+  sameNetwork: boolean;
   expiresAt: string;
   state: Pairing['state'];
 }
@@ -46,6 +51,18 @@ export interface Step {
 }
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
+
+const plainIp = (ip: string) => ip.replace(/^::ffff:/, '');
+
+/** The same address, or the same IPv4 /24 (a home or office network); IPv6 compares the first 64 bits. */
+export function sameNetwork(a: string, b: string): boolean {
+  const x = plainIp(a);
+  const y = plainIp(b);
+  if (x === y) return true;
+  if (x.includes('.') && y.includes('.')) return x.split('.').slice(0, 3).join('.') === y.split('.').slice(0, 3).join('.');
+  if (x.includes(':') && y.includes(':')) return x.split(':').slice(0, 4).join(':') === y.split(':').slice(0, 4).join(':');
+  return false;
+}
 
 function code(): string {
   const pick = () => Array.from({ length: 4 }, () => CODE_ALPHABET[randomInt(CODE_ALPHABET.length)]).join('');
@@ -79,7 +96,7 @@ export class Onboarding {
 
   /* Pairing a computer */
 
-  start(input: { host?: unknown; tools?: unknown; cwd?: unknown }): { id: string; code: string; secret: string; expiresAt: string } {
+  start(input: { host?: unknown; tools?: unknown; cwd?: unknown }, ip = 'unknown'): { id: string; code: string; secret: string; expiresAt: string } {
     this.sweep();
     if (this.pairings.size >= MAX_PENDING) throw new OrcoError('rate_limited', 'Too many computers are waiting to be approved; try again in a few minutes');
     const host = String(input.host ?? 'a computer').trim().slice(0, 80) || 'a computer';
@@ -90,14 +107,26 @@ export class Onboarding {
     let value = code();
     while ([...this.pairings.values()].some((p) => p.code === value)) value = code();
     const expiresAt = this.store.now() + PAIR_TTL_MS;
-    this.pairings.set(id, { id, code: value, secretHash: hash(secret), host, tools, cwd, expiresAt, state: 'pending' });
+    this.pairings.set(id, { id, code: value, secretHash: hash(secret), host, tools, cwd, ip: plainIp(ip), expiresAt, state: 'pending' });
     return { id, code: value, secret, expiresAt: new Date(expiresAt).toISOString() };
   }
 
-  /** What a person sees before approving: which computer, with which tools. */
-  view(actor: Participant, value: string): PairingView {
+  /**
+   * What a person sees before approving: which computer, with which tools, and from where. The host
+   * name and folder are whatever the requester sent; the address is what the server saw.
+   */
+  view(actor: Participant, value: string, approverIp = 'unknown'): PairingView {
     const pairing = this.byCode(actor, value);
-    return { code: pairing.code, host: pairing.host, tools: pairing.tools, cwd: pairing.cwd, expiresAt: new Date(pairing.expiresAt).toISOString(), state: pairing.state };
+    return {
+      code: pairing.code,
+      host: pairing.host,
+      tools: pairing.tools,
+      cwd: pairing.cwd,
+      from: pairing.ip,
+      sameNetwork: sameNetwork(pairing.ip, approverIp),
+      expiresAt: new Date(pairing.expiresAt).toISOString(),
+      state: pairing.state,
+    };
   }
 
   /**

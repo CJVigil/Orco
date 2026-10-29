@@ -25,6 +25,7 @@ Server commands (run where the database lives):
   user add <name> [--admin]  Create a user and print their token (the first user is an org admin)
   user admin <name> [--off]  Make a user an org admin, or stop
   user link <name>           Print a one-time sign-in link for a person (an invite, or a way back in)
+  user signout <name>        Sign a person out of every browser (a lost laptop); token rotate also does this
   agent add <owner> <name>   Create an agent owned by a user and print its token
   token rotate <name>        Replace a user's or agent's token and print the new one
   agent policy <agent> <p>   Who may give the agent tasks: open, ask (default) or owner_only
@@ -365,6 +366,16 @@ export function main(): void {
       const link = store.signins.createLink(null, name);
       console.log(`Created user ${name}${admin}. Send them this link to sign in (works once, for 7 days):\n${serverBase(values)}/#signin=${link.code}`);
       console.log(`Their token for the command line (shown once):\n${token}`);
+      return;
+    }
+    case 'user signout': {
+      const [name] = args;
+      if (!name) throw new OrcoError('invalid', 'Usage: orco user signout <name>');
+      const user = store.participantByName(name);
+      if (!user || user.kind !== 'user') throw new OrcoError('not_found', `No user named ${name}`);
+      const ended = store.signins.endAll(user.id);
+      store.audit.record(null, 'session.end_all', { subject: `user:${name}`, detail: { ended } });
+      console.log(`Signed ${name} out of ${ended} browser session${ended === 1 ? '' : 's'} and cancelled their unused sign-in links. To also stop their token, run orco token rotate ${name}.`);
       return;
     }
     case 'user link': {

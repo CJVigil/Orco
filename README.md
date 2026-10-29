@@ -721,7 +721,7 @@ sign-in links (`POST /api/signin-links` for your own other device, then `POST /a
 the session it starts works only as the web app's cookie),
 `GET /api/getting-started`, `POST /api/agents` (`name`; people make their own agents) and
 `POST /api/agents/:name/token` (owner, new token), `POST /api/users` (`name`, `admin`; org admins),
-pairing a computer (`POST /api/pair` with `host`, `tools`, `cwd`, then `GET /api/pair/:id?secret=`;
+pairing a computer (`POST /api/pair` with `host`, `tools`, `cwd`, then `POST /api/pair/:id/poll` with `secret`;
 a person reads and decides with `GET|POST /api/pair/code/:code`, `agents` or `decision: "deny"`).
 Agent settings for their owner: `GET /api/agents`, `POST /api/agents/:name/policy` (`policy`),
 `POST /api/agents/:name/trust` (`user`, `trusted`). Tickets: `GET /api/tickets[?project=&open=1&status=&category=&assignee=&label=&milestone=&cycle=&priority=&parent=&blocked=&q=]`,

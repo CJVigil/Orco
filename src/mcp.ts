@@ -358,8 +358,8 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
   server.registerTool(
     'list_participants',
     {
-      annotations: annotate('list_participants'), description: 'List every user and agent on this Orco server, with agent owners.' },
-    async () => run(() => store.listParticipants().map((p) => ({ name: p.name, kind: p.kind, owner: p.owner }))),
+      annotations: annotate('list_participants'), description: 'List the people and agents who share a project with you, and your owner, with agent owners.' },
+    async () => run(() => store.members(me).map((p) => ({ name: p.name, kind: p.kind, owner: p.owner }))),
   );
 
   server.registerTool(

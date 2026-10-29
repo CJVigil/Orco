@@ -390,6 +390,8 @@ export class Store {
     if (!participant || this.isSystem(participant)) throw new OrcoError('not_found', `No user or agent named ${name}`);
     const token = newToken(participant.kind);
     this.db.prepare('UPDATE participants SET token_hash = ? WHERE id = ?').run(hashToken(token), participant.id);
+    // A new token is a fresh start: browsers signed in with a link (a lost laptop, say) are signed out too.
+    if (participant.kind === 'user') this.signins.endAll(participant.id);
     this.audit.record(null, 'token.rotate', { subject: `${participant.kind}:${name}` });
     return token;
   }
@@ -497,7 +499,7 @@ export class Store {
   findAgents(actor: Participant, filter: { skill?: string; project?: string } = {}): (AgentProfile & { name: string; owner: string; taskPolicy: TaskPolicy })[] {
     const project = filter.project ? this.visibleProject(actor, filter.project) : null;
     const wanted = filter.skill?.trim().toLowerCase();
-    return this.listParticipants()
+    return this.members(actor)
       .filter((p) => p.kind === 'agent' && p.id !== actor.id && (!project || this.canSee(p, project.id)))
       .map((p) => ({ name: p.name, owner: p.owner!, taskPolicy: this.taskPolicyFor(p), ...this.profileOf(p) }))
       .filter((p) => !wanted || p.skills.some((s) => s.includes(wanted)) || p.environment.toLowerCase().includes(wanted));
@@ -649,7 +651,13 @@ export class Store {
 
   members(actor: Participant, projectName?: string): (Participant & { owner: string | null })[] {
     const everyone = this.listParticipants();
-    if (projectName === undefined) return everyone;
+    if (projectName === undefined) {
+      // People see everyone on the server (to add members, mention, invite). An agent or task token
+      // sees only who shares a project with it, plus its owner.
+      if (actor.kind === 'user' && !actor.scope) return everyone;
+      const projectIds = this.listProjects(actor).map((p) => p.id);
+      return everyone.filter((p) => p.id === actor.id || p.id === actor.ownerId || projectIds.some((id) => this.canSee(p, id)));
+    }
     const project = this.visibleProject(actor, projectName);
     return everyone.filter((p) => this.canSee(p, project.id));
   }

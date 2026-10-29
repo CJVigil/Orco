@@ -333,7 +333,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
     }
     try {
       const { participant, token } = store.onboarding.setup(options.setupCode, String(req.body?.code ?? ''), String(req.body?.name ?? ''));
-      res.cookie(COOKIE, token, { httpOnly: true, sameSite: 'strict', secure: secureCookies(req, options.publicUrl), path: '/', maxAge: 30 * 24 * 3600 * 1000 });
+      res.cookie(COOKIE, store.signins.startSession(participant), { httpOnly: true, sameSite: 'strict', secure: secureCookies(req, options.publicUrl), path: '/', maxAge: SESSION_TTL_MS });
       res.status(201).json({ name: participant.name, token });
     } catch (err) {
       if (err instanceof OrcoError && err.code === 'forbidden') logins.hit(ip);
@@ -349,10 +349,11 @@ export function createApp(store: Store, options: AppOptions = {}) {
       return;
     }
     pairings.hit(ip);
-    res.status(201).json(store.onboarding.start(req.body ?? {}));
+    res.status(201).json(store.onboarding.start(req.body ?? {}, ip));
   });
-  app.get('/api/pair/:id', (req, res) => {
-    res.json(store.onboarding.poll(String(req.params.id), String(req.query.secret ?? '')));
+  // The secret travels in the body, never the URL, so proxy access logs cannot leak it.
+  app.post('/api/pair/:id/poll', express.json({ limit: '4kb' }), (req, res) => {
+    res.json(store.onboarding.poll(String(req.params.id), String(req.body?.secret ?? '')));
   });
 
   app.post('/api/session', express.json({ limit: '4kb' }), (req, res) => {
@@ -368,12 +369,14 @@ export function createApp(store: Store, options: AppOptions = {}) {
       res.status(401).json({ error: 'That is not a valid user token' });
       return;
     }
-    res.cookie(COOKIE, token, {
+    // The browser gets a session of its own, not the token: rotating the token or signing out
+    // everywhere then reaches it too.
+    res.cookie(COOKIE, store.signins.startSession(participant), {
       httpOnly: true,
       sameSite: 'strict',
       secure: secureCookies(req, options.publicUrl),
       path: '/',
-      maxAge: 30 * 24 * 3600 * 1000,
+      maxAge: SESSION_TTL_MS,
     });
     res.json({ name: participant.name });
   });
@@ -394,6 +397,30 @@ export function createApp(store: Store, options: AppOptions = {}) {
     }
     res.cookie(COOKIE, used.session, { httpOnly: true, sameSite: 'strict', secure: secureCookies(req, options.publicUrl), path: '/', maxAge: SESSION_TTL_MS });
     res.json({ name: used.participant.name, firstTime: used.firstTime });
+  });
+
+  // Sign out everywhere: every browser session of yours, and any sign-in link not yet used.
+  app.post('/api/signin/peek', express.json({ limit: '4kb' }), (req, res) => {
+    const ip = req.ip ?? 'unknown';
+    if (logins.blocked(ip)) {
+      res.status(429).json({ error: 'Too many failed sign-ins. Wait 15 minutes and try again.' });
+      return;
+    }
+    try {
+      res.json(store.signins.peek(String(req.body?.code ?? '')));
+    } catch (err) {
+      logins.hit(ip);
+      throw err;
+    }
+  });
+
+  app.delete('/api/sessions', auth, rejectCrossSite, (req, res) => {
+    const me = req.participant!;
+    if (me.kind !== 'user' || me.scope) throw new OrcoError('forbidden', 'Only people have browser sessions');
+    const ended = store.signins.endAll(me.id);
+    store.audit.record(me, 'session.end_all', { subject: `user:${me.name}`, detail: { ended } });
+    res.clearCookie(COOKIE, { path: '/' });
+    res.json({ ended });
   });
 
   app.delete('/api/session', (req, res) => {
@@ -425,7 +452,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
     res.json(store.onboarding.steps(req.participant!, (id) => presence.status(id) !== 'offline'));
   });
   api.get('/pair/code/:code', (req, res) => {
-    res.json(store.onboarding.view(req.participant!, String(req.params.code)));
+    res.json(store.onboarding.view(req.participant!, String(req.params.code), req.ip));
   });
   api.post('/pair/code/:code', (req, res) => {
     const b = req.body ?? {};
@@ -992,6 +1019,14 @@ export function createApp(store: Store, options: AppOptions = {}) {
     if (id === undefined) throw new OrcoError('invalid', 'Expected a task id');
     const task = store.tasks.get(req.participant!, id);
     if (task.assignee === req.participant!.name && req.headers['x-orco-bridge'] !== '1') store.tasks.markSeen(req.participant!, [id]);
+    // For the assignee's bridge: how many of the latest runs in a row ran out of usage. Kept here, not
+    // in the bridge, so a restart does not reset the retry limit.
+    if (task.assignee === req.participant!.name) {
+      const outcomes = store.db.prepare('SELECT outcome FROM task_runs WHERE task_id = ? ORDER BY id DESC LIMIT 50').all(id) as { outcome: string }[];
+      const streak = outcomes.findIndex((r) => !r.outcome.startsWith('out of usage'));
+      res.json({ ...task, usageLimitRuns: streak === -1 ? outcomes.length : streak });
+      return;
+    }
     res.json(task);
   });
   api.post('/tasks', (req, res) => {

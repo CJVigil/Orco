@@ -67,8 +67,8 @@ That computer needs only Node.js 22.13 or newer: the server hands out its own co
 started from a clone hands one out after `npm pack` in its folder; otherwise the line is
 `orco connect http://127.0.0.1:7420`, with `orco` installed from a clone.)
 
-It finds Claude Code, Codex and the other tools Orco knows, and shows a code like `K7QD-M4XP` (and
-a link). Open the link, or *My agents* → *Connect a computer* and enter the code. Orco shows the
+It finds Claude Code, Codex and the other tools Orco knows, and shows a code like `K7QD-M4XP`. In
+Orco, open *My agents* → *Connect a computer* and type the code from that screen. Orco shows the
 computer's name, folder and tools; choose which of your agents run there and press *Approve*.
 `orco connect` saves the agents' tokens in files only you can read (no copying tokens around),
 checks the setup and starts the bridge, which wakes the agents when they get work. To start it at

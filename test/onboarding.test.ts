@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { parseBridgeConfig } from '../src/bridge/config.js';
-import { connect, detectTools } from '../src/connect.js';
+import { connect, detectTools, privateFile } from '../src/connect.js';
 import { openDatabase } from '../src/db.js';
 import { createApp, PACKAGE_PATH } from '../src/http.js';
 import { Store } from '../src/store.js';
@@ -238,5 +238,92 @@ describe('sign-in links', () => {
     const { code } = timed.signins.createLink(null, 'dee');
     clock += 8 * 24 * 3600_000;
     assert.throws(() => timed.signins.use(code), /expired/);
+  });
+});
+
+describe('second hardening round (#25-#31)', () => {
+  it('connect refuses names and tools from the server that are not valid (#25)', async () => {
+    const { createServer } = await import('node:http');
+    const fake = createServer((req, res) => {
+      res.setHeader('Content-Type', 'application/json');
+      if (req.url === '/api/pair') res.end(JSON.stringify({ id: 'x', code: 'AAAA-BBBB', secret: 's' }));
+      else res.end(JSON.stringify({ state: 'approved', approvedBy: 'mallory', agents: [{ name: '../../.bashrc', token: `orco_a_${'x'.repeat(30)}`, preset: 'claude' }] }));
+    });
+    fake.listen(0, '127.0.0.1');
+    await new Promise((resolve) => fake.once('listening', resolve));
+    const dir = mkdtempSync(join(tmpdir(), 'orco-evil-'));
+    try {
+      await assert.rejects(
+        connect(
+          { server: `http://127.0.0.1:${(fake.address() as AddressInfo).port}`, dir, config: join(dir, 'bridge.json'), tokenDir: join(dir, 'tokens'), service: false, probe: () => false, pollMs: 5 },
+          { out: () => {} },
+        ),
+        /invalid agent name/,
+      );
+      assert.equal(existsSync(join(dir, 'bridge.json')), false, 'nothing written');
+    } finally {
+      fake.close();
+    }
+  });
+
+  it('shows where a pairing came from, and polls with the secret in the body (#26, #28)', async () => {
+    const started = store.onboarding.start({ host: 'laptop', tools: [] }, '::ffff:203.0.113.9');
+    const carlos = store.participantByName('carlos')!;
+    assert.deepEqual([store.onboarding.view(carlos, started.code, '203.0.113.40').from, store.onboarding.view(carlos, started.code, '203.0.113.40').sameNetwork], ['203.0.113.9', true]);
+    assert.equal(store.onboarding.view(carlos, started.code, '198.51.100.7').sameNetwork, false);
+    assert.notEqual((await fetch(`${baseUrl}/api/pair/${started.id}?secret=${started.secret}`)).status, 200, 'no secret in URLs');
+    const polled = await fetch(`${baseUrl}/api/pair/${started.id}/poll`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ secret: started.secret }) });
+    assert.deepEqual(await polled.json(), { state: 'pending' });
+  });
+
+  it('gives every browser a session, ends them all on rotation or on request (#27)', async () => {
+    const dee = store.createUser('dee2');
+    const signIn = async () => {
+      const res = await fetch(`${baseUrl}/api/session`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: dee.token }) });
+      return res.headers.get('set-cookie')!.split(';')[0]!;
+    };
+    const first = await signIn();
+    assert.ok(first.includes('orco_s_'), 'the cookie never holds the token');
+    const second = await signIn();
+    const out = await http('DELETE', '/api/sessions', {}, { Cookie: second, Origin: baseUrl });
+    assert.equal(out.body.ended, 2);
+    assert.equal((await http('GET', '/api/me', undefined, { Cookie: first })).status, 401);
+    const third = await signIn();
+    store.rotateToken('dee2');
+    assert.equal((await http('GET', '/api/me', undefined, { Cookie: third })).status, 401, 'a new token signs browsers out');
+  });
+
+  it('peeks at a sign-in link without spending it (#29)', async () => {
+    const { code } = store.signins.createLink(null, 'bea');
+    const peek = await fetch(`${baseUrl}/api/signin/peek`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) });
+    assert.deepEqual(await peek.json(), { name: 'bea' });
+    assert.equal(store.signins.use(code).participant.name, 'bea', 'still usable');
+  });
+
+  it('shows agents only who shares a project with them (#30)', async () => {
+    store.createUser('stranger');
+    const agent = store.participantByName('carlos-claude')!;
+    const seen = store.members(agent).map((p) => p.name);
+    assert.ok(seen.includes('carlos') && !seen.includes('stranger'), seen.join(','));
+    assert.ok(store.members(store.participantByName('carlos')!).some((p) => p.name === 'stranger'), 'people still see everyone');
+  });
+
+  it('locks token files to the user on Windows (#31)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'orco-acl-'));
+    const file = join(dir, 't');
+    writeFileSync(file, 'x');
+    const calls: string[][] = [];
+    const saved = { u: process.env.USERNAME, d: process.env.USERDOMAIN };
+    process.env.USERNAME = 'carlos';
+    process.env.USERDOMAIN = 'PC';
+    try {
+      privateFile(file, 'win32', ((cmd: string, args: string[]) => (calls.push([cmd, ...args]), { status: 0 })) as never);
+    } finally {
+      process.env.USERNAME = saved.u;
+      process.env.USERDOMAIN = saved.d;
+      if (saved.u === undefined) delete process.env.USERNAME;
+      if (saved.d === undefined) delete process.env.USERDOMAIN;
+    }
+    assert.deepEqual(calls, [['icacls', file, '/inheritance:r', '/grant:r', 'PC\\carlos:F']]);
   });
 });
