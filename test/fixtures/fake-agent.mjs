@@ -77,6 +77,13 @@ if (FAKE_MODE === 'ask') {
     state: 'done',
     note: JSON.stringify({ cwd: process.cwd(), branch, envBranch: process.env.ORCO_BRANCH, told: (process.argv[2] ?? '').includes('git worktree made for this task') }),
   });
+} else if (FAKE_MODE === 'limited') {
+  // Starts, saves its place, then the tool runs out of usage the way Claude Code reports it.
+  await call(`/tasks/${ORCO_TASK_ID}`, { state: 'accepted' });
+  await call(`/tasks/${ORCO_TASK_ID}/checkpoint`, { text: 'done: read the code; next: write the fix' });
+  console.log('Working on the rate limiter for the API'); // the work itself may mention limits
+  console.error("You've hit your usage limit · resets 3pm");
+  process.exit(1);
 } else if (FAKE_MODE === 'hang') {
   setInterval(() => {}, 1000);
 } else {

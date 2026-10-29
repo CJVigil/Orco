@@ -6,6 +6,35 @@ export interface Usage {
   costMicros: number | null;
 }
 
+/** The tool ran out of usage (a plan's limit, a rate limit or an empty balance), and when that may end. */
+export interface UsageLimit {
+  message: string;
+  /** When the limit resets, in ms since the epoch, if the tool said. */
+  resetAt: number | null;
+}
+
+/** What agent tools print when they cannot go on for lack of usage, quota or credit. */
+const LIMIT =
+  /(usage limit|hit your (?:usage |session |weekly )?limit|(?:5|five)[- ]hour limit|rate[ _-]?limit(?:ed| exceeded| reached)|quota (?:exceeded|reached)|insufficient_quota|exceeded your current quota|credit balance is too low|out of (?:credits|usage)|usage_limit_reached|resource_exhausted|too many requests)/i;
+
+/** A reset time in a limit message: a Unix timestamp ("…limit reached|1761750000") or a clock time ("resets 3pm", "try again at 15:30"). */
+export function resetTimeOf(message: string, now = Date.now()): number | null {
+  const stamp = /\|(\d{10})\b/.exec(message);
+  if (stamp) return Number(stamp[1]) * 1000;
+  const clock = /(?:resets?|reset at|try again at|available again at)\s*(?:at\s*)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i.exec(message);
+  if (!clock) return null;
+  let hours = Number(clock[1]);
+  const minutes = Number(clock[2] ?? 0);
+  const half = clock[3]?.toLowerCase();
+  if (half === 'pm' && hours < 12) hours += 12;
+  if (half === 'am' && hours === 12) hours = 0;
+  if (hours > 23 || minutes > 59) return null;
+  const at = new Date(now);
+  at.setHours(hours, minutes, 0, 0);
+  if (at.getTime() <= now) at.setDate(at.getDate() + 1);
+  return at.getTime();
+}
+
 const HEAD_BYTES = 64 * 1024;
 const TAIL_BYTES = 192 * 1024;
 const SNIPPET = 400;
@@ -66,6 +95,21 @@ export class RunOutput {
     if (costMicros !== null) this.cost = (this.cost ?? 0) + costMicros;
   }
 
+  private limitFound: UsageLimit | null = null;
+  private lines = 0;
+  private limitLine = 0;
+
+  /** Set when the tool said it is out of usage near the end of its output (the last such message wins). */
+  get limit(): UsageLimit | null {
+    return this.limitFound && this.lines - this.limitLine <= 15 ? this.limitFound : null;
+  }
+
+  /** Notes a limit reported some other way (a model API's 429). */
+  limitHit(message: string): void {
+    this.limitFound = { message: message.slice(0, 300), resetAt: resetTimeOf(message) };
+    this.limitLine = this.lines;
+  }
+
   get usage(): Usage {
     return { inputTokens: this.input, outputTokens: this.output, costMicros: this.cost };
   }
@@ -83,14 +127,21 @@ export class RunOutput {
   private line(stream: 'stdout' | 'stderr', raw: string): string[] {
     const text = raw.replace(ANSI, '').replace(/\r$/, '');
     if (!text.trim()) return [];
+    this.lines++;
     let rendered: string[] | null = null;
+    let event: Json | null = null;
     if (stream === 'stdout' && text.startsWith('{')) {
       try {
-        rendered = this.event(JSON.parse(text) as Json);
+        event = JSON.parse(text) as Json;
+        rendered = this.event(event);
       } catch {
         rendered = null;
       }
     }
+    // What the agent wrote or read while working (it may be building a rate limiter) is not the tool
+    // saying it ran out: only error events, stderr and plain output count.
+    const working = event !== null && (event.type === 'assistant' || event.type === 'user' || (event.type === 'item.completed' && event.item?.type !== 'error'));
+    if (!working && LIMIT.test(text)) this.limitHit(text);
     const lines = rendered ?? [stream === 'stderr' ? `[stderr] ${text}` : text];
     for (const line of lines) this.append(line);
     return lines;

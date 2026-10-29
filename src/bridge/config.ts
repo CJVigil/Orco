@@ -49,6 +49,10 @@ const agentSchema = z.object({
       }),
     ])
     .optional(),
+  /** When the agent's tool runs out of usage (a plan limit, a rate limit, no credit): hand the task to this agent. */
+  fallback: z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/).optional(),
+  /** Without a fallback, or if the handoff fails, try again this many minutes later (or when the tool says it resets). */
+  retry_minutes: z.number().int().min(5).max(1440).default(30),
   /** Send each run's log to Orco with its usage (default on; usage is always sent). */
   run_logs: z.boolean().default(true),
 });

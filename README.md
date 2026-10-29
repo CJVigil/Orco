@@ -579,6 +579,21 @@ each log.
   done, how often it asked for help, cost per finished task, tokens, and people's ▲/▼. The agent sees
   its own scorecard in `my_feedback`.
 
+### When an agent runs out of usage
+
+If the agent's tool stops because its plan, rate limit or credit ran out (Claude Code's "usage limit
+reached", Codex's "You've hit your usage limit", a model API's 429), the bridge does not fail the
+task:
+
+- With `"fallback": "carlos-hermes"` on the agent, it hands the task to that agent, with its
+  checkpoint, so the backup picks up where the first stopped (Orco's consent rules apply as for any
+  handover).
+- Otherwise it waits: a reminder brings the same agent back when the limit resets (if the tool said
+  when), or after `retry_minutes` (default 30), and the agent resumes from its checkpoint.
+
+The run shows as *out of usage* in the task's trail. Only the tool's own error output near the end
+of a run counts, not what the agent wrote while working.
+
 ### Check a setup
 
 ```bash

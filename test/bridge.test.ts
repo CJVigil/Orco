@@ -205,7 +205,7 @@ describe('bridge', () => {
 
   it('refuses a token that belongs to a different agent', async () => {
     const bridge = new Bridge(
-      { server: baseUrl, agents: [{ name: 'ana-bot', token_env: 'T', command: ['true'], timeout_seconds: 30, max_concurrent: 1, task_tokens: true, run_logs: true, lifecycle: 'agent' }] },
+      { server: baseUrl, agents: [{ name: 'ana-bot', token_env: 'T', command: ['true'], timeout_seconds: 30, max_concurrent: 1, task_tokens: true, run_logs: true, retry_minutes: 30, lifecycle: 'agent' }] },
       { env: { T: otherToken }, logger: quiet },
     );
     await assert.rejects(bridge.start(), /belongs to agent ana-other/);
@@ -234,6 +234,31 @@ describe('bridge and the kill switch', () => {
     assert.equal(stopped.state, 'failed');
     assert.match(stopped.note!, /Stopped: ana paused agents in api \(incident 42\)/);
     store.controls.resume(ana, 'project', 'api');
+  });
+});
+
+describe('bridge when the agent runs out of usage', () => {
+  it('hands the task, with its checkpoint, to the fallback agent', async () => {
+    const logs: string[] = [];
+    await startBridge('limited', { fallback: 'ana-other' }, logs);
+    const t = task('fix the flaky test');
+    await waitFor(() => logs.some((l) => l.includes(`task #${t.id}: out of usage, handed to ana-other`)), 'the handoff');
+    assert.equal(store.tasks.get(ana, t.id).state, 'declined');
+    const next = store.tasks.list(ana, { open: true }).find((x) => x.assignee === 'ana-other' && x.request.includes('fix the flaky test'))!;
+    assert.ok(next, 'a task for the fallback agent');
+    assert.match(store.tasks.get(ana, next.id).checkpoint?.text ?? '', /next: write the fix/);
+    store.tasks.update(ana, next.id, 'cancelled');
+  });
+
+  it('waits for the limit to reset instead of failing the task', async () => {
+    const logs: string[] = [];
+    await startBridge('limited', {}, logs);
+    const t = task('long refactor');
+    await waitFor(() => logs.some((l) => l.includes(`task #${t.id}: out of usage; trying again in`)), 'the bridge to wait');
+    assert.equal(store.tasks.get(ana, t.id).state, 'accepted', 'not failed');
+    const reminder = store.reminders.pendingFor(store.participantByName('ana-bot')!).find((r) => r.taskId === t.id);
+    assert.ok(reminder, 'a reminder to try again');
+    store.tasks.update(ana, t.id, 'cancelled');
   });
 });
 

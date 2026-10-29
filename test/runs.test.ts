@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { after, afterEach, before, describe, it } from 'node:test';
 import { Bridge, type Logger } from '../src/bridge/bridge.js';
 import { type BridgeAgentConfig, parseBridgeConfig } from '../src/bridge/config.js';
-import { RunOutput } from '../src/bridge/output.js';
+import { RunOutput, resetTimeOf } from '../src/bridge/output.js';
 import { openDatabase } from '../src/db.js';
 import { createApp } from '../src/http.js';
 import { maskSecrets } from '../src/mask.js';
@@ -223,6 +223,22 @@ describe('bridge run reports', () => {
     const [run] = store.runs.list(ana, t.id);
     assert.equal(run!.logBytes, 0);
     assert.equal(run!.costMicros, 123_400);
+  });
+
+  it('tells running out of usage apart from work that mentions limits', () => {
+    const work = new RunOutput();
+    work.feed('stdout', '{"type":"assistant","message":{"content":[{"type":"text","text":"Adding a rate limit exceeded error to the API"}]}}\n');
+    assert.equal(work.limit, null, 'what the agent writes does not count');
+    const hit = new RunOutput();
+    hit.feed('stdout', '{"type":"result","subtype":"error","is_error":true,"result":"Claude AI usage limit reached|1761750000"}\n');
+    assert.equal(hit.limit?.resetAt, 1_761_750_000_000);
+    const early = new RunOutput();
+    early.feed('stderr', 'warning: rate limited, retrying\n');
+    for (let i = 0; i < 20; i++) early.feed('stdout', `step ${i}\n`);
+    assert.equal(early.limit, null, 'a passing warning long before the end does not count');
+    const now = new Date(2026, 9, 29, 10, 0).getTime();
+    assert.equal(new Date(resetTimeOf("You've hit your limit · resets 3pm", now)!).getHours(), 15);
+    assert.equal(resetTimeOf('try again at 9:30 am', now)! > now, true, 'a time already past means tomorrow');
   });
 
   it('renders Codex events and model usage', () => {

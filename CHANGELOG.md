@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Out of usage: when an agent's tool hits its usage limit, rate limit or credit, the bridge hands the
+  task (with its checkpoint) to the agent's `fallback`, or waits until the limit resets (or
+  `retry_minutes`) and resumes it, instead of failing it.
+
 - Running many projects: a **Portfolio** view with project health (red, amber, green and why), a
   roadmap of milestones across projects with cross-project blockers and at-risk detection, a decision
   log agents read, weekly digests posted to each project (and a roll-up for org admins), and
