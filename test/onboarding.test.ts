@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { parseBridgeConfig } from '../src/bridge/config.js';
 import { connect, detectTools } from '../src/connect.js';
@@ -117,8 +117,8 @@ describe('orco connect', () => {
     const config = parseBridgeConfig(JSON.parse(readFileSync(join(dir, 'bridge.json'), 'utf8')));
     assert.equal(config.server, baseUrl);
     assert.deepEqual(config.agents.map((a) => [a.name, a.preset, a.cwd]), [
-      ['carlos-laptop', 'codex', '/home/carlos/code/api'],
-      ['carlos-claude', 'claude', '/home/carlos/code/api'],
+      ['carlos-laptop', 'codex', resolve('/home/carlos/code/api')],
+      ['carlos-claude', 'claude', resolve('/home/carlos/code/api')],
     ]);
     const token = readFileSync(config.agents[0]!.token_file!, 'utf8').trim();
     assert.equal(store.authenticate(token)!.name, 'carlos-laptop');
