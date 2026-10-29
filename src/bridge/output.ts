@@ -14,7 +14,7 @@ export interface UsageLimit {
 }
 
 /** What agent tools print when they cannot go on for lack of usage, quota or credit. */
-const LIMIT =
+export const LIMIT =
   /(usage limit|hit your (?:usage |session |weekly )?limit|(?:5|five)[- ]hour limit|rate[ _-]?limit(?:ed| exceeded| reached)|quota (?:exceeded|reached)|insufficient_quota|exceeded your current quota|credit balance is too low|out of (?:credits|usage)|usage_limit_reached|resource_exhausted|too many requests)/i;
 
 /** A reset time in a limit message: a Unix timestamp ("…limit reached|1761750000") or a clock time ("resets 3pm", "try again at 15:30"). */
@@ -96,17 +96,24 @@ export class RunOutput {
   }
 
   private limitFound: UsageLimit | null = null;
+  private limitStructured = false;
   private lines = 0;
   private limitLine = 0;
 
-  /** Set when the tool said it is out of usage near the end of its output (the last such message wins). */
+  /**
+   * Set when the tool said it is out of usage at the very end of its output (the last such message
+   * wins): in one of its own error events among the last 15 lines, or as a plain line among the last 3.
+   * Anything earlier is the work talking (a git push or a test that hit someone's rate limit).
+   */
   get limit(): UsageLimit | null {
-    return this.limitFound && this.lines - this.limitLine <= 15 ? this.limitFound : null;
+    if (!this.limitFound) return null;
+    return this.lines - this.limitLine < (this.limitStructured ? 15 : 3) ? this.limitFound : null;
   }
 
-  /** Notes a limit reported some other way (a model API's 429). */
-  limitHit(message: string): void {
+  /** Notes a limit: `structured` when it came from the tool's own error event, or a model API's error. */
+  limitHit(message: string, structured = true): void {
     this.limitFound = { message: message.slice(0, 300), resetAt: resetTimeOf(message) };
+    this.limitStructured = structured;
     this.limitLine = this.lines;
   }
 
@@ -141,7 +148,7 @@ export class RunOutput {
     // What the agent wrote or read while working (it may be building a rate limiter) is not the tool
     // saying it ran out: only error events, stderr and plain output count.
     const working = event !== null && (event.type === 'assistant' || event.type === 'user' || (event.type === 'item.completed' && event.item?.type !== 'error'));
-    if (!working && LIMIT.test(text)) this.limitHit(text);
+    if (!working && LIMIT.test(text)) this.limitHit(text, event !== null);
     const lines = rendered ?? [stream === 'stderr' ? `[stderr] ${text}` : text];
     for (const line of lines) this.append(line);
     return lines;

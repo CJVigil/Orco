@@ -510,10 +510,17 @@ export class Tasks {
     this.store.db
       .prepare(
         `UPDATE tasks SET progress = ?, progress_pct = ?, progress_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-           heartbeat_at = ?, stall_notified = 0, spent_cents = coalesce(?, spent_cents), spent_tokens = coalesce(?, spent_tokens)
+           heartbeat_at = ?, stall_notified = 0 WHERE id = ?`,
+      )
+      .run(line, percent ?? null, this.store.now(), id);
+    // An agent's own figure is a total, and can only raise the spend: what the bridge measured stands.
+    this.store.db
+      .prepare(
+        `UPDATE tasks SET reported_cents = max(reported_cents, coalesce(?, 0)), reported_tokens = max(reported_tokens, coalesce(?, 0)),
+           spent_cents = max(measured_cents, max(reported_cents, coalesce(?, 0))), spent_tokens = max(measured_tokens, max(reported_tokens, coalesce(?, 0)))
          WHERE id = ?`,
       )
-      .run(line, percent ?? null, this.store.now(), usage.costCents ?? null, usage.tokens ?? null, id);
+      .run(usage.costCents ?? null, usage.tokens ?? null, usage.costCents ?? null, usage.tokens ?? null, id);
     if (usage.costCents != null) this.store.controls.checkSpend(id);
     this.store.audit.record(actor, 'task.progress', {
       projectId: row.project_id,
@@ -529,7 +536,13 @@ export class Tasks {
   /** Adds what a bridge-reported run cost to the task's spend, and checks its budget. */
   addUsage(id: number, cents: number, tokens: number): void {
     if (cents <= 0 && tokens <= 0) return;
-    this.store.db.prepare('UPDATE tasks SET spent_cents = spent_cents + ?, spent_tokens = spent_tokens + ? WHERE id = ?').run(cents, tokens, id);
+    this.store.db
+      .prepare(
+        `UPDATE tasks SET measured_cents = measured_cents + ?, measured_tokens = measured_tokens + ?,
+           spent_cents = max(measured_cents + ?, reported_cents), spent_tokens = max(measured_tokens + ?, reported_tokens)
+         WHERE id = ?`,
+      )
+      .run(cents, tokens, cents, tokens, id);
     this.checkOverBudget(id);
     this.store.controls.checkSpend(id);
     this.store.events.emit('task', this.byId(id)!);
@@ -732,6 +745,17 @@ export class Tasks {
     if (row.assignee_id !== actor.id) throw new OrcoError('forbidden', `Only ${row.assignee} can hand task ${id} over`);
     const current = effectiveState(row);
     if (!['requested', 'accepted', 'needs_input'].includes(current)) throw new OrcoError('conflict', `Task ${id} is ${current}`);
+    // No hand-over loops (A to B and back to A): an agent that already had this work in the chain cannot get it again.
+    const target = this.store.participantByName(agentName);
+    if (target) {
+      const step = this.store.db.prepare('SELECT parent_id, assignee_id FROM tasks WHERE id = ?');
+      for (let at: number | null = id, hops = 0; at !== null && hops <= 50; hops++) {
+        const up = step.get(at) as { parent_id: number | null; assignee_id: number } | undefined;
+        if (!up) break;
+        if (up.assignee_id === target.id) throw new OrcoError('conflict', `${agentName} already had this work in the chain; ask a person instead`);
+        at = up.parent_id;
+      }
+    }
     const why = note?.trim();
     const request = `${row.request}\n\nHanded over by ${actor.name}${why ? `: ${why}` : '.'}`.slice(0, MAX_REQUEST);
     const room = this.toTask(row).room;

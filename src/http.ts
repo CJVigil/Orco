@@ -404,7 +404,11 @@ export function createApp(store: Store, options: AppOptions = {}) {
   });
 
   const api = express.Router();
-  api.use(auth, express.json({ limit: '64kb' }), rejectCrossSite);
+  api.use(auth, express.json({ limit: '64kb' }), rejectCrossSite, (req, _res, next) => {
+    // The REST half of the choke point: what an agent sends is stored with leased secrets hidden.
+    if (req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) req.body = store.maskInput(req.participant!, req.body);
+    next();
+  });
 
   api.get('/me', (req, res) => {
     const me = req.participant!;
@@ -477,8 +481,8 @@ export function createApp(store: Store, options: AppOptions = {}) {
     const role = req.body?.role === null ? null : (req.body?.role ?? 'member');
     res.json(store.groups.setProjectRole(req.participant!, String(req.params.project), String(req.body?.group ?? ''), role));
   });
-  api.get('/groups', (_req, res) => {
-    res.json(store.groups.list());
+  api.get('/groups', (req, res) => {
+    res.json(store.groups.list(req.participant!));
   });
   api.post('/groups', (req, res) => {
     const members = Array.isArray(req.body?.members) ? req.body.members.map(String) : [];

@@ -137,5 +137,15 @@ describe('more agent tools over MCP', () => {
     assert.equal((await api(tokens.ben, `/api/approvals/${approvals[0].id}`, { decision: 'approved' })).status, 200);
     assert.equal((await call(client, 'use_secret', { lease_id: lease.lease_id })).value, 'sntrys_abc');
     assert.equal((await api(tokens.ana, `/api/leases/${lease.lease_id}/use`, {})).status, 404, 'people never read values');
+
+    // Whatever the agent writes afterwards, through any tool or endpoint, is stored with the value hidden.
+    await call(client, 'report_progress', { task_id: task.id, text: 'Queried with sntrys_abc' });
+    await call(client, 'checkpoint', { task_id: task.id, text: 'Token is sntrys_abc; retry with it' });
+    const ticket = await api(tokens['ana-claude'], '/api/projects/api/tickets', { title: 'Leak sntrys_abc', description: 'Token sntrys_abc in logs' });
+    const file = await call(client, 'post', { room: 'api/general', text: 'Log attached', files: [{ name: 'run.log', text: 'Authorization: sntrys_abc' }] });
+    const stored = JSON.stringify([store.db.prepare('SELECT * FROM tasks').all(), ticket.body, store.db.prepare('SELECT data FROM attachments').all().map((a: any) => Buffer.from(a.data).toString('utf8'))]);
+    assert.ok(file);
+    assert.ok(!stored.includes('sntrys_abc'), stored);
+    assert.ok(stored.includes('[hidden]'));
   });
 });

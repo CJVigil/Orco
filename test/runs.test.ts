@@ -236,6 +236,14 @@ describe('bridge run reports', () => {
     early.feed('stderr', 'warning: rate limited, retrying\n');
     for (let i = 0; i < 20; i++) early.feed('stdout', `step ${i}\n`);
     assert.equal(early.limit, null, 'a passing warning long before the end does not count');
+    const npm = new RunOutput();
+    npm.feed('stderr', 'npm ERR! 429 Too Many Requests - GET https://registry.npmjs.org/left-pad\n');
+    for (let i = 0; i < 4; i++) npm.feed('stdout', `cleanup ${i}\n`);
+    assert.equal(npm.limit, null, 'a plain line counts only among the last three');
+    const last = new RunOutput();
+    last.feed('stdout', 'working\n');
+    last.feed('stderr', 'Error: You exceeded your current quota\n');
+    assert.ok(last.limit, 'the tool\'s last words do');
     const now = new Date(2026, 9, 29, 10, 0).getTime();
     assert.equal(new Date(resetTimeOf("You've hit your limit · resets 3pm", now)!).getHours(), 15);
     assert.equal(resetTimeOf('try again at 9:30 am', now)! > now, true, 'a time already past means tomorrow');

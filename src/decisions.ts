@@ -90,6 +90,11 @@ export class Decisions {
     const tags = items(input.tags, 'tags', 10, 32).map((t) => t.toLowerCase());
     const old = supersedes === undefined ? null : this.get(actor, supersedes);
     if (old?.supersededBy) throw new OrcoError('conflict', `Decision ${supersedes} was already superseded by ${old.supersededBy}`);
+    // A decision is replaced only from where it was made: a project's in that project, an org-wide one
+    // by an org admin with another org-wide decision.
+    if (old && old.project !== (input.project || null)) {
+      throw new OrcoError('forbidden', old.project ? `Decision ${supersedes} belongs to ${old.project}; supersede it with a decision there` : `Decision ${supersedes} is org-wide; only an org-wide decision by an org admin supersedes it`);
+    }
     const { lastInsertRowid } = this.store.db
       .prepare('INSERT INTO decisions (project_id, title, context, options, decision, tags, decided_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
       .run(projectId, title, context, JSON.stringify(options), decision, JSON.stringify(tags), actor.id, new Date(this.store.now()).toISOString());

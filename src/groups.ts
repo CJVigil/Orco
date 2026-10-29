@@ -83,8 +83,16 @@ export class Groups {
     return this.get(name);
   }
 
-  list(): Group[] {
-    return (this.store.db.prepare('SELECT name FROM groups ORDER BY name').all() as { name: string }[]).map((g) => this.get(g.name));
+  /**
+   * Groups, for people: org admins see everything; others see each group's members but only the
+   * projects they can see themselves. Agents and task tokens get none.
+   */
+  list(actor: Participant): Group[] {
+    if (actor.kind !== 'user' || actor.scope) throw new OrcoError('forbidden', 'Only people see groups');
+    const all = (this.store.db.prepare('SELECT name FROM groups ORDER BY name').all() as { name: string }[]).map((g) => this.get(g.name));
+    if (this.store.isOrgAdmin(actor)) return all;
+    const visible = new Set(this.store.listProjects(actor).map((p) => p.name));
+    return all.map((g) => ({ ...g, projects: g.projects.filter((p) => visible.has(p.project)) }));
   }
 
   get(name: string): Group {

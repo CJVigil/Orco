@@ -62,8 +62,10 @@ function cleanName(raw: string | undefined, mime: AttachmentMime): string {
 export class Attachments {
   constructor(private readonly store: Store) {}
 
-  upload(actor: Participant, roomRef: string, data: Buffer, name?: string): AttachmentInfo {
+  upload(actor: Participant, roomRef: string, upload: Buffer, name?: string): AttachmentInfo {
     const room = this.store.room(actor, roomRef);
+    // Text from an agent gets the same secret masking as everything else it sends (images are bytes).
+    const data = actor.kind === 'agent' && !sniffImage(upload) && isText(upload) ? Buffer.from(this.store.maskInput(actor, upload.toString('utf8')), 'utf8') : upload;
     if (data.length === 0) throw new OrcoError('invalid', 'The file is empty');
     if (data.length > MAX_ATTACHMENT_BYTES) throw new OrcoError('invalid', `Images can be at most ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB`);
     // Images are recognised by their bytes; anything else must be plain UTF-8 text. Nothing is ever served as HTML or SVG.

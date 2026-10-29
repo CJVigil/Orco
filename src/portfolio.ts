@@ -178,6 +178,8 @@ export class Portfolios {
   roadmap(actor: Participant): RoadmapMilestone[] {
     const ids = this.projects(actor).map((p) => p.id);
     if (!ids.length) return [];
+    // What this viewer's portfolio covers (an org admin's covers every project).
+    const visible = new Set(ids);
     const db = this.store.db;
     const now = this.store.now();
     const today = new Date(now).toISOString().slice(0, 10);
@@ -193,7 +195,7 @@ export class Portfolios {
       )
       .all(...ids) as { id: number; project: string; name: string; target_date: string | null; total: number; done: number }[];
     const blockers = db.prepare(
-      `SELECT bp.ticket_key || '-' || t.number AS ticket, kp.ticket_key || '-' || b.number AS blocker, b.title AS blocker_title, kp.name AS blocker_project,
+      `SELECT bp.ticket_key || '-' || t.number AS ticket, kp.ticket_key || '-' || b.number AS blocker, b.title AS blocker_title, kp.name AS blocker_project, kp.id AS blocker_project_id,
          bm.id AS blocker_milestone_id, bm.name AS blocker_milestone, coalesce(b.due_date, bm.target_date) AS blocker_due
        FROM tickets t
        JOIN ticket_statuses ts ON ts.id = t.status_id
@@ -207,15 +209,23 @@ export class Portfolios {
     );
     const lateIds = new Set(rows.filter((r) => r.target_date !== null && r.target_date < today && r.done < r.total).map((r) => r.id));
     return rows.map((r) => {
-      const waits = blockers.all(r.id) as {
-        ticket: string;
-        blocker: string;
-        blocker_title: string;
-        blocker_project: string;
-        blocker_milestone_id: number | null;
-        blocker_milestone: string | null;
-        blocker_due: string | null;
-      }[];
+      // A blocker in a project the viewer cannot see still counts toward the risk, but stays anonymous.
+      const waits = (
+        blockers.all(r.id) as {
+          ticket: string;
+          blocker: string;
+          blocker_title: string;
+          blocker_project: string;
+          blocker_project_id: number;
+          blocker_milestone_id: number | null;
+          blocker_milestone: string | null;
+          blocker_due: string | null;
+        }[]
+      ).map((w) =>
+        visible.has(w.blocker_project_id)
+          ? w
+          : { ...w, blocker: 'a ticket', blocker_title: '', blocker_project: 'another project', blocker_milestone: w.blocker_milestone === null ? null : 'its milestone' },
+      );
       const waitsOn: ExternalBlocker[] = waits.map((w) => ({
         ticket: w.ticket,
         blocker: w.blocker,
@@ -278,13 +288,14 @@ export class Portfolios {
       )
       .all(projectId) as { id: number; number: number; title: string; blocked_reason: string }[];
     const waitsOn = db.prepare(
-      `SELECT p.ticket_key || '-' || b.number AS ref FROM ticket_links l JOIN tickets b ON b.id = l.blocker_id JOIN projects p ON p.id = b.project_id
+      `SELECT p.ticket_key || '-' || b.number AS ref, b.project_id FROM ticket_links l JOIN tickets b ON b.id = l.blocker_id JOIN projects p ON p.id = b.project_id
        JOIN ticket_statuses bs ON bs.id = b.status_id WHERE l.blocked_id = ? AND bs.category NOT IN ${CLOSED}`,
     );
     if (blocked.length) {
       lines.push('', `**Blocked (${blocked.length})**`);
       for (const t of blocked) {
-        const refs = (waitsOn.all(t.id) as { ref: string }[]).map((w) => w.ref);
+        // Everyone in the project reads the digest, so blockers elsewhere are not named.
+        const refs = (waitsOn.all(t.id) as { ref: string; project_id: number }[]).map((w) => (w.project_id === projectId ? w.ref : 'a ticket in another project'));
         const why = [refs.length ? `waits on ${refs.join(', ')}` : '', t.blocked_reason].filter(Boolean).join('; ');
         lines.push(`- ${key}-${t.number} ${t.title}${why ? ` — ${why}` : ''}`);
       }

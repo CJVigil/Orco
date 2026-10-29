@@ -732,6 +732,14 @@ export const MIGRATIONS = [
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
   `,
+  // 18: what a task cost, measured by the bridge and reported by the agent, kept apart; spent_* is the larger.
+  `
+  ALTER TABLE tasks ADD COLUMN measured_cents INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE tasks ADD COLUMN reported_cents INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE tasks ADD COLUMN measured_tokens INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE tasks ADD COLUMN reported_tokens INTEGER NOT NULL DEFAULT 0;
+  UPDATE tasks SET measured_cents = spent_cents, measured_tokens = spent_tokens;
+  `,
 ];
 
 export interface OpenOptions {

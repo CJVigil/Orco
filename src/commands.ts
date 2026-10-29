@@ -317,9 +317,8 @@ export function main(): void {
           console.error(`Scheduled backup failed: ${(err as Error).message}`);
         }
       }
-      const trust = process.env.ORCO_TRUST_PROXY?.trim();
-      // A number is a hop count ("1": one proxy in front); anything else is Express's list of addresses or names.
-      if (trust) app.set('trust proxy', /^\d+$/.test(trust) ? Number(trust) : trust === 'true' ? true : trust);
+      const trust = trustProxySetting(process.env.ORCO_TRUST_PROXY);
+      if (trust !== undefined) app.set('trust proxy', trust);
       const port = Number(values.port);
       if (!Number.isInteger(port) || port < 1 || port > 65535) throw new OrcoError('invalid', `Invalid port ${values.port}`);
       const server = app.listen(port, values.host, () => {
@@ -455,4 +454,22 @@ function serverBase(values: { host?: string; port?: string }): string {
   const publicUrl = process.env.ORCO_PUBLIC_URL;
   const host = values.host === '0.0.0.0' || !values.host ? 'localhost' : values.host;
   return (publicUrl || `http://${host}:${values.port ?? '7420'}`).replace(/\/+$/, '');
+}
+
+/**
+ * ORCO_TRUST_PROXY: a hop count ("1": one proxy in front), or Express's list of proxy addresses or
+ * names (loopback, uniquelocal, 10.0.0.2). Never "true": that trusts whatever X-Forwarded-For a client
+ * sends, so anyone reaching Orco directly could dodge the sign-in limits by making up addresses.
+ */
+export function trustProxySetting(raw: string | undefined): number | string | undefined {
+  const value = raw?.trim();
+  if (!value || value === 'false' || value === '0') return undefined;
+  if (/^\d+$/.test(value)) return Number(value);
+  if (/^(true|yes|on|\*)$/i.test(value)) {
+    throw new OrcoError(
+      'invalid',
+      `ORCO_TRUST_PROXY=${value} would trust any client's X-Forwarded-For. Set the number of proxies in front of Orco (like 1), or their addresses (loopback, uniquelocal, 10.0.0.2).`,
+    );
+  }
+  return value;
 }

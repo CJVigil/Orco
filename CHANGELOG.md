@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Security fixes (#16-#20, #22, #24): agents and task tokens never administer a project, whatever
+  their owner's role (groups, members, roles, budgets, pauses, policies); an agent's reported cost can
+  only raise a task's spend, never lower what the bridge measured; decisions are superseded only from
+  where they were made (org-wide ones by org admins); groups are listed to people only, without
+  projects they cannot see; every string an agent sends (REST bodies, MCP tool arguments, text
+  files) is stored with leased secret values hidden; the roadmap and digests no longer name blocker
+  tickets in projects the reader cannot see; and `ORCO_TRUST_PROXY=true` is refused.
+- Bridge (#21, #23): a usage limit counts only when the tool says so at the very end of its output
+  (a plain line among the last three, or its own error event), is checked before a clean exit counts
+  as done, and is retried at most 6 times in a row before the task fails; hand-overs cannot loop back
+  to an agent that already had the work; the limit message is masked before it reaches a task note.
+
 - Sign-in links: inviting someone gives a link that signs them in once (7 days) and welcomes them,
   instead of a token to paste. Anyone makes a 15-minute one for their own other device (click your
   name), and for someone who lost access `orco user link <name>` prints one on the server. Nobody

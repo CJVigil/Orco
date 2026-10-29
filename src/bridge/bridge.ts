@@ -8,7 +8,7 @@ import type { Task } from '../tasks.js';
 import { agentToken, type BridgeAgentConfig, type BridgeConfig } from './config.js';
 import { EventStream } from './events.js';
 import { runModel } from './model.js';
-import { RunOutput, type UsageLimit } from './output.js';
+import { LIMIT, RunOutput, type UsageLimit } from './output.js';
 import { type Workspace, Worktrees } from './worktree.js';
 
 export const DEFAULT_PROMPT = `You have a task from Orco, your team's agent chat.
@@ -61,6 +61,8 @@ function runDir(): string {
   return dir;
 }
 const OUTPUT_TAIL = 2_000;
+/** Out-of-usage waits in a row before a task fails instead (a limit that never lifts, or one misread). */
+const MAX_LIMIT_RETRIES = 6;
 const OPEN = ['awaiting_approval', 'requested', 'accepted', 'needs_input'];
 
 const WORKSPACE_NOTE = `
@@ -159,6 +161,8 @@ class AgentRunner {
   private readonly runningTasks = new Map<number, Task>();
   /** Why a run was stopped by a pause, for the note on the task. */
   private readonly pausedNotes = new Map<number, string>();
+  /** Consecutive out-of-usage runs per task. */
+  private readonly limitStreak = new Map<number, number>();
   /** Work not started because of a pause; started when the pause is lifted. */
   private readonly held = new Map<number, Job>();
   private stream: EventStream | null = null;
@@ -459,15 +463,18 @@ class AgentRunner {
       this.runningTasks.delete(task.id);
       const pausedNote = this.pausedNotes.get(task.id);
       this.pausedNotes.delete(task.id);
+      // Out of usage only when the tool failed with it at the very end (or, when the bridge closes tasks
+      // itself, said it last even on a clean exit): checked before a clean exit counts as done.
+      const limit = pausedNote || timedOut || (reason === 'code 0' && this.config.lifecycle !== 'bridge') ? null : output.limit;
       const outcome = pausedNote
         ? 'stopped: paused'
         : timedOut
           ? `stopped after ${this.config.timeout_seconds}s`
-          : output.limit
+          : limit
             ? `out of usage (${reason})`
             : reason;
       const report = this.report(task, mode, startedAt, outcome, output, workspace, token);
-      if (this.config.lifecycle === 'bridge' && reason === 'code 0' && !timedOut && !pausedNote) {
+      if (this.config.lifecycle === 'bridge' && reason === 'code 0' && !timedOut && !pausedNote && !limit) {
         // The tool cannot report back, so its own summary becomes the result.
         const summary = maskSecrets(tail.trim().slice(-1500), this.secrets(token)) || 'Finished.';
         void report
@@ -480,8 +487,8 @@ class AgentRunner {
       const note =
         pausedNote ??
         (timedOut ? `The agent was stopped after ${this.config.timeout_seconds}s without finishing the task.` : `The agent exited (${reason}) without finishing the task.`);
-      const limit = pausedNote || timedOut ? null : output.limit;
-      void report.then(() => (limit ? this.outOfUsage(task, limit, note) : this.finish(task, note))).finally(() => this.afterRun(task));
+      if (!limit) this.limitStreak.delete(task.id);
+      void report.then(() => (limit ? this.outOfUsage(task, limit, note, token) : this.finish(task, note))).finally(() => this.afterRun(task));
     };
     child.on('error', (err) => done(`could not start: ${err.message}`));
     child.on('exit', (code, signal) => done(signal ? `signal ${signal}` : `code ${code}`));
@@ -518,7 +525,7 @@ class AgentRunner {
       const message = this.pausedNotes.get(task.id) ?? (abort.signal.aborted ? `stopped after ${this.config.timeout_seconds}s or cancelled` : (err as Error).message);
       this.log.error(`[${this.config.name}] task #${task.id} model run failed: ${message}`);
       note = this.pausedNotes.get(task.id) ?? `The model run failed: ${message}`;
-      if (/answered 429|insufficient_quota|quota|rate limit|credit/i.test(message)) output.limitHit(message);
+      if (/answered 429/i.test(message) || LIMIT.test(message)) output.limitHit(message);
       this.pausedNotes.delete(task.id);
       outcome = `failed: ${message}`.slice(0, 200);
       output.note(`! ${message}`);
@@ -530,8 +537,9 @@ class AgentRunner {
       this.stopping.delete(task.id);
     }
     const limit = this.pausedNotes.has(task.id) ? null : output.limit;
+    if (!limit) this.limitStreak.delete(task.id);
     await this.report(task, mode, startedAt, limit ? `out of usage: ${outcome}`.slice(0, 200) : outcome, output, null, token);
-    await (limit ? this.outOfUsage(task, limit, note) : this.finish(task, note));
+    await (limit ? this.outOfUsage(task, limit, note, token) : this.finish(task, note));
     this.afterRun(task);
   }
 
@@ -539,8 +547,18 @@ class AgentRunner {
    * The agent's tool ran out of usage. That is not the task's fault, so it is not failed: it goes to
    * the fallback agent with its checkpoint, or waits (a reminder) until the limit resets and runs again.
    */
-  private async outOfUsage(task: Task, limit: UsageLimit, note: string): Promise<void> {
+  private async outOfUsage(task: Task, limit: UsageLimit, note: string, token: string): Promise<void> {
     if (this.stopped) return;
+    // The tool's message may echo a key or header: it goes into the task masked, like the run log.
+    const message = maskSecrets(limit.message, this.secrets(token));
+    const streak = (this.limitStreak.get(task.id) ?? 0) + 1;
+    this.limitStreak.set(task.id, streak);
+    if (streak > MAX_LIMIT_RETRIES) {
+      this.limitStreak.delete(task.id);
+      this.log.error(`[${this.config.name}] task #${task.id}: out of usage ${streak} times in a row; giving up`);
+      await this.finish(task, `${note} It ran out of usage ${streak} times in a row, so the bridge stopped retrying: ${message}`);
+      return;
+    }
     try {
       const current = (await this.api(`/tasks/${task.id}`)) as Task;
       if (!OPEN.includes(current.state)) return;
@@ -563,7 +581,7 @@ class AgentRunner {
       this.log.info(`[${this.config.name}] task #${task.id}: out of usage; trying again in ${minutes} minutes`);
     } catch (err) {
       this.log.error(`[${this.config.name}] task #${task.id}: could not wait out the usage limit: ${(err as Error).message}`);
-      await this.finish(task, `${note} It ran out of usage: ${limit.message}`);
+      await this.finish(task, `${note} It ran out of usage: ${message}`);
     }
   }
 

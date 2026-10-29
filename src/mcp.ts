@@ -289,7 +289,7 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
   /** The tasks behind these messages that are assigned to me, so reading them counts as seeing them. */
   const sawTasks = (messages: Message[]) => store.tasks.markSeen(me, messages.filter((m) => m.task?.assignee === me.name).map((m) => m.task!.id));
 
-  const server = new McpServer(
+  const server: McpServer = new McpServer(
     { name: 'orco', version: '0.1.0' },
     {
       instructions:
@@ -308,6 +308,10 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         UNTRUSTED_NOTE,
     },
   );
+  // Every tool's arguments pass through maskInput first: an agent never writes a leased secret into Orco.
+  const register = server.registerTool.bind(server) as (name: string, config: { inputSchema?: unknown }, handler: (...args: unknown[]) => unknown) => unknown;
+  (server as unknown as { registerTool: typeof register }).registerTool = (name, config, handler) =>
+    register(name, config, config.inputSchema === undefined ? handler : (args: unknown, ...rest: unknown[]) => handler(store.maskInput(me, args), ...rest));
 
   server.registerTool(
     'whoami',

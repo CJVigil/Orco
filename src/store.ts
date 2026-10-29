@@ -777,8 +777,11 @@ export class Store {
     return project;
   }
 
-  /** A project the actor administers: a project admin, or an org admin (who need not be a member). */
+  /** A project the actor administers: a person who is its admin, or an org admin (who need not be a member). */
   adminProject(actor: Participant, name: string): Project {
+    // Agents (and task tokens) never administer, whatever their owner's role: no members, roles,
+    // groups, budgets, pauses or policies.
+    if (actor.kind !== 'user' || actor.scope) throw new OrcoError('forbidden', 'Only people can do that');
     const row = this.db.prepare('SELECT id, name FROM projects WHERE name = ?').get(name) as Project | undefined;
     if (!row) throw new OrcoError('not_found', `No project ${name}`);
     if (this.isOrgAdmin(actor)) return row;
@@ -1036,6 +1039,23 @@ export class Store {
     let out = text;
     for (const value of this.secrets.revealedTo(actor.id)) if (value.length >= 6) out = out.split(value).join('[hidden]');
     return out;
+  }
+
+  /**
+   * The one choke point for #20: every string an agent sends (REST bodies, MCP tool arguments), with
+   * leased secret values hidden, before any of it is stored, posted or passed on.
+   */
+  maskInput<T>(actor: Participant, value: T): T {
+    if (actor.kind !== 'agent') return value;
+    const secrets = this.secrets.revealedTo(actor.id).filter((v) => v.length >= 6);
+    if (!secrets.length) return value;
+    const walk = (v: unknown, depth: number): unknown => {
+      if (typeof v === 'string') return secrets.reduce((out, s) => out.split(s).join('[hidden]'), v);
+      if (depth > 20 || v === null || typeof v !== 'object' || Buffer.isBuffer(v)) return v;
+      if (Array.isArray(v)) return v.map((x) => walk(x, depth + 1));
+      return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x, depth + 1)]));
+    };
+    return walk(value, 0) as T;
   }
 
   humanOf(actor: Participant): number {

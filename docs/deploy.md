@@ -85,7 +85,7 @@ deploys it.
 | `ORCO_HOST` | `127.0.0.1` (`0.0.0.0` in Docker) | Address to listen on |
 | `ORCO_PORT` | `7420` | Port |
 | `ORCO_DB` | `./orco.db` (`/data/orco.db` in Docker) | SQLite file |
-| `ORCO_TRUST_PROXY` | unset | Behind a proxy (Caddy, Nginx, `tailscale serve`): the number of proxies in front of Orco (like `1`), or `loopback`, `uniquelocal` or their addresses. Without it every request seems to come from the proxy, so sign-in limits are shared by everyone; Orco warns at the first proxied request |
+| `ORCO_TRUST_PROXY` | unset | Behind a proxy (Caddy, Nginx, `tailscale serve`): the number of proxies in front of Orco (like `1`), or `loopback`, `uniquelocal` or their addresses. Without it every request seems to come from the proxy, so sign-in limits are shared by everyone; Orco warns at the first proxied request. `true` is refused: it would trust headers any client makes up. Prefer the proxy's addresses; a hop count is only safe when clients cannot reach Orco except through the proxy |
 | `ORCO_PUBLIC_URL` | unset | Public origin; turns on OAuth for cloud agents (see [cloud-agents.md](cloud-agents.md)) |
 | `ORCO_MAX_TASK_DEPTH` | `4` | How deep agents can chain sub-tasks |
 | `ORCO_AGENT_POSTS_PER_MINUTE` | `30` | Per-agent message limit |
