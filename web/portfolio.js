@@ -332,7 +332,7 @@ export function createPortfolio(ctx) {
     const [state, agents, groups, setup, models] = await Promise.all([api('/controls'), api('/agents'), admin ? api('/groups') : Promise.resolve([]), admin ? api('/setup') : Promise.resolve({}), admin ? api('/models') : Promise.resolve(null)]);
     if (!p.policyProject && administered[0] && !admin) p.policyProject = administered[0];
     const policy = p.policyProject || admin ? await api(`/policy${p.policyProject ? `?project=${encodeURIComponent(p.policyProject)}` : ''}`) : null;
-    return [pausesCard(state.pauses, administered, agents), budgetsCard(state.budgets, administered, agents), admin ? peopleCard(setup.proxy) : null, admin ? modelsCard(models) : null, policy ? policyCard(policy, administered) : null, admin ? groupsCard(groups) : null];
+    return [pausesCard(state.pauses, administered, agents), budgetsCard(state.budgets, administered, agents), admin ? peopleCard(setup.proxy ?? (setup.oidc ? { label: setup.oidc.label } : null)) : null, admin ? modelsCard(models) : null, policy ? policyCard(policy, administered) : null, admin ? groupsCard(groups) : null];
   }
 
   /**

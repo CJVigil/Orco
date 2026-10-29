@@ -101,6 +101,9 @@ deploys it.
 | `ORCO_BACKUP_KEEP` | `14` | How many scheduled backups to keep |
 | `ORCO_BACKUP_PATH` | `orco-backups` volume | Compose only: host path (a Gluster or NFS mount) mounted at `/backups` |
 | `ORCO_REPLICA_PATH` | `orco-replica` volume | Compose only: host path for Litestream's replica |
+| `ORCO_OIDC_ISSUER` | unset | Sign in with an OpenID Connect provider (Gitea, Forgejo, Google, …); needs `ORCO_PUBLIC_URL`, `ORCO_OIDC_CLIENT_ID` and `ORCO_OIDC_CLIENT_SECRET`. See [Sign in with Gitea](#sign-in-with-gitea-forgejo-or-google-openid-connect) |
+| `ORCO_OIDC_LABEL` | the issuer's host | What the sign-in button calls it, like `Gitea` |
+| `ORCO_OIDC_DOMAINS` | unset | Comma-separated email domains allowed to sign in this way |
 | `ORCO_AUTH_HEADER` | unset | Sign in through a proxy ("Sign in with Google"): the header in which your sign-in proxy passes the signed-in email or login. Needs `ORCO_TRUST_PROXY` set to the proxy's address and `ORCO_AUTH_SECRET`. See [Sign in with Google](#sign-in-with-google-through-your-proxy) |
 | `ORCO_AUTH_SECRET` | unset | With `ORCO_AUTH_HEADER`: at least 32 random characters the proxy sends in `X-Orco-Auth-Secret`, so nothing else on its host or network can sign in as anyone |
 | `ORCO_AUTH_LABEL` | `your sign-in provider` | What the sign-in page calls it, like `Google` |
@@ -131,6 +134,37 @@ orco list
 
 Tokens and links are shown once and stored only as SHA-256 hashes. Send links and tokens over a
 private channel: whoever opens a link first is signed in as that person.
+
+## Sign in with Gitea, Forgejo or Google (OpenID Connect)
+
+Orco can sign people in with any OpenID Connect provider itself: Gitea or Forgejo (often already
+signing your team in with Google), Google, Microsoft, Keycloak, Authentik. It uses the authorization
+code flow with PKCE and checks the ID token itself (signature against the provider's published keys,
+issuer, audience, expiry, nonce). The provider's addresses are the only places it calls for this.
+
+1. Register Orco with the provider as a confidential OAuth2 / OpenID application, with the redirect
+   URI `<ORCO_PUBLIC_URL>/auth/oidc/callback`. In Gitea or Forgejo: *Settings* → *Applications* →
+   *Manage OAuth2 applications* (or *Site administration* → *Applications* for one the whole
+   instance owns). In Google: *APIs & Services* → *Credentials* → *OAuth client ID* (web application).
+2. Set:
+
+   ```bash
+   ORCO_PUBLIC_URL=https://orco.example.com
+   ORCO_OIDC_ISSUER=https://git.example.com      # Google: https://accounts.google.com
+   ORCO_OIDC_CLIENT_ID=…
+   ORCO_OIDC_CLIENT_SECRET=…
+   ORCO_OIDC_LABEL=Gitea                         # the button says "Sign in with Gitea"
+   ORCO_OIDC_DOMAINS=example.com                 # optional: only these email domains
+   ```
+
+3. Link logins to people, by **verified email**: org admins add people with their email (*Portfolio*
+   → *Controls* → *People*) and they just press *Sign in with Gitea*. The first person can sign in
+   with the provider and then use the setup link. Someone already on Orco presses the button once,
+   then signs in with their token or a sign-in link and confirms linking. On the server:
+   `orco user email <name> <email>`.
+
+Orco never makes accounts from a login it does not know, and never makes org admins this way. A
+sign-in that did not start in the same browser is refused, so nobody can sign you in to their account.
 
 ## Sign in with Google (through your proxy)
 

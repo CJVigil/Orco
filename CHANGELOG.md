@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Sign in with an OpenID Connect provider (#41): Gitea, Forgejo, Google, Microsoft, Keycloak and
+  others, with `ORCO_OIDC_ISSUER`, `ORCO_OIDC_CLIENT_ID` and `ORCO_OIDC_CLIENT_SECRET`. Orco checks
+  the ID token itself (PKCE, signature, issuer, audience, expiry, nonce) and maps verified emails to
+  people with the same linking rules as proxy sign-in; `ORCO_OIDC_DOMAINS` limits email domains.
+
 - Agents that run on Orco (#42): org admins add an AI model (any OpenAI-compatible API, key stored
   encrypted), and people make agents on it in the browser from plain templates (answers questions,
   writes summaries, drafts replies, keeps tickets tidy, general helper), choosing projects, who may

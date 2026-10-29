@@ -2540,7 +2540,36 @@ async function showLogin() {
     );
     $('login-proxy').hidden = false;
   }
+  const oidc = setup.oidc;
+  if (oidc) {
+    const parts = [
+      el('button', { class: 'primary', type: 'button', text: `Sign in with ${oidc.label}`, onclick: () => location.assign('/auth/oidc/start') }),
+    ];
+    if (oidc.pending) {
+      parts.push(
+        el('p', {
+          class: 'small',
+          text: `${oidc.label} says you are ${oidc.pending}, but that login is not linked to anyone on this Orco yet. Ask an org admin to add you with it, or sign in once below with your own token or sign-in link.`,
+        }),
+        el('label', { class: 'check small' }, el('input', { id: 'login-link', type: 'checkbox', checked: true }), `Link ${oidc.pending} to the account I sign in to, so ${oidc.label} signs me in from now on.`),
+      );
+    }
+    $('login-proxy').append(...parts);
+    $('login-proxy').hidden = false;
+  }
+  if (signInError) {
+    $('login-error').textContent = signInError;
+    $('login-error').hidden = false;
+  }
   $('login-token').focus();
+}
+
+/** What a sign-in with an OpenID provider came back with (#!signin-error=… or #!signin=unlinked), read once. */
+let signInError = null;
+{
+  const failed = /^#!signin-error=(.*)$/.exec(location.hash);
+  if (failed) signInError = decodeURIComponent(failed[1]).slice(0, 200);
+  if (failed || location.hash === '#!signin=unlinked') history.replaceState(null, '', location.pathname + location.search);
 }
 
 const SIGNED_OUT = 'orco.signedOut';
@@ -2717,14 +2746,17 @@ async function boot() {
     // Already signed in? Say whose link this is and ask, so nobody is quietly switched into someone
     // else's account (where what they type would land).
     const current = await api('/me').catch(() => null);
-    const proxy = (await api('/setup').catch(() => ({}))).proxy;
+    const setupInfo = await api('/setup').catch(() => ({}));
+    const proxy = setupInfo.proxy;
     // Behind a sign-in proxy with a login linked to nobody, using the link also links that login:
     // say so plainly first, since from then on that login signs in as this account.
-    const linking = Boolean(proxy?.identity && !proxy.user);
+    const oidcPending = setupInfo.oidc?.pending;
+    const linking = Boolean((proxy?.identity && !proxy.user) || oidcPending);
+    const vouched = proxy?.identity && !proxy.user ? { label: proxy.label, identity: proxy.identity } : oidcPending ? { label: setupInfo.oidc.label, identity: oidcPending } : null;
     const target = current || linking ? await api('/signin/peek', { method: 'POST', body: { code: link[1] } }) : null;
     if (current && target.name === current.name) problem = null;
     else if (current && !confirm(`This link signs you in as ${target.name}. You are signed in as ${current.name}.\n\nOnly continue if you asked for this link. Switch to ${target.name}?`)) problem = null;
-    else if (linking && !confirm(`This link signs you in as ${target.name}, and links your ${proxy.label} login ${proxy.identity} to ${target.name}: from then on, ${proxy.label} signs you in as ${target.name}.\n\nOnly continue if ${target.name} is you.`)) problem = null;
+    else if (linking && !confirm(`This link signs you in as ${target.name}, and links your ${vouched.label} login ${vouched.identity} to ${target.name}: from then on, ${vouched.label} signs you in as ${target.name}.\n\nOnly continue if ${target.name} is you.`)) problem = null;
     else signedIn = await api('/signin', { method: 'POST', body: { code: link[1], link: linking } });
   } catch (err) {
     problem = err.message;

@@ -1,3 +1,4 @@
+import { Oidc, type OidcConfig } from './oidc.js';
 import { HostedRunner } from './hosted-runner.js';
 import { normalizeIdentity } from './identities.js';
 import { randomBytes } from 'node:crypto';
@@ -305,7 +306,9 @@ export function main(): void {
       const setupCode = store.onboarding.setupNeeded() ? randomBytes(9).toString('base64url') : undefined;
       const trust = trustProxySetting(process.env.ORCO_TRUST_PROXY);
       const proxyAuth = proxyAuthSetting(process.env.ORCO_AUTH_HEADER, process.env.ORCO_AUTH_LABEL, trust, process.env.ORCO_AUTH_SECRET);
-      const { app, close, oauth } = createApp(store, { publicUrl, setupCode, proxyAuth });
+      const oidcConfig = oidcSetting(process.env, publicUrl);
+      const oidc = oidcConfig ? new Oidc(oidcConfig) : undefined;
+      const { app, close, oauth } = createApp(store, { publicUrl, setupCode, proxyAuth, oidc });
       const warning = networkFilesystemWarning(values.db);
       if (warning) console.error(warning);
       const backups = backupsFromEnv(store);
@@ -334,6 +337,7 @@ export function main(): void {
         console.log(`  MCP endpoint: http://${values.host}:${port}/mcp`);
         console.log(`  Database: ${values.db}`);
         if (oauth) console.log(`  OAuth for cloud agents: on, issuer ${oauth.issuer}`);
+        if (oidcConfig) console.log(`  Sign-in with ${oidcConfig.label}: on, issuer ${oidcConfig.issuer}, back to ${oidcConfig.redirectUri}`);
         if (proxyAuth) {
           console.log(`  Sign-in through ${proxyAuth.label}: on, from the ${proxyAuth.header} header of trusted proxies (${trust}) that send ORCO_AUTH_SECRET`);
           if (/uniquelocal|linklocal/.test(String(trust))) console.log('  ORCO_TRUST_PROXY covers whole networks; naming the proxy\'s exact address is safer.');
@@ -553,4 +557,36 @@ export function proxyAuthSetting(
     );
   }
   return { header: name, label: label?.trim().slice(0, 40) || 'your sign-in provider', secret: key };
+}
+
+/**
+ * Sign-in with an OpenID Connect provider: ORCO_OIDC_ISSUER, ORCO_OIDC_CLIENT_ID and
+ * ORCO_OIDC_CLIENT_SECRET (registered with the redirect URI <ORCO_PUBLIC_URL>/auth/oidc/callback),
+ * optionally ORCO_OIDC_LABEL ("Gitea") and ORCO_OIDC_DOMAINS (allowed email domains, comma-separated).
+ */
+export function oidcSetting(env: NodeJS.ProcessEnv, publicUrl: string | undefined): OidcConfig | undefined {
+  const issuer = env.ORCO_OIDC_ISSUER?.trim();
+  if (!issuer) return undefined;
+  let url: URL;
+  try {
+    url = new URL(issuer);
+  } catch {
+    throw new OrcoError('invalid', `ORCO_OIDC_ISSUER=${issuer} is not a URL`);
+  }
+  const clientId = env.ORCO_OIDC_CLIENT_ID?.trim();
+  const clientSecret = env.ORCO_OIDC_CLIENT_SECRET?.trim();
+  if (!clientId || !clientSecret) throw new OrcoError('invalid', 'ORCO_OIDC_ISSUER needs ORCO_OIDC_CLIENT_ID and ORCO_OIDC_CLIENT_SECRET (from registering Orco with the provider)');
+  if (!publicUrl) throw new OrcoError('invalid', 'ORCO_OIDC_ISSUER needs ORCO_PUBLIC_URL: the provider sends people back to <ORCO_PUBLIC_URL>/auth/oidc/callback');
+  if (url.protocol !== 'https:' && !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) {
+    throw new OrcoError('invalid', 'ORCO_OIDC_ISSUER must be https (http only for a provider on this machine)');
+  }
+  const domains = (env.ORCO_OIDC_DOMAINS ?? '').split(',').map((d) => d.trim().toLowerCase().replace(/^@/, '')).filter(Boolean);
+  return {
+    issuer: issuer.replace(/\/+$/, ''),
+    clientId,
+    clientSecret,
+    redirectUri: `${publicUrl.replace(/\/+$/, '')}/auth/oidc/callback`,
+    label: env.ORCO_OIDC_LABEL?.trim().slice(0, 40) || url.hostname,
+    domains,
+  };
 }

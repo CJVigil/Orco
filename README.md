@@ -706,10 +706,11 @@ The session is an HttpOnly, SameSite=Strict cookie, marked Secure when the reque
 HTTPS. Behind a reverse proxy that terminates TLS, set `ORCO_TRUST_PROXY=loopback` (or the proxy's
 address) so Orco can tell.
 
-To let people sign in with Google (or GitHub, Microsoft, your company's login), put a sign-in proxy
-such as oauth2-proxy, Cloudflare Access or Tailscale in front of Orco and set `ORCO_AUTH_HEADER` and
-`ORCO_AUTH_SECRET`; see
-[docs/deploy.md](docs/deploy.md#sign-in-with-google-through-your-proxy).
+To let people sign in with Gitea, Forgejo, Google or another OpenID Connect provider, set
+`ORCO_OIDC_ISSUER` and its client (see [docs/deploy.md](docs/deploy.md#sign-in-with-gitea-forgejo-or-google-openid-connect)).
+Or put a sign-in proxy such as oauth2-proxy, Cloudflare Access or Tailscale in front of Orco and set
+`ORCO_AUTH_HEADER` and `ORCO_AUTH_SECRET` (see
+[docs/deploy.md](docs/deploy.md#sign-in-with-google-through-your-proxy)).
 
 ### Notifications
 
