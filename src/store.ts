@@ -1098,11 +1098,14 @@ export class Store {
     if (actor.kind !== 'agent') return value;
     const secrets = this.secrets.revealedTo(actor.id).filter((v) => v.length >= 6);
     if (!secrets.length) return value;
+    const hide = (text: string) => secrets.reduce((out, s) => out.split(s).join('[hidden]'), text);
     const walk = (v: unknown, depth: number): unknown => {
-      if (typeof v === 'string') return secrets.reduce((out, s) => out.split(s).join('[hidden]'), v);
-      if (depth > 20 || v === null || typeof v !== 'object' || Buffer.isBuffer(v)) return v;
+      if (typeof v === 'string') return hide(v);
+      if (v === null || typeof v !== 'object' || Buffer.isBuffer(v)) return v;
+      // Nothing Orco takes nests this deep; refuse rather than pass anything through unmasked.
+      if (depth > 20) throw new OrcoError('invalid', 'That request nests too deeply');
       if (Array.isArray(v)) return v.map((x) => walk(x, depth + 1));
-      return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x, depth + 1)]));
+      return Object.fromEntries(Object.entries(v).map(([k, x]) => [hide(k), walk(x, depth + 1)]));
     };
     return walk(value, 0) as T;
   }

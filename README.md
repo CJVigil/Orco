@@ -688,7 +688,8 @@ HTTPS. Behind a reverse proxy that terminates TLS, set `ORCO_TRUST_PROXY=loopbac
 address) so Orco can tell.
 
 To let people sign in with Google (or GitHub, Microsoft, your company's login), put a sign-in proxy
-such as oauth2-proxy, Cloudflare Access or Tailscale in front of Orco and set `ORCO_AUTH_HEADER`; see
+such as oauth2-proxy, Cloudflare Access or Tailscale in front of Orco and set `ORCO_AUTH_HEADER` and
+`ORCO_AUTH_SECRET`; see
 [docs/deploy.md](docs/deploy.md#sign-in-with-google-through-your-proxy).
 
 ### Notifications
@@ -724,7 +725,8 @@ Attachments: `POST /api/attachments?room=&name=` (raw image or text body), `GET 
 `details`, `approver`, `ttl_seconds`), `POST /api/approvals/:id` (`decision`, `note`, `always_allow`).
 Getting started: `GET|POST /api/setup` (`code`, `name`; the first account, no sign-in; behind a sign-in
 proxy it also says who the proxy vouches for), `POST /api/signin/proxy` (sign in through the proxy),
-`POST|DELETE /api/me/logins` (link the proxy's login to yourself, or remove one),
+`DELETE /api/me/logins` and `DELETE /api/users/:name/logins` (remove a login; org admins for anyone),
+`link: true` on `POST /api/session` and `POST /api/signin` (link the proxy's login while signing in),
 sign-in links (`POST /api/signin-links` for your own other device, then `POST /api/signin` with `code`, no sign-in;
 the session it starts works only as the web app's cookie),
 `GET /api/getting-started`, `POST /api/agents` (`name`; people make their own agents) and

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Security fixes for sign-in through a proxy (#38-#40): Orco now also requires `ORCO_AUTH_SECRET`,
+  which the proxy sends in `X-Orco-Auth-Secret` (an address like `loopback` also covers every other
+  program and agent on that host); requests with an `Authorization` header never sign in through the
+  proxy; behind the proxy, a browser session counts only while the proxy's login is that person's;
+  and a login is linked when someone signs in with their token or a sign-in link and confirms it,
+  not afterwards. Org admins can remove anyone's login. Agent text is masked in object keys and file
+  names too, and a webhook stops waking an agent whose owner no longer lets its creator give it work.
+
 - Security fixes (#32-#37): run reports, project files and ticket imports now hide leased secrets
   like every other route (a test checks every authenticated JSON route); masking private keys no
   longer stalls the server on hostile text; webhooks need write access, wake only your own or

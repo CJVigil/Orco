@@ -303,7 +303,7 @@ export function main(): void {
       // Until someone has an account, a one-time code lets the first person set Orco up in the browser.
       const setupCode = store.onboarding.setupNeeded() ? randomBytes(9).toString('base64url') : undefined;
       const trust = trustProxySetting(process.env.ORCO_TRUST_PROXY);
-      const proxyAuth = proxyAuthSetting(process.env.ORCO_AUTH_HEADER, process.env.ORCO_AUTH_LABEL, trust);
+      const proxyAuth = proxyAuthSetting(process.env.ORCO_AUTH_HEADER, process.env.ORCO_AUTH_LABEL, trust, process.env.ORCO_AUTH_SECRET);
       const { app, close, oauth } = createApp(store, { publicUrl, setupCode, proxyAuth });
       const warning = networkFilesystemWarning(values.db);
       if (warning) console.error(warning);
@@ -333,7 +333,10 @@ export function main(): void {
         console.log(`  MCP endpoint: http://${values.host}:${port}/mcp`);
         console.log(`  Database: ${values.db}`);
         if (oauth) console.log(`  OAuth for cloud agents: on, issuer ${oauth.issuer}`);
-        if (proxyAuth) console.log(`  Sign-in through ${proxyAuth.label}: on, from the ${proxyAuth.header} header of trusted proxies (${trust})`);
+        if (proxyAuth) {
+          console.log(`  Sign-in through ${proxyAuth.label}: on, from the ${proxyAuth.header} header of trusted proxies (${trust}) that send ORCO_AUTH_SECRET`);
+          if (/uniquelocal|linklocal/.test(String(trust))) console.log('  ORCO_TRUST_PROXY covers whole networks; naming the proxy\'s exact address is safer.');
+        }
         if (backups) console.log(`  Backups: every ${process.env.ORCO_BACKUP_HOURS || 24}h to ${process.env.ORCO_BACKUP_DIR}`);
         if (values.host !== '127.0.0.1' && values.host !== 'localhost') {
           console.log('  Not bound to localhost: put TLS in front of this (see docs/deploy.md).');
@@ -515,9 +518,16 @@ export function trustProxySetting(raw: string | undefined): number | string | un
 /**
  * Sign-in through a proxy: ORCO_AUTH_HEADER names the header a trusted proxy fills with the signed-in
  * login (like X-Forwarded-Email from oauth2-proxy). It needs ORCO_TRUST_PROXY set to the proxies'
- * addresses: with a hop count, or none, anyone who can reach Orco directly could send the header.
+ * addresses (with a hop count, or none, anyone who can reach Orco directly could send the header), and
+ * ORCO_AUTH_SECRET, which the proxy sends in X-Orco-Auth-Secret: an address also covers every other
+ * program on that host or network, which must not be able to sign in as anyone.
  */
-export function proxyAuthSetting(header: string | undefined, label: string | undefined, trust: number | string | undefined): { header: string; label: string } | undefined {
+export function proxyAuthSetting(
+  header: string | undefined,
+  label: string | undefined,
+  trust: number | string | undefined,
+  secret?: string,
+): { header: string; label: string; secret: string } | undefined {
   const name = header?.trim();
   if (!name) return undefined;
   if (!/^[A-Za-z0-9-]{1,64}$/.test(name)) throw new OrcoError('invalid', `ORCO_AUTH_HEADER=${name} is not a header name`);
@@ -528,5 +538,12 @@ export function proxyAuthSetting(header: string | undefined, label: string | und
       'ORCO_AUTH_HEADER needs ORCO_TRUST_PROXY set to the sign-in proxy\'s address (like loopback, uniquelocal or 10.0.0.2), not a hop count: otherwise anyone reaching Orco directly could send the header and sign in as anyone.',
     );
   }
-  return { header: name, label: label?.trim().slice(0, 40) || 'your sign-in provider' };
+  const key = secret?.trim() ?? '';
+  if (key.length < 32) {
+    throw new OrcoError(
+      'invalid',
+      'ORCO_AUTH_HEADER needs ORCO_AUTH_SECRET: at least 32 random characters (openssl rand -hex 32) that your proxy sends in the X-Orco-Auth-Secret header. Without it, anything else on the proxy\'s host or network could sign in as anyone.',
+    );
+  }
+  return { header: name, label: label?.trim().slice(0, 40) || 'your sign-in provider', secret: key };
 }

@@ -61,7 +61,7 @@ export class Identities {
     const identity = normalizeIdentity(raw);
     const user = this.store.participantByName(userName.trim().toLowerCase());
     if (!identity || !user) throw new OrcoError('not_found', 'No such login');
-    if (actor && actor.id !== user.id) throw new OrcoError('forbidden', 'You can only remove your own logins');
+    if (actor && actor.id !== user.id && !this.store.isOrgAdmin(actor)) throw new OrcoError('forbidden', 'You can only remove your own logins');
     const { changes } = this.store.db.prepare('DELETE FROM identities WHERE identity = ? AND user_id = ?').run(identity, user.id);
     if (!changes) throw new OrcoError('not_found', `${identity} is not linked to ${user.name}`);
     this.store.audit.record(actor, 'identity.unlink', { subject: `user:${user.name}`, detail: { identity } });

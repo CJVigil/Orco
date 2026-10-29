@@ -243,3 +243,14 @@ describe('smaller findings (#37)', () => {
     assert.ok(!store.unseenMentions(scoped).some((m) => m.id === here.id), 'the task token moved on');
   });
 });
+
+describe('round five (#40 notes)', () => {
+  it('stops a hook waking an agent whose owner no longer lets its creator give it work', () => {
+    store.addMember(ana, 'api', 'ben');
+    store.setTaskPolicy(ana, 'ana-bot', 'open');
+    const { token } = store.hooks.create(ben, { room: 'api/general', name: 'CI', wakeAgent: 'ana-bot' });
+    assert.ok(store.hooks.deliver(token, Buffer.from('{}'), {})!.taskId, 'wakes it while open');
+    store.setTaskPolicy(ana, 'ana-bot', 'owner_only');
+    assert.equal(store.hooks.deliver(token, Buffer.from('{}'), {})!.taskId, null);
+  });
+});

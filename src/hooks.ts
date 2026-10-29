@@ -255,7 +255,13 @@ export class Hooks {
     }
     let taskId: number | null = null;
     const matches = !row.wake_match || `${title}\n${details}`.toLowerCase().includes(row.wake_match.toLowerCase());
-    if (row.wake_agent && matches) {
+    // The agent's owner may have tightened who can give it work since the hook was made.
+    const agent = row.wake_agent ? this.store.participantByName(row.wake_agent) : null;
+    const willing = agent !== null && (agent.ownerId === creator.id || this.store.taskPolicyFor(agent) === 'open' || this.store.trusts(agent, creator.id));
+    if (row.wake_agent && matches && !willing) {
+      this.store.audit.record(null, 'hook.wake_failed', { projectId: row.project_id, subject: `hook:${row.id}`, detail: { error: `${row.wake_agent} no longer takes work from ${creator.name} without asking` } });
+    }
+    if (row.wake_agent && matches && willing) {
       try {
         const task = this.store.tasks.create(creator, {
           agent: row.wake_agent,

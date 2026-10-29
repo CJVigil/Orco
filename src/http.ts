@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
@@ -42,6 +43,8 @@ const STATUS: Record<OrcoError['code'], number> = {
   conflict: 409,
   rate_limited: 429,
 };
+/** The header in which the sign-in proxy proves itself to Orco (ORCO_AUTH_SECRET). */
+const PROXY_SECRET_HEADER = 'x-orco-auth-secret';
 const COOKIE = 'orco_token';
 const TASK_STATES = new Set(['accepted', 'declined', 'done', 'failed', 'cancelled']);
 const APP_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -86,12 +89,13 @@ function authenticate(store: Store, presence: Presence, oauth?: OAuth, proxyIden
         : oauth && bearer
           ? (oauth.verifyAccessToken(bearer) ?? store.authenticate(bearer))
           : store.authenticate(token);
-    // Behind a sign-in proxy, the proxy says who is at the keyboard: a browser session for someone else
-    // (a shared computer, a session from before) does not count.
+    // Behind a sign-in proxy, the proxy says who is at the keyboard: a browser session counts only if
+    // the proxy's login is that person's (not someone else's, and not a login linked to nobody, as on a
+    // shared computer where the last person's session is still there).
     if (participant && session && proxyIdentity) {
       const identity = proxyIdentity(req);
       const owner = identity ? store.identities.userFor(identity) : null;
-      if (owner && owner.id !== participant.id) participant = null;
+      if (identity && owner?.id !== participant.id) participant = null;
     }
     if (!token || !participant) {
       const challenge = oauth
@@ -248,7 +252,7 @@ export interface AppOptions {
    * Sign-in through a proxy: the header in which a trusted proxy (ORCO_TRUST_PROXY, by address) passes
    * the signed-in login, and what to call that login on the sign-in page ("Google").
    */
-  proxyAuth?: { header: string; label: string };
+  proxyAuth?: { header: string; label: string; secret: string };
 }
 
 /** Cookies are Secure on HTTPS, and whenever Orco's public address is HTTPS (a proxy may speak HTTP to it). */
@@ -292,11 +296,34 @@ export function createApp(store: Store, options: AppOptions = {}) {
    * proxy counts; from anywhere else the header is whatever the client made up, and is ignored.
    */
   const proxyAuth = options.proxyAuth;
+  const digest = (value: string) => createHash('sha256').update(value).digest();
+  const proxySecret = proxyAuth ? digest(proxyAuth.secret) : null;
   const proxyIdentity = (req: Request): string | null => {
-    if (!proxyAuth || !app.get('trust proxy')) return null;
+    if (!proxyAuth || !proxySecret || !app.get('trust proxy')) return null;
+    // Requests with their own credentials (agents, the command line) never sign in through the proxy:
+    // a proxy route that lets them skip its login may not strip the identity header either (#39).
+    if (req.headers.authorization) return null;
     const trusted = app.get('trust proxy fn') as (address: string, hop: number) => boolean;
     if (!trusted(req.socket.remoteAddress ?? '', 0)) return null;
+    // The address alone is not enough: anything else on that host or network could send the header.
+    // The proxy also proves itself with a secret only it and Orco know (#38).
+    const given = req.headers[PROXY_SECRET_HEADER];
+    if (typeof given !== 'string' || !timingSafeEqual(digest(given), proxySecret)) return null;
     return normalizeIdentity(req.headers[proxyAuth.header.toLowerCase()]);
+  };
+  /**
+   * Signing in another way (a token, a sign-in link) behind the proxy must agree with it. A login that
+   * belongs to someone else is refused; one linked to nobody is linked to this person, but only when
+   * the sign-in asked for that (the person confirmed it), so nobody is tied to an account by surprise.
+   */
+  const agreeWithProxy = (req: Request, person: Participant, link: boolean): void => {
+    const identity = proxyIdentity(req);
+    if (!identity || !proxyAuth) return;
+    const owner = store.identities.userFor(identity);
+    if (owner?.id === person.id) return;
+    if (owner) throw new OrcoError('forbidden', `${proxyAuth.label} says you are ${identity}, which signs in as ${owner.name}, not ${person.name}`);
+    if (!link) throw new OrcoError('conflict', `link needed: signing in as ${person.name} here links ${identity} to ${person.name}`);
+    store.identities.link(person, person.name, identity);
   };
   const auth = authenticate(store, presence, undefined, proxyIdentity);
   const mcpAuth = authenticate(store, presence, oauth);
@@ -411,6 +438,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
       res.status(401).json({ error: 'That is not a valid user token' });
       return;
     }
+    agreeWithProxy(req, participant, req.body?.link === true);
     // The browser gets a session of its own, not the token: rotating the token or signing out
     // everywhere then reaches it too.
     res.cookie(COOKIE, store.signins.startSession(participant), {
@@ -432,6 +460,9 @@ export function createApp(store: Store, options: AppOptions = {}) {
     }
     let used: ReturnType<typeof store.signins.use>;
     try {
+      // Check against the proxy before the link is spent, so a refusal leaves it usable.
+      const person = store.participantByName(store.signins.peek(String(req.body?.code ?? '')).name)!;
+      agreeWithProxy(req, person, req.body?.link === true);
       used = store.signins.use(String(req.body?.code ?? ''));
     } catch (err) {
       logins.hit(ip);
@@ -492,14 +523,13 @@ export function createApp(store: Store, options: AppOptions = {}) {
       ...(me.kind === 'user' && !me.scope ? { logins: store.identities.of(me.id) } : {}),
     });
   });
-  // Link the login the sign-in proxy vouches for to yourself, so it signs you in from now on.
-  api.post('/me/logins', (req, res) => {
-    const identity = proxyIdentity(req);
-    if (!identity) throw new OrcoError('invalid', 'Open Orco through its sign-in proxy to link that login');
-    res.status(201).json({ login: store.identities.link(req.participant!, req.participant!.name, identity) });
-  });
   api.delete('/me/logins', (req, res) => {
     store.identities.unlink(req.participant!, req.participant!.name, String(req.body?.login ?? ''));
+    res.status(204).end();
+  });
+  // Org admins remove someone's login (removing never lets anyone in; adding stays with the server).
+  api.delete('/users/:name/logins', (req, res) => {
+    store.identities.unlink(req.participant!, String(req.params.name), String(req.body?.login ?? ''));
     res.status(204).end();
   });
   api.get('/participants', (req, res) => {

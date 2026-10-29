@@ -2447,7 +2447,6 @@ async function start() {
   await selectRoom();
   if (state.me.kind === 'user' && state.projects.length === 0 && !guide.stepsDismissed()) void guide.showSteps();
   clearSignedOut();
-  void offerProxyLogin();
   connect();
   void refreshInbox();
   renderNotifyButton();
@@ -2493,8 +2492,14 @@ async function showLogin() {
     $('login-proxy').replaceChildren(
       el('p', {
         class: 'small',
-        text: `You are signed in to ${proxy.label} as ${proxy.identity}, but that login is not linked to anyone on this Orco yet. Ask an org admin to add you with it, or sign in once below (with a sign-in link or your token) and link it.`,
+        text: `You are signed in to ${proxy.label} as ${proxy.identity}, but that login is not linked to anyone on this Orco yet. Ask an org admin to add you with it, or sign in once below with your own token or sign-in link.`,
       }),
+      el(
+        'label',
+        { class: 'check small' },
+        el('input', { id: 'login-link', type: 'checkbox' }),
+        `Link ${proxy.identity} to the account I sign in to, so ${proxy.label} signs me in from now on. (Behind ${proxy.label}, signing in needs this.)`,
+      ),
     );
     $('login-proxy').hidden = false;
   }
@@ -2520,7 +2525,8 @@ function clearSignedOut() {
 $('login-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   try {
-    await api('/session', { method: 'POST', body: { token: $('login-token').value.trim() } });
+    const link = document.getElementById('login-link');
+    await api('/session', { method: 'POST', body: { token: $('login-token').value.trim(), link: link ? link.checked : false } });
     $('login-token').value = '';
     $('login-error').hidden = true;
     await start();
@@ -2663,21 +2669,6 @@ wireComposer($('thread-composer'), $('thread-text'), $('thread-pending'), () => 
   api('/messages', { method: 'POST', body: { room: state.thread.room, text, thread_id: state.thread.id, attachment_ids: ids } }),
 );
 
-/** Signed in another way while the sign-in proxy vouches for an unlinked login: offer to link it, once a session. */
-async function offerProxyLogin() {
-  if (state.me.kind !== 'user') return;
-  const proxy = (await api('/setup').catch(() => ({}))).proxy;
-  if (!proxy?.identity || proxy.user) return;
-  const key = `orco.proxyOffered.${proxy.identity}`;
-  try {
-    if (sessionStorage.getItem(key)) return;
-    sessionStorage.setItem(key, '1');
-  } catch {
-    return;
-  }
-  guide.offerLinkLogin(proxy);
-}
-
 /** Opens a sign-in link (#signin=…) if there is one, then starts the app. */
 async function boot() {
   const link = /^#signin=([\w-]+)$/.exec(location.hash);
@@ -2689,10 +2680,15 @@ async function boot() {
     // Already signed in? Say whose link this is and ask, so nobody is quietly switched into someone
     // else's account (where what they type would land).
     const current = await api('/me').catch(() => null);
-    const target = current ? await api('/signin/peek', { method: 'POST', body: { code: link[1] } }) : null;
+    const proxy = (await api('/setup').catch(() => ({}))).proxy;
+    // Behind a sign-in proxy with a login linked to nobody, using the link also links that login:
+    // say so plainly first, since from then on that login signs in as this account.
+    const linking = Boolean(proxy?.identity && !proxy.user);
+    const target = current || linking ? await api('/signin/peek', { method: 'POST', body: { code: link[1] } }) : null;
     if (current && target.name === current.name) problem = null;
     else if (current && !confirm(`This link signs you in as ${target.name}. You are signed in as ${current.name}.\n\nOnly continue if you asked for this link. Switch to ${target.name}?`)) problem = null;
-    else signedIn = await api('/signin', { method: 'POST', body: { code: link[1] } });
+    else if (linking && !confirm(`This link signs you in as ${target.name}, and links your ${proxy.label} login ${proxy.identity} to ${target.name}: from then on, ${proxy.label} signs you in as ${target.name}.\n\nOnly continue if ${target.name} is you.`)) problem = null;
+    else signedIn = await api('/signin', { method: 'POST', body: { code: link[1], link: linking } });
   } catch (err) {
     problem = err.message;
   }
