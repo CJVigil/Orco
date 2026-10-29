@@ -502,6 +502,13 @@ export function trustProxySetting(raw: string | undefined): number | string | un
       `ORCO_TRUST_PROXY=${value} would trust any client's X-Forwarded-For. Set the number of proxies in front of Orco (like 1), or their addresses (loopback, uniquelocal, 10.0.0.2).`,
     );
   }
+  // A range as wide as 0.0.0.0/0 is "true" by another name.
+  for (const entry of value.split(',').map((e) => e.trim())) {
+    const range = /^(.+)\/(\d{1,3})$/.exec(entry);
+    if (range && Number(range[2]) < (range[1]!.includes(':') ? 16 : 8)) {
+      throw new OrcoError('invalid', `ORCO_TRUST_PROXY range ${entry} would trust almost any client; name your proxies' addresses or a narrow range`);
+    }
+  }
   return value;
 }
 

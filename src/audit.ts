@@ -83,7 +83,22 @@ export class Audit {
     const rows = this.store.db
       .prepare(`${AUDIT_SELECT} WHERE au.id > ? ORDER BY au.id LIMIT ?`)
       .all(since, limit) as unknown as AuditRow[];
-    return rows.filter((row) => this.store.canSee(actor, row.project_id)).map(toEntry);
+    const orgAdmin = this.store.isOrgAdmin(actor);
+    const mine = new Set([
+      actor.name,
+      ...(this.store.db.prepare('SELECT name FROM participants WHERE owner_id = ?').all(actor.id) as { name: string }[]).map((a) => a.name),
+    ]);
+    return rows.filter((row) => (row.project_id === null ? orgAdmin || this.aboutMe(mine, actor, row) : this.store.canSee(actor, row.project_id))).map(toEntry);
+  }
+
+  /**
+   * Entries outside any project (accounts, tokens, sign-ins, agent settings and memory, pairings) are
+   * for org admins. Anyone else sees only those about themselves or their own agents, or done by them.
+   */
+  private aboutMe(mine: Set<string>, actor: Participant, row: AuditRow): boolean {
+    if (row.actor !== null && (mine.has(row.actor) || row.actor_owner === actor.name)) return true;
+    const subject = /^(?:user|agent):(.+)$/.exec(row.subject ?? '')?.[1];
+    return subject !== undefined && mine.has(subject);
   }
 
   /**

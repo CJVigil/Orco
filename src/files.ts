@@ -102,7 +102,7 @@ export class Files {
     if (existing && options.baseVersion === undefined) {
       throw new OrcoError('conflict', `${clean} exists (version ${latest}); pass base_version ${latest} to replace it`);
     }
-    this.store.db.exec('BEGIN');
+    this.store.begin();
     try {
       let fileId = existing?.id;
       if (!fileId) {
@@ -113,9 +113,9 @@ export class Files {
       this.store.db
         .prepare('INSERT INTO file_versions (file_id, version, content, size, author_id, note) VALUES (?, ?, ?, ?, ?, ?)')
         .run(fileId, latest + 1, content, data.length, actor.id, note);
-      this.store.db.exec('COMMIT');
+      this.store.commit();
     } catch (err) {
-      this.store.db.exec('ROLLBACK');
+      this.store.rollback();
       throw err;
     }
     this.store.audit.record(actor, 'file.write', { projectId: proj.id, subject: `file:${project}/${clean}`, detail: { version: latest + 1, size: data.length, note } });

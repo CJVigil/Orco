@@ -472,12 +472,15 @@ export function createApp(store: Store, options: AppOptions = {}) {
     res.status(204).end();
   });
 
-  const api = express.Router();
-  api.use(auth, express.json({ limit: '64kb' }), rejectCrossSite, (req, _res, next) => {
-    // The REST half of the choke point: what an agent sends is stored with leased secrets hidden.
+  // The REST half of the choke point: what an agent sends is stored with leased secrets hidden.
+  // Every authenticated JSON body goes through jsonBody (test/http-routes.test.ts checks).
+  const maskBody = (req: Request, _res: Response, next: NextFunction) => {
     if (req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) req.body = store.maskInput(req.participant!, req.body);
     next();
-  });
+  };
+  const jsonBody = (limit: string) => [express.json({ limit }), maskBody];
+  const api = express.Router();
+  api.use(auth, ...jsonBody('64kb'), rejectCrossSite);
 
   api.get('/me', (req, res) => {
     const me = req.participant!;
@@ -1513,7 +1516,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
 
   // The bridge reports each run of its agent on a task: how long, how it ended, usage, and a masked log.
   // Logs run up to 256 KB, more than the rest of the API accepts.
-  app.post('/api/tasks/:id/runs', auth, express.json({ limit: '1mb' }), rejectCrossSite, (req, res) => {
+  app.post('/api/tasks/:id/runs', auth, ...jsonBody('1mb'), rejectCrossSite, (req, res) => {
     const id = optionalInt(req.params.id);
     if (id === undefined) throw new OrcoError('invalid', 'Expected a task id');
     const b = req.body ?? {};
@@ -1533,14 +1536,14 @@ export function createApp(store: Store, options: AppOptions = {}) {
     );
   });
   // Project files can be up to 1 MB, more than the rest of the API accepts.
-  app.post('/api/projects/:project/file', auth, express.json({ limit: '2mb' }), rejectCrossSite, (req, res) => {
+  app.post('/api/projects/:project/file', auth, ...jsonBody('2mb'), rejectCrossSite, (req, res) => {
     const b = req.body ?? {};
     const base = b.baseVersion === undefined || b.baseVersion === null || b.baseVersion === 0 ? undefined : optionalInt(b.baseVersion);
     res.json(store.files.write(req.participant!, String(req.params.project), str(b.path, 'path') ?? '', str(b.content, 'content') ?? '', { baseVersion: base, note: str(b.note, 'note') }));
   });
 
   // Imports carry many tickets at once, so they get a larger body limit than the rest of the API.
-  app.post('/api/projects/:project/tickets/import', auth, express.json({ limit: '4mb' }), rejectCrossSite, (req, res) => {
+  app.post('/api/projects/:project/tickets/import', auth, ...jsonBody('4mb'), rejectCrossSite, (req, res) => {
     const body = req.body ?? {};
     const rows = typeof body.csv === 'string' ? parseImport(body.csv, 'csv') : body.tickets;
     if (!Array.isArray(rows)) throw new OrcoError('invalid', 'Send tickets as a JSON array, or csv as text');

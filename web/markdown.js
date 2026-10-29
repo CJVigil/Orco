@@ -12,14 +12,36 @@ const INLINE = [
   { type: 'ticket', re: /(?<![\w/@.-])([A-Z][A-Z0-9]{0,9})-(\d{1,9})(?![\w-])/ },
 ];
 
+for (const rule of INLINE) rule.at = new RegExp(rule.re.source, `${rule.re.flags}y`);
+
 export function renderInline(text, opts) {
   const { h } = opts;
   const out = [];
   let rest = text;
+  // Each rule's next match in `rest`, kept between tokens: re-scanning the whole remaining text for
+  // every rule at every token was quadratic on long messages. A kept match stays the leftmost one,
+  // except that a match may now start right at the beginning (the lookbehinds no longer see the
+  // text before it), which the sticky `at` check catches.
+  const next = new Map();
+  let consumed = 0;
   while (rest) {
     let best = null;
     for (const rule of INLINE) {
-      const m = rule.re.exec(rest);
+      let m = next.get(rule);
+      if (m === undefined || (m !== null && m.from < consumed)) {
+        m = rule.re.exec(rest);
+        if (m) m.from = consumed + m.index;
+      } else {
+        rule.at.lastIndex = 0;
+        const here = rule.at.exec(rest);
+        if (here) {
+          here.from = consumed;
+          m = here;
+        } else if (m) {
+          m.index = m.from - consumed;
+        }
+      }
+      next.set(rule, m);
       if (m && (best === null || m.index < best.m.index)) best = { rule, m };
     }
     if (!best) {
@@ -55,6 +77,7 @@ export function renderInline(text, opts) {
         out.push(opts.ticket?.(m[1], Number(m[2])) ?? m[0]);
         break;
     }
+    consumed += m.index + m[0].length;
     rest = rest.slice(m.index + m[0].length);
   }
   return out;

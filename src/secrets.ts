@@ -83,7 +83,8 @@ export class Secrets {
   set(actor: Participant, project: string, name: string, value: string, description = ''): SecretInfo {
     this.requireKey();
     if (actor.kind !== 'user') throw new OrcoError('forbidden', 'Only people store secrets');
-    const proj = this.store.visibleProject(actor, project);
+    // Storing one changes the project, so viewers cannot.
+    const proj = this.store.writableProject(actor, project);
     if (!NAME.test(name)) throw new OrcoError('invalid', 'Secret names look like environment variables: STRIPE_TEST_KEY');
     if (!value) throw new OrcoError('invalid', 'The value is empty');
     if (Buffer.byteLength(value) > MAX_VALUE) throw new OrcoError('invalid', `Values are at most ${MAX_VALUE / 1024} KB`);

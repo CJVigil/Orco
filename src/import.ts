@@ -57,15 +57,26 @@ function importChecked(store: Store, actor: Participant, project: string, rows: 
   const plan = store.tickets.plan(actor, project);
   const has = (list: { name: string }[], name: string) => list.some((x) => x.name.toLowerCase() === name.toLowerCase());
   const keys = new Map<string, number>();
-  const newLabels = new Set<string>();
+  // New labels by lower-cased name, so "Bug" and "bug" in one file make one label (#36).
+  const newLabels = new Map<string, string>();
   const newMilestones = new Set<string>();
   const fail = (i: number, message: string): never => {
     throw new OrcoError('invalid', `Row ${i + 1}${rows[i]?.key ? ` (${rows[i]!.key})` : ''}: ${message}`);
   };
 
   rows.forEach((row, i) => {
-    if (typeof row !== 'object' || row === null) fail(i, 'expected an object');
+    if (typeof row !== 'object' || row === null || Array.isArray(row)) fail(i, 'expected an object');
     if (typeof row.title !== 'string' || !row.title.trim()) fail(i, 'title is required');
+    // Shapes first: a string where a list belongs would otherwise be read one character at a time.
+    for (const field of ['labels', 'blockedBy', 'criteria'] as const) {
+      const value = row[field];
+      if (value !== undefined && value !== null && (!Array.isArray(value) || value.some((v) => typeof v !== 'string'))) fail(i, `${field} must be a list of text`);
+    }
+    for (const field of ['key', 'description', 'status', 'priority', 'assignee', 'milestone', 'parent', 'blockedReason'] as const) {
+      const value = row[field];
+      if (value !== undefined && value !== null && typeof value !== 'string') fail(i, `${field} must be text`);
+    }
+    if (row.key && (row.blockedBy ?? []).includes(row.key)) fail(i, 'a ticket cannot block itself');
     if (row.dueDate !== undefined && row.dueDate !== null && typeof row.dueDate !== 'string') fail(i, 'due date must be a string');
     if (row.key !== undefined) {
       if (typeof row.key !== 'string' || !row.key.trim()) fail(i, 'key must be a non-empty string');
@@ -95,7 +106,7 @@ function importChecked(store: Store, actor: Participant, project: string, rows: 
     for (const label of row.labels ?? []) {
       if (!has(plan.labels, label)) {
         if (!options.createLabels) fail(i, `no label ${label}; create it first or import with createLabels`);
-        newLabels.add(label.trim());
+        if (!newLabels.has(label.trim().toLowerCase())) newLabels.set(label.trim().toLowerCase(), label.trim());
       }
     }
     if (row.milestone && !has(plan.milestones, row.milestone)) {
@@ -116,13 +127,35 @@ function importChecked(store: Store, actor: Participant, project: string, rows: 
     if (row.parent && row.key && row.parent === row.key) fail(i, 'a ticket cannot be its own parent');
   });
 
-  const result: ImportResult = { dryRun: Boolean(options.dryRun), created: [], labelsCreated: [...newLabels], milestonesCreated: [...newMilestones] };
+  const result: ImportResult = { dryRun: Boolean(options.dryRun), created: [], labelsCreated: [...newLabels.values()], milestonesCreated: [...newMilestones] };
   if (options.dryRun) {
     result.created = rows.map((row, i) => ({ row: i + 1, key: row.key ?? null, ref: null, title: row.title.trim() }));
     return result;
   }
 
-  for (const name of newLabels) store.tickets.createLabel(actor, project, name);
+  // All or nothing: a problem only a write can find leaves no tickets, labels or milestones behind.
+  store.begin();
+  try {
+    writeImport(store, actor, project, rows, keys, newLabels, newMilestones, result);
+    store.commit();
+  } catch (err) {
+    store.rollback();
+    throw err;
+  }
+  return result;
+}
+
+function writeImport(
+  store: Store,
+  actor: Participant,
+  project: string,
+  rows: ImportRow[],
+  keys: Map<string, number>,
+  newLabels: Map<string, string>,
+  newMilestones: Set<string>,
+  result: ImportResult,
+): void {
+  for (const name of newLabels.values()) store.tickets.createLabel(actor, project, name);
   for (const name of newMilestones) store.tickets.createMilestone(actor, project, { name });
   // Parents first, so a child can name a parent that comes later in the file.
   const refs = new Map<string, string>();
@@ -161,7 +194,6 @@ function importChecked(store: Store, actor: Participant, project: string, rows: 
     subject: `project:${project}`,
     detail: { tickets: result.created.length, labelsCreated: result.labelsCreated, milestonesCreated: result.milestonesCreated },
   });
-  return result;
 }
 
 function parentsFirst(rows: ImportRow[], keys: Map<string, number>): number[] {

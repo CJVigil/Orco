@@ -379,7 +379,7 @@ export class Tickets {
     if (blockedReason.length > MAX_BLOCKED_REASON) throw new OrcoError('invalid', `A blocked reason can be at most ${MAX_BLOCKED_REASON} characters`);
     if (handoff.length > MAX_HANDOFF) throw new OrcoError('invalid', `Handoff notes can be at most ${MAX_HANDOFF} characters`);
 
-    this.store.db.exec('BEGIN');
+    this.store.begin();
     let id: number;
     try {
       const { number } = this.store.db
@@ -407,9 +407,9 @@ export class Tickets {
       }
       if (blockedReason) this.store.db.prepare('UPDATE tickets SET blocked_reason = ? WHERE id = ?').run(blockedReason, id);
       this.activity(id, actor, 'created', null, null);
-      this.store.db.exec('COMMIT');
+      this.store.commit();
     } catch (err) {
-      this.store.db.exec('ROLLBACK');
+      this.store.rollback();
       throw err;
     }
     const created = this.row(id)!;
@@ -570,7 +570,7 @@ export class Tickets {
       }
     }
 
-    this.store.db.exec('BEGIN');
+    this.store.begin();
     try {
       if (sets.length) this.store.db.prepare(`UPDATE tickets SET ${sets.join(', ')}, updated_at = ${NOW_SQL} WHERE id = ?`).run(...params, row.id);
       if (newLabels !== undefined) {
@@ -582,9 +582,9 @@ export class Tickets {
       links.apply?.();
       if (!sets.length) this.store.db.prepare(`UPDATE tickets SET updated_at = ${NOW_SQL} WHERE id = ?`).run(row.id);
       if (changes.length) this.activity(row.id, actor, 'change', null, { changes });
-      this.store.db.exec('COMMIT');
+      this.store.commit();
     } catch (err) {
-      this.store.db.exec('ROLLBACK');
+      this.store.rollback();
       throw err;
     }
     const updated = this.row(row.id)!;
@@ -871,14 +871,14 @@ export class Tickets {
     if (!status) throw new OrcoError('not_found', `No status ${id} in ${proj.name}`);
     if (!target || target.id === id) throw new OrcoError('invalid', 'Pick another status for its tickets');
     this.checkWorkflow(list.filter((s) => s.id !== id));
-    this.store.db.exec('BEGIN');
+    this.store.begin();
     try {
       this.store.db.prepare(`UPDATE tickets SET status_id = ?, updated_at = ${NOW_SQL} WHERE status_id = ?`).run(target.id, id);
       this.store.db.prepare('DELETE FROM ticket_statuses WHERE id = ?').run(id);
       this.renumber(list.filter((s) => s.id !== id));
-      this.store.db.exec('COMMIT');
+      this.store.commit();
     } catch (err) {
-      this.store.db.exec('ROLLBACK');
+      this.store.rollback();
       throw err;
     }
     return this.workflowChanged(actor, proj, 'workflow.remove_status', { name: status.name, movedTo: target.name });
@@ -995,7 +995,7 @@ export class Tickets {
          WHERE t.cycle_id = ? AND s.category NOT IN ('completed', 'canceled')`,
       )
       .all(id) as unknown as { id: number }[];
-    this.store.db.exec('BEGIN');
+    this.store.begin();
     try {
       const move = this.store.db.prepare(`UPDATE tickets SET cycle_id = ?, updated_at = ${NOW_SQL} WHERE id = ?`);
       for (const t of unfinished) {
@@ -1003,9 +1003,9 @@ export class Tickets {
         this.activity(t.id, actor, 'change', null, { changes: [{ field: 'cycle', from: cycle.number, to: next?.number ?? null }] });
       }
       this.store.db.prepare(`UPDATE cycles SET completed_at = ${NOW_SQL} WHERE id = ?`).run(id);
-      this.store.db.exec('COMMIT');
+      this.store.commit();
     } catch (err) {
-      this.store.db.exec('ROLLBACK');
+      this.store.rollback();
       throw err;
     }
     this.store.audit.record(actor, 'cycle.complete', {

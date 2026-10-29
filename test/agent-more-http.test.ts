@@ -147,5 +147,18 @@ describe('more agent tools over MCP', () => {
     assert.ok(file);
     assert.ok(!stored.includes('sntrys_abc'), stored);
     assert.ok(stored.includes('[hidden]'));
+
+    // The routes outside the api router mask too (#32): run reports, project files, ticket imports.
+    const token = tokens['ana-claude'];
+    assert.equal((await api(token, `/api/tasks/${task.id}/runs`, { mode: 'start', started_at: new Date().toISOString(), seconds: 1, outcome: 'failed with sntrys_abc', branch: 'fix/sntrys_abc' })).status, 201);
+    assert.equal((await api(token, '/api/projects/api/file', { path: 'notes/keys.md', content: 'key sntrys_abc', note: 'saved sntrys_abc' })).status, 200);
+    assert.equal((await api(token, '/api/projects/api/tickets/import', { tickets: [{ title: 'Rotate sntrys_abc', description: 'it leaked: sntrys_abc' }] })).status, 201);
+    const everywhere = JSON.stringify([
+      store.db.prepare('SELECT * FROM task_runs').all(),
+      store.db.prepare('SELECT path FROM files').all(),
+      store.db.prepare('SELECT content, note FROM file_versions').all(),
+      store.db.prepare('SELECT title, description FROM tickets').all(),
+    ]);
+    assert.ok(!everywhere.includes('sntrys_abc'), everywhere);
   });
 });

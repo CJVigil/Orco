@@ -78,7 +78,11 @@ export function checkTimeZone(tz: string): string {
   }
 }
 
-/** The first minute after `afterMs` that matches, in the given time zone. */
+/**
+ * The first minute after `afterMs` that matches, in the given time zone. When clocks go back, the
+ * repeated hour runs once (the first time); when they go forward, times in the skipped hour do not
+ * run that day.
+ */
 export function nextRun(cron: Cron, afterMs: number, tz = 'UTC'): number {
   const format = new Intl.DateTimeFormat('en-US', {
     timeZone: tz,
@@ -100,6 +104,14 @@ export function nextRun(cron: Cron, afterMs: number, tz = 'UTC'): number {
       weekday: WEEKDAYS.indexOf(parts.weekday!.toLowerCase().slice(0, 3)),
     };
   };
+  // The second pass through a wall-clock time when clocks go back (by an hour, or half an hour).
+  const repeated = (t: number) => {
+    const now = local(t);
+    return [30, 60].some((back) => {
+      const before = local(t - back * 60_000);
+      return before.month === now.month && before.day === now.day && before.hour === now.hour && before.minute === now.minute;
+    });
+  };
   let t = Math.floor(afterMs / 60_000) * 60_000 + 60_000;
   const end = afterMs + HORIZON_MS;
   while (t < end) {
@@ -110,6 +122,8 @@ export function nextRun(cron: Cron, afterMs: number, tz = 'UTC'): number {
     } else if (!cron.hours.has(hour)) {
       t += (60 - minute) * 60_000;
     } else if (!cron.minutes.has(minute)) {
+      t += 60_000;
+    } else if (repeated(t)) {
       t += 60_000;
     } else {
       return t;

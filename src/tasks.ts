@@ -513,6 +513,19 @@ export class Tasks {
            heartbeat_at = ?, stall_notified = 0 WHERE id = ?`,
       )
       .run(line, percent ?? null, this.store.now(), id);
+    // A reported total far beyond the task's budget (or $1,500 without one) is held to that ceiling and
+    // flagged: one bad report would otherwise push a whole project over budget and hold every new task.
+    if (usage.costCents != null) {
+      const { measured_cents: measured, budget_cents: budget } = this.store.db.prepare('SELECT measured_cents, budget_cents FROM tasks WHERE id = ?').get(id) as {
+        measured_cents: number;
+        budget_cents: number | null;
+      };
+      const ceiling = measured + 3 * (budget ?? 50_000);
+      if (usage.costCents > ceiling) {
+        this.store.audit.record(actor, 'task.cost_outlier', { projectId: row.project_id, subject: `task:${id}`, detail: { reported: usage.costCents, kept: ceiling } });
+        usage = { ...usage, costCents: ceiling };
+      }
+    }
     // An agent's own figure is a total, and can only raise the spend: what the bridge measured stands.
     this.store.db
       .prepare(

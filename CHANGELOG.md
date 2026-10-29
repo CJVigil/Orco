@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Security fixes (#32-#37): run reports, project files and ticket imports now hide leased secrets
+  like every other route (a test checks every authenticated JSON route); masking private keys no
+  longer stalls the server on hostile text; webhooks need write access, wake only your own or
+  willing agents, stop posting when their creator loses access, and are removed only by their
+  creator or an admin; the audit log shows entries outside projects only to org admins (others see
+  their own); ticket imports are all or nothing, check field types and self-blocks, and treat label
+  names case-blind; viewers cannot store secrets; an outlying reported cost is held to a ceiling and
+  flagged; a task token's mention wait no longer swallows the agent's other mentions; schedules run
+  once in the hour repeated when clocks go back; very broad `ORCO_TRUST_PROXY` ranges are refused;
+  long messages render quickly.
+
 - Sign in with Google (or GitHub, Microsoft, your company's login) through a proxy in front of Orco:
   set `ORCO_AUTH_HEADER` to the header your sign-in proxy fills (oauth2-proxy, Cloudflare Access,
   Tailscale, Authelia, Authentik) and `ORCO_TRUST_PROXY` to its address. Orco makes no outbound calls

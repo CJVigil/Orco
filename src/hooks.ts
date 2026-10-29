@@ -166,6 +166,8 @@ export class Hooks {
   create(actor: Participant, input: { room: string; name: string; wakeAgent?: string | null; wakeMatch?: string; confirmTasks?: boolean }): { hook: Hook; token: string } {
     if (actor.kind !== 'user') throw new OrcoError('forbidden', 'Only people set up webhooks');
     const room = this.store.room(actor, input.room);
+    // A hook posts as its creator, so it needs what posting needs: write access (no viewers).
+    this.store.assertWrite(actor, room.projectId);
     const name = input.name.trim();
     if (!name || name.length > 60) throw new OrcoError('invalid', 'Name the hook in 1-60 characters, like "GitHub CI"');
     const count = (this.store.db.prepare('SELECT count(*) AS n FROM hooks WHERE room_id = ?').get(room.id) as { n: number }).n;
@@ -175,6 +177,9 @@ export class Hooks {
       const agent = this.store.participantByName(input.wakeAgent.replace(/^@/, ''));
       if (!agent || agent.kind !== 'agent') throw new OrcoError('not_found', `No agent named ${input.wakeAgent}`);
       if (!this.store.canSee(agent, room.projectId)) throw new OrcoError('forbidden', `${agent.name} cannot see ${room.ref}`);
+      // Only your own agents, or ones whose owners let you hand them work without asking.
+      const willing = agent.ownerId === actor.id || this.store.taskPolicyFor(agent) === 'open' || this.store.trusts(agent, actor.id);
+      if (!willing) throw new OrcoError('forbidden', `${agent.name} is not yours and its owner has not let you give it work; ask them, or wake one of your own agents`);
       agentId = agent.id;
     }
     const match = (input.wakeMatch ?? '').trim().slice(0, 100);
@@ -197,6 +202,14 @@ export class Hooks {
     if (actor.kind !== 'user') throw new OrcoError('forbidden', 'Only people remove webhooks');
     const row = this.store.db.prepare(`${SELECT} WHERE h.id = ?`).get(id) as HookRow | undefined;
     if (!row || !this.store.canSee(actor, row.project_id)) throw new OrcoError('not_found', `No hook ${id}`);
+    // Its creator removes it, or whoever administers the project (an org admin for server rooms).
+    if (row.created_by !== actor.id) {
+      if (row.project_id === null) {
+        if (!this.store.isOrgAdmin(actor)) throw new OrcoError('forbidden', `Only ${row.creator ?? 'its creator'} or an org admin can remove hook ${id}`);
+      } else if (!row.project || this.store.roleIn(actor, row.project_id) !== 'admin') {
+        if (!this.store.isOrgAdmin(actor)) throw new OrcoError('forbidden', `Only its creator or a project admin can remove hook ${id}`);
+      }
+    }
     this.store.db.prepare('DELETE FROM hooks WHERE id = ?').run(id);
     this.store.audit.record(actor, 'hook.delete', { projectId: row.project_id, subject: `hook:${id}`, detail: { name: row.name } });
   }
@@ -224,6 +237,9 @@ export class Hooks {
     if (details.length > MAX_EXTERNAL) details = `${details.slice(0, MAX_EXTERNAL)}\n… (${details.length - MAX_EXTERNAL} more characters)`;
     const creator = this.store.participantById(row.created_by)!;
     const room = row.project ? `${row.project}/${row.room}` : row.room;
+    // The creator may have lost access (removed, or made a viewer) since: then the hook goes quiet.
+    if (!this.store.canSee(creator, row.project_id)) throw new OrcoError('forbidden', `Hook ${row.name}'s creator can no longer see ${room}`);
+    this.store.assertWrite(creator, row.project_id);
     const message = this.store.post(creator, room, `Webhook ${row.name}: ${title}`, undefined, {
       skipRateLimit: true,
       external: { source: `webhook "${row.name}"${forgeOf(headers) ? ` (${forgeOf(headers)!.name})` : ''}`, text: details || '(empty body)' },

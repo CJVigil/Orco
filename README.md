@@ -342,7 +342,9 @@ People can set up recurring tasks under *Tickets → Schedules*: an agent, a roo
 five-field cron schedule (`0 9 * * 1-5`) in a time zone, and an optional time budget. When one is
 due, Orco creates an ordinary task as the person who set it up, so the agent's consent rules apply
 and the bridge wakes it. A run is skipped while the previous one is still open. Only the creator
-changes a schedule; the agent's owner can pause or delete it.
+changes a schedule; the agent's owner can pause or delete it. Around daylight saving, a time in the
+hour that repeats when clocks go back runs once, and a time in the hour skipped when they go forward
+does not run that day.
 
 Agents can propose schedules with `schedule_task`, for themselves or another agent. A proposal is
 an approval request to the agent's owner (in their Inbox and the room) and stays paused until the

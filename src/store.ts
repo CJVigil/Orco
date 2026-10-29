@@ -670,7 +670,7 @@ export class Store {
     if (actor.kind !== 'user') throw new OrcoError('forbidden', 'Only people create projects');
     checkName('Project', name);
     const userId = this.humanOf(actor);
-    this.db.exec('BEGIN');
+    this.begin();
     try {
       const { lastInsertRowid } = this.db
         .prepare('INSERT INTO projects (name, created_by) VALUES (?, ?)')
@@ -681,12 +681,12 @@ export class Store {
         .prepare("INSERT INTO rooms (project_id, name, created_by) VALUES (?, 'general', ?)")
         .run(projectId, actor.id);
       this.tickets.setup(projectId);
-      this.db.exec('COMMIT');
+      this.commit();
       this.audit.record(actor, 'project.create', { projectId, subject: `project:${name}` });
       this.events.emit('structure');
       return { id: projectId, name };
     } catch (err) {
-      this.db.exec('ROLLBACK');
+      this.rollback();
       if (isUniqueViolation(err)) throw new OrcoError('conflict', `Project ${name} already exists`);
       throw err;
     }
@@ -893,7 +893,7 @@ export class Store {
 
     // Only the author's own words can mention anyone; relayed text never pings.
     const mentioned = this.resolveMentions(trimmed, room, actor);
-    this.db.exec('BEGIN');
+    this.begin();
     let messageId: number;
     try {
       const { lastInsertRowid } = this.db
@@ -904,9 +904,9 @@ export class Store {
       for (const target of mentioned) insertMention.run(messageId, target.id);
       this.attachments.attach(messageId, attachmentIds);
       options.onInsert?.(messageId, room);
-      this.db.exec('COMMIT');
+      this.commit();
     } catch (err) {
-      this.db.exec('ROLLBACK');
+      this.rollback();
       throw err;
     }
 
@@ -995,13 +995,29 @@ export class Store {
          ORDER BY m.id`,
       )
       .all(actor.id, actor.id) as unknown as MessageRow[];
-    return rows.filter((row) => this.canSeeRoomId(actor, row.room_id)).map((row) => this.toMessage(row));
+    const scoped = actor.scope ? (this.scopedSeen.get(this.scopeKey(actor)) ?? 0) : 0;
+    return rows.filter((row) => row.id > scoped && this.canSeeRoomId(actor, row.room_id)).map((row) => this.toMessage(row));
   }
 
+  /**
+   * Marks mentions handled. A task token keeps its own place instead (in memory): it sees only its
+   * task's project, and moving the agent's shared place past mentions elsewhere would lose them for
+   * the agent's own token.
+   */
   markMentionsSeen(actor: Participant, upToId: number): void {
+    if (actor.scope) {
+      const key = this.scopeKey(actor);
+      this.scopedSeen.set(key, Math.max(this.scopedSeen.get(key) ?? 0, upToId));
+      return;
+    }
     this.db
       .prepare('UPDATE participants SET seen_mention_id = max(seen_mention_id, ?) WHERE id = ?')
       .run(upToId, actor.id);
+  }
+
+  private readonly scopedSeen = new Map<string, number>();
+  private scopeKey(actor: Participant): string {
+    return `${actor.id}:${actor.scope!.taskId}`;
   }
 
   async waitForMentions(actor: Participant, timeoutMs: number, signal?: AbortSignal): Promise<Message[]> {
@@ -1050,6 +1066,28 @@ export class Store {
     let out = text;
     for (const value of this.secrets.revealedTo(actor.id)) if (value.length >= 6) out = out.split(value).join('[hidden]');
     return out;
+  }
+
+  /*
+   * Transactions that nest: the outermost is a real transaction, inner ones are savepoints, so a
+   * method that writes atomically (creating a ticket) can also run inside a bigger all-or-nothing
+   * job (an import).
+   */
+  private txDepth = 0;
+
+  begin(): void {
+    this.db.exec(this.txDepth === 0 ? 'BEGIN' : `SAVEPOINT nested_${this.txDepth}`);
+    this.txDepth++;
+  }
+
+  commit(): void {
+    this.txDepth--;
+    this.db.exec(this.txDepth === 0 ? 'COMMIT' : `RELEASE nested_${this.txDepth}`);
+  }
+
+  rollback(): void {
+    this.txDepth--;
+    this.db.exec(this.txDepth === 0 ? 'ROLLBACK' : `ROLLBACK TO nested_${this.txDepth}; RELEASE nested_${this.txDepth}`);
   }
 
   /**
