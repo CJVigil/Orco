@@ -2446,6 +2446,8 @@ async function start() {
   await loadStructure();
   await selectRoom();
   if (state.me.kind === 'user' && state.projects.length === 0 && !guide.stepsDismissed()) void guide.showSteps();
+  clearSignedOut();
+  void offerProxyLogin();
   connect();
   void refreshInbox();
   renderNotifyButton();
@@ -2457,7 +2459,62 @@ async function showLogin() {
   $('login').hidden = false;
   const setup = await api('/setup').catch(() => ({ needed: false }));
   if (setup.needed) return guide.showSetup(/^#setup=([\w-]+)$/.exec(location.hash)?.[1], () => start());
+  const proxy = setup.proxy;
+  if (proxy?.user) {
+    // Signed in to the proxy with a linked login: straight in, unless you just signed out here.
+    if (!justSignedOut()) {
+      try {
+        await api('/signin/proxy', { method: 'POST', body: {} });
+        return start();
+      } catch {
+        // Fall through to the sign-in page, which says what went wrong.
+      }
+    }
+    $('login-proxy').replaceChildren(
+      el('button', {
+        class: 'primary',
+        type: 'button',
+        text: `Sign in with ${proxy.label}`,
+        onclick: async () => {
+          try {
+            clearSignedOut();
+            await api('/signin/proxy', { method: 'POST', body: {} });
+            await start();
+          } catch (err) {
+            $('login-error').textContent = err.message;
+            $('login-error').hidden = false;
+          }
+        },
+      }),
+      el('p', { class: 'muted small', text: `As ${proxy.identity}. Or use a token below.` }),
+    );
+    $('login-proxy').hidden = false;
+  } else if (proxy?.identity) {
+    $('login-proxy').replaceChildren(
+      el('p', {
+        class: 'small',
+        text: `You are signed in to ${proxy.label} as ${proxy.identity}, but that login is not linked to anyone on this Orco yet. Ask an org admin to add you with it, or sign in once below (with a sign-in link or your token) and link it.`,
+      }),
+    );
+    $('login-proxy').hidden = false;
+  }
   $('login-token').focus();
+}
+
+const SIGNED_OUT = 'orco.signedOut';
+function justSignedOut() {
+  try {
+    return sessionStorage.getItem(SIGNED_OUT) === '1';
+  } catch {
+    return false;
+  }
+}
+function clearSignedOut() {
+  try {
+    sessionStorage.removeItem(SIGNED_OUT);
+  } catch {
+    // Private mode: nothing kept, nothing to clear.
+  }
 }
 
 $('login-form').addEventListener('submit', async (event) => {
@@ -2480,6 +2537,12 @@ $('my-agents').addEventListener('click', () => {
 
 $('logout').addEventListener('click', async () => {
   await api('/session', { method: 'DELETE' });
+  // Behind a sign-in proxy you are still signed in there: do not sign straight back in on reload.
+  try {
+    sessionStorage.setItem(SIGNED_OUT, '1');
+  } catch {
+    // Private mode: the proxy may sign you back in.
+  }
   location.reload();
 });
 
@@ -2599,6 +2662,21 @@ wireComposer($('composer'), $('composer-text'), $('composer-pending'), () => sta
 wireComposer($('thread-composer'), $('thread-text'), $('thread-pending'), () => state.thread.room, (text, ids) =>
   api('/messages', { method: 'POST', body: { room: state.thread.room, text, thread_id: state.thread.id, attachment_ids: ids } }),
 );
+
+/** Signed in another way while the sign-in proxy vouches for an unlinked login: offer to link it, once a session. */
+async function offerProxyLogin() {
+  if (state.me.kind !== 'user') return;
+  const proxy = (await api('/setup').catch(() => ({}))).proxy;
+  if (!proxy?.identity || proxy.user) return;
+  const key = `orco.proxyOffered.${proxy.identity}`;
+  try {
+    if (sessionStorage.getItem(key)) return;
+    sessionStorage.setItem(key, '1');
+  } catch {
+    return;
+  }
+  guide.offerLinkLogin(proxy);
+}
 
 /** Opens a sign-in link (#signin=…) if there is one, then starts the app. */
 async function boot() {

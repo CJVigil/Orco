@@ -201,6 +201,34 @@ export function createGuide(ctx) {
     );
   }
 
+  /** Link the login the sign-in proxy vouches for (Google, say) to your account. */
+  function offerLinkLogin(proxy) {
+    const problem = error();
+    modal(
+      `Sign in with ${proxy.label} from now on?`,
+      el('p', { class: 'small', text: `You are signed in to ${proxy.label} as ${proxy.identity}. Link it to ${me().name}, and opening Orco signs you in, without links or tokens.` }),
+      problem,
+      el(
+        'div',
+        { class: 'row-end' },
+        el('button', { class: 'ghost', type: 'button', text: 'Not now', onclick: (event) => event.target.closest('dialog').close() }),
+        el('button', {
+          class: 'primary',
+          type: 'button',
+          text: `Link ${proxy.identity}`,
+          onclick: async (event) => {
+            try {
+              await api('/me/logins', { method: 'POST', body: {} });
+              event.target.closest('dialog').close();
+            } catch (err) {
+              showError(problem, err);
+            }
+          },
+        }),
+      ),
+    );
+  }
+
   /** After your first task: offer to tell you when agents finish or need you, once. */
   function offerNotifications() {
     const asked = 'orco.notifyOffered';
@@ -636,5 +664,5 @@ export function createGuide(ctx) {
     );
   }
 
-  return { stepsDismissed: dismissed, signInLink, showOtherDevice, showWelcome, copyBlock, showSetup, addAgent, showConnect, connectComputer, askAgent, refreshSteps, showSteps, showHelp };
+  return { offerLinkLogin, stepsDismissed: dismissed, signInLink, showOtherDevice, showWelcome, copyBlock, showSetup, addAgent, showConnect, connectComputer, askAgent, refreshSteps, showSteps, showHelp };
 }

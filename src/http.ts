@@ -19,6 +19,7 @@ import type { Question, QuestionTarget } from './questions.js';
 import { byWorkOrder, type Priority, type StatusCategory, type TicketFilter, type TicketInput } from './tickets.js';
 import { importTickets, parseImport } from './import.js';
 import { SESSION_TTL_MS } from './signins.js';
+import { normalizeIdentity } from './identities.js';
 import { SEARCH_KINDS, type SearchKind, searchAll } from './search.js';
 import { catchUp } from './catchup.js';
 import type { Wake } from './reminders.js';
@@ -70,13 +71,13 @@ function readCookie(header: string | undefined, name: string): string | undefine
 
 const STALL_SWEEP_MS = 60_000;
 
-function authenticate(store: Store, presence: Presence, oauth?: OAuth) {
+function authenticate(store: Store, presence: Presence, oauth?: OAuth, proxyIdentity?: (req: Request) => string | null) {
   return (req: Request, res: Response, next: NextFunction) => {
     const bearer = /^Bearer (\S+)$/.exec(req.headers.authorization ?? '')?.[1];
     const token = bearer ?? readCookie(req.headers.cookie, COOKIE);
     // Browser sessions from sign-in links work only as the cookie, and only for the web app's API.
     const session = bearer === undefined && token !== undefined && store.signins.isSession(token);
-    const participant = !token
+    let participant = !token
       ? null
       : session
         ? req.originalUrl.startsWith('/api/')
@@ -85,6 +86,13 @@ function authenticate(store: Store, presence: Presence, oauth?: OAuth) {
         : oauth && bearer
           ? (oauth.verifyAccessToken(bearer) ?? store.authenticate(bearer))
           : store.authenticate(token);
+    // Behind a sign-in proxy, the proxy says who is at the keyboard: a browser session for someone else
+    // (a shared computer, a session from before) does not count.
+    if (participant && session && proxyIdentity) {
+      const identity = proxyIdentity(req);
+      const owner = identity ? store.identities.userFor(identity) : null;
+      if (owner && owner.id !== participant.id) participant = null;
+    }
     if (!token || !participant) {
       const challenge = oauth
         ? `Bearer resource_metadata="${oauth.issuer}/.well-known/oauth-protected-resource/mcp", scope="${OAUTH_SCOPE}"`
@@ -236,6 +244,11 @@ export interface AppOptions {
   setupCode?: string;
   /** The package file to hand to joining computers (default: ORCO_PACKAGE or a packed one); null for none. */
   packageFile?: string | null;
+  /**
+   * Sign-in through a proxy: the header in which a trusted proxy (ORCO_TRUST_PROXY, by address) passes
+   * the signed-in login, and what to call that login on the sign-in page ("Google").
+   */
+  proxyAuth?: { header: string; label: string };
 }
 
 /** Cookies are Secure on HTTPS, and whenever Orco's public address is HTTPS (a proxy may speak HTTP to it). */
@@ -274,7 +287,18 @@ export function createApp(store: Store, options: AppOptions = {}) {
     { maxRequestBodySize: 16 * 1024 * 1024 },
   );
   const mcpNode = toNodeHandler(mcp);
-  const auth = authenticate(store, presence);
+  /**
+   * The login the sign-in proxy vouches for, or null. Only a request that came straight from a trusted
+   * proxy counts; from anywhere else the header is whatever the client made up, and is ignored.
+   */
+  const proxyAuth = options.proxyAuth;
+  const proxyIdentity = (req: Request): string | null => {
+    if (!proxyAuth || !app.get('trust proxy')) return null;
+    const trusted = app.get('trust proxy fn') as (address: string, hop: number) => boolean;
+    if (!trusted(req.socket.remoteAddress ?? '', 0)) return null;
+    return normalizeIdentity(req.headers[proxyAuth.header.toLowerCase()]);
+  };
+  const auth = authenticate(store, presence, undefined, proxyIdentity);
   const mcpAuth = authenticate(store, presence, oauth);
 
   const withStatus = (viewer: Participant, people: (Participant & { owner: string | null })[]) => {
@@ -322,8 +346,23 @@ export function createApp(store: Store, options: AppOptions = {}) {
   });
 
   // First run: the first person sets Orco up in the browser with the code the server printed.
-  app.get('/api/setup', (_req, res) => {
-    res.json({ needed: store.onboarding.setupNeeded() });
+  app.get('/api/setup', (req, res) => {
+    const identity = proxyIdentity(req);
+    res.json({
+      needed: store.onboarding.setupNeeded(),
+      // Sign-in through a proxy: whether it is on, what to call it, and who the proxy says you are.
+      ...(proxyAuth ? { proxy: { label: proxyAuth.label, identity, user: identity ? (store.identities.userFor(identity)?.name ?? null) : null } } : {}),
+    });
+  });
+  app.post('/api/signin/proxy', express.json({ limit: '1kb' }), (req, res) => {
+    const identity = proxyIdentity(req);
+    if (!proxyAuth) throw new OrcoError('not_found', 'Sign-in through a proxy is not set up on this Orco');
+    if (!identity) throw new OrcoError('forbidden', `${proxyAuth.label} did not say who you are; open Orco through its sign-in page`);
+    const user = store.identities.userFor(identity);
+    if (!user) throw new OrcoError('forbidden', `${identity} is not linked to anyone on this Orco yet. Ask an org admin to add you with it, or sign in another way once and link it.`);
+    res.cookie(COOKIE, store.signins.startSession(user), { httpOnly: true, sameSite: 'strict', secure: secureCookies(req, options.publicUrl), path: '/', maxAge: SESSION_TTL_MS });
+    store.audit.record(user, 'signin.proxy', { subject: `user:${user.name}`, detail: { identity } });
+    res.json({ name: user.name });
   });
   app.post('/api/setup', express.json({ limit: '4kb' }), (req, res) => {
     const ip = req.ip ?? 'unknown';
@@ -333,6 +372,9 @@ export function createApp(store: Store, options: AppOptions = {}) {
     }
     try {
       const { participant, token } = store.onboarding.setup(options.setupCode, String(req.body?.code ?? ''), String(req.body?.name ?? ''));
+      // Set up through the sign-in proxy: that login becomes this person's from now on.
+      const identity = proxyIdentity(req);
+      if (identity) store.identities.link(participant, participant.name, identity);
       res.cookie(COOKIE, store.signins.startSession(participant), { httpOnly: true, sameSite: 'strict', secure: secureCookies(req, options.publicUrl), path: '/', maxAge: SESSION_TTL_MS });
       res.status(201).json({ name: participant.name, token });
     } catch (err) {
@@ -439,7 +481,23 @@ export function createApp(store: Store, options: AppOptions = {}) {
 
   api.get('/me', (req, res) => {
     const me = req.participant!;
-    res.json({ name: me.name, kind: me.kind, owner: store.ownerName(me), orgAdmin: store.isOrgAdmin(me) });
+    res.json({
+      name: me.name,
+      kind: me.kind,
+      owner: store.ownerName(me),
+      orgAdmin: store.isOrgAdmin(me),
+      ...(me.kind === 'user' && !me.scope ? { logins: store.identities.of(me.id) } : {}),
+    });
+  });
+  // Link the login the sign-in proxy vouches for to yourself, so it signs you in from now on.
+  api.post('/me/logins', (req, res) => {
+    const identity = proxyIdentity(req);
+    if (!identity) throw new OrcoError('invalid', 'Open Orco through its sign-in proxy to link that login');
+    res.status(201).json({ login: store.identities.link(req.participant!, req.participant!.name, identity) });
+  });
+  api.delete('/me/logins', (req, res) => {
+    store.identities.unlink(req.participant!, req.participant!.name, String(req.body?.login ?? ''));
+    res.status(204).end();
   });
   api.get('/participants', (req, res) => {
     const project = typeof req.query.project === 'string' && req.query.project ? req.query.project : undefined;
@@ -479,8 +537,17 @@ export function createApp(store: Store, options: AppOptions = {}) {
   api.post('/users', (req, res) => {
     const me = req.participant!;
     if (!store.isOrgAdmin(me)) throw new OrcoError('forbidden', 'Only org admins add people');
+    // Check the email before making anyone, so a bad or taken one leaves nothing half done.
+    if (req.body?.email) {
+      const email = normalizeIdentity(req.body.email);
+      if (!email) throw new OrcoError('invalid', 'That is not a valid email or login');
+      const taken = store.identities.userFor(email);
+      if (taken) throw new OrcoError('conflict', `${email} already signs in as ${taken.name}`);
+    }
     const { participant, token } = store.createUser(String(req.body?.name ?? '').trim().toLowerCase(), { orgAdmin: req.body?.admin === true });
     const link = store.signins.createLink(me, participant.name, { invite: true });
+    // With a sign-in proxy, an email given here signs them in through it; no link needed.
+    if (req.body?.email) store.identities.link(me, participant.name, String(req.body.email), { invite: true });
     res.status(201).json({ name: participant.name, token, orgAdmin: store.isOrgAdmin(participant), signin: link });
   });
   api.post('/signin-links', (req, res) => {

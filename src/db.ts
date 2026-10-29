@@ -740,6 +740,16 @@ export const MIGRATIONS = [
   ALTER TABLE tasks ADD COLUMN reported_tokens INTEGER NOT NULL DEFAULT 0;
   UPDATE tasks SET measured_cents = spent_cents, measured_tokens = spent_tokens;
   `,
+  // 19: logins from a sign-in proxy (Google through oauth2-proxy, Cloudflare Access, Tailscale), one person each.
+  `
+  CREATE TABLE identities (
+    identity TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES participants(id),
+    created_by INTEGER REFERENCES participants(id),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+  CREATE INDEX identities_user ON identities (user_id);
+  `,
 ];
 
 export interface OpenOptions {

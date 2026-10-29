@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Sign in with Google (or GitHub, Microsoft, your company's login) through a proxy in front of Orco:
+  set `ORCO_AUTH_HEADER` to the header your sign-in proxy fills (oauth2-proxy, Cloudflare Access,
+  Tailscale, Authelia, Authentik) and `ORCO_TRUST_PROXY` to its address. Orco makes no outbound calls
+  for it. Admins invite by email, people already here link their login once, and
+  `orco user email` links one on the server; nobody can link a login to someone else's account.
+  The header is read only from the trusted proxy, and Orco refuses to start with a hop count.
+
 - Security fixes (#25-#31): `orco connect` checks the agent names, tools and tokens a server sends
   before writing anything, and keeps token files inside their folder (on Windows, locked to your
   account with an ACL). Pairing shows the address a request came from and warns when it is not your

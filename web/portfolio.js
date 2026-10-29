@@ -329,14 +329,15 @@ export function createPortfolio(ctx) {
   async function controls() {
     const admin = isAdmin();
     const administered = admin ? projects().map((pr) => pr.name) : adminOf();
-    const [state, agents, groups] = await Promise.all([api('/controls'), api('/agents'), admin ? api('/groups') : Promise.resolve([])]);
+    const [state, agents, groups, setup] = await Promise.all([api('/controls'), api('/agents'), admin ? api('/groups') : Promise.resolve([]), admin ? api('/setup') : Promise.resolve({})]);
     if (!p.policyProject && administered[0] && !admin) p.policyProject = administered[0];
     const policy = p.policyProject || admin ? await api(`/policy${p.policyProject ? `?project=${encodeURIComponent(p.policyProject)}` : ''}`) : null;
-    return [pausesCard(state.pauses, administered, agents), budgetsCard(state.budgets, administered, agents), admin ? peopleCard() : null, policy ? policyCard(policy, administered) : null, admin ? groupsCard(groups) : null];
+    return [pausesCard(state.pauses, administered, agents), budgetsCard(state.budgets, administered, agents), admin ? peopleCard(setup.proxy) : null, policy ? policyCard(policy, administered) : null, admin ? groupsCard(groups) : null];
   }
 
-  /** Org admins invite people with a sign-in link. */
-  function peopleCard() {
+  /** Org admins invite people with a sign-in link, or by their email when Orco sits behind a sign-in proxy. */
+  function peopleCard(proxy) {
+    const email = proxy ? el('input', { type: 'email', placeholder: `Their ${proxy.label} email (optional)`, 'aria-label': `Their ${proxy.label} email` }) : null;
     const name = el('input', { placeholder: 'Their name, like ana', pattern: '[a-z0-9][a-z0-9\\-]{0,31}', 'aria-label': 'Name of the person to add' });
     const result = el('div', { class: 'people-result' });
     const copyRow = (text, label) =>
@@ -363,8 +364,15 @@ export function createPortfolio(ctx) {
       );
     const add = async () => {
       try {
-        const person = await api('/users', { method: 'POST', body: { name: name.value.trim() } });
+        const person = await api('/users', { method: 'POST', body: { name: name.value.trim(), ...(email?.value.trim() ? { email: email.value.trim() } : {}) } });
         name.value = '';
+        if (email?.value.trim()) {
+          result.replaceChildren(
+            el('p', { class: 'small', text: `${person.name} can now open ${location.origin} and sign in with ${proxy.label} as ${email.value.trim()}. Nothing to send but the address.` }),
+          );
+          email.value = '';
+          return;
+        }
         showLink(person.name, person.signin.code, `Send ${person.name} this link. It signs them in; then they can add their own agents.`);
         result.append(
           el(
@@ -384,7 +392,7 @@ export function createPortfolio(ctx) {
       { class: 'plan-card' },
       el('h3', { text: 'People' }),
       el('p', { class: 'small muted', text: 'Add someone to this Orco. They see only the projects you add them to.' }),
-      el('div', { class: 'pf-row' }, name, el('button', { class: 'small', type: 'button', text: 'Add person', onclick: () => void add() })),
+      el('div', { class: 'pf-row' }, name, email, el('button', { class: 'small', type: 'button', text: 'Add person', onclick: () => void add() })),
       result,
       el('p', { class: 'small muted', text: 'Someone lost access? Whoever runs the server makes them a new sign-in link with orco user link <name>.' }),
     );

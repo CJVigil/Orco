@@ -100,6 +100,8 @@ deploys it.
 | `ORCO_BACKUP_KEEP` | `14` | How many scheduled backups to keep |
 | `ORCO_BACKUP_PATH` | `orco-backups` volume | Compose only: host path (a Gluster or NFS mount) mounted at `/backups` |
 | `ORCO_REPLICA_PATH` | `orco-replica` volume | Compose only: host path for Litestream's replica |
+| `ORCO_AUTH_HEADER` | unset | Sign in through a proxy ("Sign in with Google"): the header in which your sign-in proxy passes the signed-in email or login. Needs `ORCO_TRUST_PROXY` set to the proxy's address. See [Sign in with Google](#sign-in-with-google-through-your-proxy) |
+| `ORCO_AUTH_LABEL` | `your sign-in provider` | What the sign-in page calls it, like `Google` |
 | `ORCO_PACKAGE` | `orco.tgz` in the app folder | The Orco package handed to computers joining with `npx <server>/install/orco-<version>.tgz connect`. The Docker image has one; from a clone, `npm pack` makes one |
 | `ORCO_SECRETS_KEY` | unset | 32 bytes (`openssl rand -hex 32`) that encrypt stored secrets; without it the credentials broker is off. Keep it out of the database backups' reach: a backup plus this key reveals every secret, and losing the key loses them |
 
@@ -127,6 +129,51 @@ orco list
 
 Tokens and links are shown once and stored only as SHA-256 hashes. Send links and tokens over a
 private channel: whoever opens a link first is signed in as that person.
+
+## Sign in with Google (through your proxy)
+
+Orco never talks to Google itself (the server makes no outbound calls). Instead, the proxy in front of
+it signs people in, with Google, GitHub, Microsoft or your company's login, and tells Orco who they
+are in a header. Orco maps that login to a person and starts a normal browser session.
+
+1. Put a sign-in proxy in front of Orco: [oauth2-proxy](https://oauth2-proxy.github.io/oauth2-proxy/)
+   (with Caddy or Nginx), Cloudflare Access, Tailscale, Authelia or Authentik.
+2. Tell Orco which header carries the login, and trust only that proxy's address:
+
+   ```bash
+   ORCO_TRUST_PROXY=loopback          # or the proxy's address, like 172.18.0.5 or uniquelocal
+   ORCO_AUTH_HEADER=X-Forwarded-Email
+   ORCO_AUTH_LABEL=Google
+   ```
+
+   | Proxy | Header |
+   | --- | --- |
+   | oauth2-proxy (`--pass-user-headers`) | `X-Forwarded-Email` |
+   | Caddy `forward_auth` to oauth2-proxy (`--set-xauthrequest`) | `X-Auth-Request-Email` |
+   | Cloudflare Access (with `cloudflared` on the same host) | `Cf-Access-Authenticated-User-Email` |
+   | Tailscale (`tailscale serve`) | `Tailscale-User-Login` |
+   | Authelia | `Remote-Email` |
+   | Authentik | `X-authentik-email` |
+
+3. Link logins to people. The first person to set Orco up through the proxy is linked automatically.
+   Org admins add others with their email (*Portfolio* → *Controls* → *People*), and they just open
+   Orco. Someone already on Orco signs in once another way and accepts the offer to link their login.
+   On the server: `orco user email <name> <email>` (and `--off` to remove one).
+
+Who decides what:
+- **The proxy decides who gets in.** Restrict it to your domain or a list of accounts there; Orco
+  never creates accounts from a login it does not know, it says to ask an admin.
+- **Only the proxy may set the header.** Orco reads it only from requests that come straight from
+  an address in `ORCO_TRUST_PROXY`, which must be addresses, not a hop count (Orco refuses to start
+  otherwise). Make sure the proxy **removes the header from what clients send** before adding its
+  own: oauth2-proxy and Cloudflare do; with Caddy `forward_auth`, add `request_header -X-Auth-Request-Email`
+  first. And keep Orco itself unreachable except through the proxy.
+- **Orco still owns sessions.** Signing out, *Sign out everywhere* and token rotation work as
+  before. If the proxy says a different person is at the keyboard than the browser's session, the
+  session is refused. Agents and the command line keep using their tokens; the proxy should let
+  `/mcp` and `/api` requests that carry an `Authorization` header through.
+- **Nobody links a login to someone else's account,** org admins included: that would let them sign
+  in as that person. Only the server operator (`orco user email`) can.
 
 ## Storage
 

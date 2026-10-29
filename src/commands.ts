@@ -1,3 +1,4 @@
+import { normalizeIdentity } from './identities.js';
 import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, extname, resolve } from 'node:path';
@@ -22,7 +23,10 @@ const USAGE = `Usage: orco <command> [options]
 
 Server commands (run where the database lives):
   serve                      Start the server
-  user add <name> [--admin]  Create a user and print their token (the first user is an org admin)
+  user add <name> [--admin] [--email <login>]
+                             Create a user and print a sign-in link and their token (the first user is an org admin)
+  user email <name> <login> [--off]
+                             Let a login from the sign-in proxy (an email, for Google) sign in as this person
   user admin <name> [--off]  Make a user an org admin, or stop
   user link <name>           Print a one-time sign-in link for a person (an invite, or a way back in)
   user signout <name>        Sign a person out of every browser (a lost laptop); token rotate also does this
@@ -175,6 +179,7 @@ export function main(): void {
       force: { type: 'boolean' },
       once: { type: 'boolean' },
       admin: { type: 'boolean' },
+      email: { type: 'string' },
       service: { type: 'boolean' },
       'no-start': { type: 'boolean' },
       off: { type: 'boolean' },
@@ -297,7 +302,9 @@ export function main(): void {
       const publicUrl = process.env.ORCO_PUBLIC_URL || undefined;
       // Until someone has an account, a one-time code lets the first person set Orco up in the browser.
       const setupCode = store.onboarding.setupNeeded() ? randomBytes(9).toString('base64url') : undefined;
-      const { app, close, oauth } = createApp(store, { publicUrl, setupCode });
+      const trust = trustProxySetting(process.env.ORCO_TRUST_PROXY);
+      const proxyAuth = proxyAuthSetting(process.env.ORCO_AUTH_HEADER, process.env.ORCO_AUTH_LABEL, trust);
+      const { app, close, oauth } = createApp(store, { publicUrl, setupCode, proxyAuth });
       const warning = networkFilesystemWarning(values.db);
       if (warning) console.error(warning);
       const backups = backupsFromEnv(store);
@@ -318,7 +325,6 @@ export function main(): void {
           console.error(`Scheduled backup failed: ${(err as Error).message}`);
         }
       }
-      const trust = trustProxySetting(process.env.ORCO_TRUST_PROXY);
       if (trust !== undefined) app.set('trust proxy', trust);
       const port = Number(values.port);
       if (!Number.isInteger(port) || port < 1 || port > 65535) throw new OrcoError('invalid', `Invalid port ${values.port}`);
@@ -327,6 +333,7 @@ export function main(): void {
         console.log(`  MCP endpoint: http://${values.host}:${port}/mcp`);
         console.log(`  Database: ${values.db}`);
         if (oauth) console.log(`  OAuth for cloud agents: on, issuer ${oauth.issuer}`);
+        if (proxyAuth) console.log(`  Sign-in through ${proxyAuth.label}: on, from the ${proxyAuth.header} header of trusted proxies (${trust})`);
         if (backups) console.log(`  Backups: every ${process.env.ORCO_BACKUP_HOURS || 24}h to ${process.env.ORCO_BACKUP_DIR}`);
         if (values.host !== '127.0.0.1' && values.host !== 'localhost') {
           console.log('  Not bound to localhost: put TLS in front of this (see docs/deploy.md).');
@@ -360,12 +367,25 @@ export function main(): void {
     }
     case 'user add': {
       const [name] = args;
-      if (!name) throw new OrcoError('invalid', 'Usage: orco user add <name> [--admin]');
+      if (!name) throw new OrcoError('invalid', 'Usage: orco user add <name> [--admin] [--email <login>]');
+      if (values.email && !normalizeIdentity(values.email)) throw new OrcoError('invalid', `${values.email} is not a valid email or login`);
       const { participant, token } = store.createUser(name, { orgAdmin: values.admin });
+      if (values.email) console.log(`${store.identities.link(null, name, values.email)} now signs in as ${name} through the sign-in proxy.`);
       const admin = store.isOrgAdmin(participant) ? ' (an org admin)' : '';
       const link = store.signins.createLink(null, name);
       console.log(`Created user ${name}${admin}. Send them this link to sign in (works once, for 7 days):\n${serverBase(values)}/#signin=${link.code}`);
       console.log(`Their token for the command line (shown once):\n${token}`);
+      return;
+    }
+    case 'user email': {
+      const [name, login] = args;
+      if (!name || !login) throw new OrcoError('invalid', 'Usage: orco user email <name> <email or login> [--off]');
+      if (values.off) {
+        store.identities.unlink(null, name, login);
+        console.log(`${login} no longer signs in as ${name}.`);
+      } else {
+        console.log(`${store.identities.link(null, name, login)} now signs in as ${name} through the sign-in proxy.`);
+      }
       return;
     }
     case 'user signout': {
@@ -483,4 +503,23 @@ export function trustProxySetting(raw: string | undefined): number | string | un
     );
   }
   return value;
+}
+
+/**
+ * Sign-in through a proxy: ORCO_AUTH_HEADER names the header a trusted proxy fills with the signed-in
+ * login (like X-Forwarded-Email from oauth2-proxy). It needs ORCO_TRUST_PROXY set to the proxies'
+ * addresses: with a hop count, or none, anyone who can reach Orco directly could send the header.
+ */
+export function proxyAuthSetting(header: string | undefined, label: string | undefined, trust: number | string | undefined): { header: string; label: string } | undefined {
+  const name = header?.trim();
+  if (!name) return undefined;
+  if (!/^[A-Za-z0-9-]{1,64}$/.test(name)) throw new OrcoError('invalid', `ORCO_AUTH_HEADER=${name} is not a header name`);
+  if (/^(authorization|cookie|host|x-forwarded-for)$/i.test(name)) throw new OrcoError('invalid', `ORCO_AUTH_HEADER cannot be ${name}`);
+  if (trust === undefined || typeof trust === 'number') {
+    throw new OrcoError(
+      'invalid',
+      'ORCO_AUTH_HEADER needs ORCO_TRUST_PROXY set to the sign-in proxy\'s address (like loopback, uniquelocal or 10.0.0.2), not a hop count: otherwise anyone reaching Orco directly could send the header and sign in as anyone.',
+    );
+  }
+  return { header: name, label: label?.trim().slice(0, 40) || 'your sign-in provider' };
 }
