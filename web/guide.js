@@ -31,7 +31,7 @@ const TEMPLATES = [
 const GLOSSARY = [
   ['Projects and rooms', 'A project holds the work for one thing you are building, with its people, agents, rooms and tickets. Rooms are chats; every project starts with #general.'],
   ['Agents', 'An AI helper like Claude Code or Codex that belongs to a person. It sees the projects its owner is in, and works when it is given a task.'],
-  ['Connecting a computer', 'Agents run on your own computer, where your code is. Running orco connect there links it to Orco; from then on Orco starts your agents there when they get work.'],
+  ['Connecting a computer', 'Agents run on your own computer, where your code is. One command there (Connect a computer shows it) links it to Orco; from then on Orco starts your agents there when they get work.'],
   ['Tasks', 'A request to one agent ("fix the login bug"). The agent accepts it, reports progress, may ask you something, and finishes with a short note and links. Rate the result with ▲ or ▼ so it learns.'],
   ['Tickets', 'The project’s to-do list, on a board. Assign a ticket to an agent and it becomes a task; the ticket moves along as the agent works.'],
   ['Mentions', '@name pings someone. @all pings every person in the room. Agents only start work from tasks, not from plain mentions.'],
@@ -45,6 +45,28 @@ const GLOSSARY = [
 export function createGuide(ctx) {
   const { api, el, $, me, room, openPanel, panel, loadStructure, newProject, showMyAgents } = ctx;
   const origin = location.origin;
+
+  /** The one command that joins a computer: through npx when this server hands out Orco, so nothing needs installing. */
+  let client;
+  async function joinCommand() {
+    client ??= api('/client').catch(() => ({ package: null }));
+    const info = await client;
+    return info.package ? `npx -y ${origin}${info.package} connect ${origin}` : `orco connect ${origin}`;
+  }
+
+  /** The command to copy, with what it needs. */
+  async function joinBlock() {
+    const command = await joinCommand();
+    return [
+      copyBlock(command),
+      el('p', {
+        class: 'small muted',
+        text: command.startsWith('npx')
+          ? 'Needs Node.js 22.13 or newer (nodejs.org). Nothing else to install.'
+          : 'Needs the orco command there: from a copy of the Orco repository, npm ci && npm run build && npm link.',
+      }),
+    ];
+  }
 
   /* Small builders */
 
@@ -137,16 +159,16 @@ export function createGuide(ctx) {
   /* Agents */
 
   /** Ways to connect an agent, each ready to paste. */
-  function connectSteps(name, token) {
+  function connectSteps(name, token, join) {
     const tabs = [
       [
         'Your computer (easiest)',
         [
           el('p', { class: 'small', text: 'On the computer where the agent should work, in the folder of your code, run:' }),
-          copyBlock(`orco connect ${origin}`),
+          join,
           el('p', {
             class: 'small muted',
-            text: 'It finds Claude Code, Codex and other tools there and shows a code; approve it here and pick this agent. Orco then starts the agent whenever it gets a task. Add --service to keep it running after a restart.',
+            text: 'It finds Claude Code, Codex and other tools there and shows a code; approve it here and pick this agent. Orco then starts the agent whenever it gets a task. To keep it running after a restart, add --service (it says how to install Orco for that).',
           }),
         ],
       ],
@@ -185,11 +207,11 @@ export function createGuide(ctx) {
         onclick: (event) => {
           for (const b of buttons) b.classList.remove('active');
           event.target.classList.add('active');
-          body.replaceChildren(...content);
+          body.replaceChildren(...content.flat());
         },
       }),
     );
-    body.replaceChildren(...tabs[0][1]);
+    body.replaceChildren(...tabs[0][1].flat());
     return [el('div', { class: 'guide-tabs', role: 'tablist' }, buttons), body];
   }
 
@@ -228,7 +250,8 @@ export function createGuide(ctx) {
   }
 
   /** How to connect an agent; with its new token when one was just made. */
-  function showConnect(name, token) {
+  async function showConnect(name, token) {
+    const join = await joinBlock();
     modal(
       `Connect ${name}`,
       token
@@ -237,18 +260,19 @@ export function createGuide(ctx) {
             copyBlock(token, 'Copy token'),
           ]
         : el('p', { class: 'small muted', text: 'The easiest way needs no token. The others need one: make a new one under My agents (the old one stops working).' }),
-      connectSteps(name, token),
+      connectSteps(name, token, join),
     );
   }
 
   /** Ask for a code shown by orco connect, then approve it. */
-  function connectComputer() {
-    const code = el('input', { required: true, placeholder: 'ABCD-EFGH', autocomplete: 'off', 'aria-label': 'Code', style: 'text-transform: uppercase' });
+  async function connectComputer() {
+    const join = await joinBlock();
+    const code = el('input', { required: true, placeholder: 'ABCD-EFGH', autocomplete: 'off', 'aria-label': 'Code', class: 'code-input' });
     const problem = error();
     const dialog = modal(
       'Connect a computer',
       el('p', { class: 'small', text: 'On the computer where your agents should work, in the folder of your code, run:' }),
-      copyBlock(`orco connect ${origin}`),
+      join,
       el('p', { class: 'small muted', text: 'It shows a code. Enter it here (or open the link it prints).' }),
       el(
         'form',
@@ -278,7 +302,7 @@ export function createGuide(ctx) {
     try {
       approveComputer(await api(`/pair/code/${encodeURIComponent(value)}`));
     } catch (err) {
-      modal('Connect a computer', el('p', { class: 'error', text: err.message }), el('p', { class: 'small muted', text: 'Run orco connect again for a new code.' }));
+      modal('Connect a computer', el('p', { class: 'error', text: err.message }), el('p', { class: 'small muted', text: 'Run the connect command again for a new code.' }));
     }
   }
 
@@ -355,7 +379,7 @@ export function createGuide(ctx) {
   /* Asking an agent */
 
   /** A form for giving an agent a task, instead of typing /task. */
-  async function askAgent(prefill) {
+  async function askAgent(prefill, preferred) {
     const here = room();
     const where = here?.ref;
     if (!where) return;
@@ -375,7 +399,7 @@ export function createGuide(ctx) {
       { 'aria-label': 'Agent' },
       agents
         .sort((a, b) => Number(b.owner === me().name) - Number(a.owner === me().name))
-        .map((a) => el('option', { value: a.name, text: `${a.name} · ${status[a.status] ?? a.status}${a.owner === me().name ? '' : ` · ${a.owner}'s`}` })),
+        .map((a) => el('option', { value: a.name, selected: a.name === preferred, text: `${a.name} · ${status[a.status] ?? a.status}${a.owner === me().name ? '' : ` · ${a.owner}'s`}` })),
     );
     const request = el('textarea', { rows: '5', required: true, placeholder: 'What should it do? Say what “done” looks like.', text: prefill ?? '' });
     const minutes = el('input', { inputmode: 'numeric', placeholder: 'minutes', 'aria-label': 'Time limit in minutes' });

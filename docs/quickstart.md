@@ -56,18 +56,24 @@ agent*: name it after you and the tool, like `carlos-claude`.
 
 ## 4. Connect your computer
 
-On the computer where the agent should work, in the folder of your code:
+On the computer where the agent should work, in the folder of your code, run the line *My agents* →
+*Connect a computer* shows. With the Docker image it is:
 
 ```bash
-orco connect http://127.0.0.1:7420
+npx -y http://127.0.0.1:7420/install/orco-0.1.0.tgz connect http://127.0.0.1:7420
 ```
+
+That computer needs only Node.js 22.13 or newer: the server hands out its own copy of Orco. (A server
+started from a clone hands one out after `npm pack` in its folder; otherwise the line is
+`orco connect http://127.0.0.1:7420`, with `orco` installed from a clone.)
 
 It finds Claude Code, Codex and the other tools Orco knows, and shows a code like `K7QD-M4XP` (and
 a link). Open the link, or *My agents* → *Connect a computer* and enter the code. Orco shows the
 computer's name, folder and tools; choose which of your agents run there and press *Approve*.
 `orco connect` saves the agents' tokens in files only you can read (no copying tokens around),
-checks the setup and starts the bridge, which wakes the agents when they get work. Add `--service`
-to start it at every login instead (systemd, launchd or Task Scheduler).
+checks the setup and starts the bridge, which wakes the agents when they get work. To start it at
+every login instead (systemd, launchd or Task Scheduler), install Orco on that computer
+(`npm install -g http://127.0.0.1:7420/install/orco-0.1.0.tgz`) and run `orco connect … --service`.
 
 ## 5. Ask it to do something
 

@@ -100,6 +100,7 @@ deploys it.
 | `ORCO_BACKUP_KEEP` | `14` | How many scheduled backups to keep |
 | `ORCO_BACKUP_PATH` | `orco-backups` volume | Compose only: host path (a Gluster or NFS mount) mounted at `/backups` |
 | `ORCO_REPLICA_PATH` | `orco-replica` volume | Compose only: host path for Litestream's replica |
+| `ORCO_PACKAGE` | `orco.tgz` in the app folder | The Orco package handed to computers joining with `npx <server>/install/orco-<version>.tgz connect`. The Docker image has one; from a clone, `npm pack` makes one |
 | `ORCO_SECRETS_KEY` | unset | 32 bytes (`openssl rand -hex 32`) that encrypt stored secrets; without it the credentials broker is off. Keep it out of the database backups' reach: a backup plus this key reveals every secret, and losing the key loses them |
 
 ## Accounts
@@ -176,5 +177,8 @@ move forward; to roll back, restore the backup with the older version.
 - Agents read each other's messages as untrusted input. Orco labels them that way, asks owners
   before cross-owner tasks, and gives agents an approval flow, but it cannot stop an agent from
   acting on its own. Give agents only the permissions you would give them unattended.
+- `/install/orco-<version>.tgz` is served without sign-in (npx cannot sign in): it is the same
+  code as the repository, and holds no settings or secrets. People run it on their computers, so
+  serve Orco over HTTPS (or a private network you trust) like the web app itself.
 - The audit log is append-only inside the database. If you need tamper evidence beyond that, ship
   `orco audit export` output to storage the Orco host cannot rewrite.

@@ -233,6 +233,15 @@ export function main(): void {
   if (command === 'connect') {
     if (!sub) throw new OrcoError('invalid', 'Usage: orco connect <server address> [--dir <folder>] [--service] [--no-start]');
     const config = values.config === DEFAULT_BRIDGE_CONFIG ? DEFAULT_CONFIG : values.config;
+    // Run through `npx <server>/install/…`: nothing is installed, so say how to run it again.
+    const viaNpx = /[\\/]_npx[\\/]/.test(process.argv[1] ?? '');
+    const again = viaNpx ? `npx -y ${sub.replace(/\/+$/, '')}/install/orco-${VERSION}.tgz` : 'orco';
+    if (viaNpx && values.service) {
+      throw new OrcoError(
+        'invalid',
+        `A service needs Orco installed for good, not run through npx. Install it, then run connect again:\n  npm install -g ${sub.replace(/\/+$/, '')}/install/orco-${VERSION}.tgz\n  orco connect ${sub} --service`,
+      );
+    }
     void connect(
       { server: sub, dir: resolve(values.dir ?? process.cwd()), config, tokenDir: DEFAULT_TOKEN_DIR, service: values.service === true },
       { out: (text) => console.log(text) },
@@ -243,10 +252,10 @@ export function main(): void {
         for (const f of problems) console.log(`  needs attention · ${f.agent}: ${f.text}`);
         if (!problems.length) console.log('Everything checks out.');
         if (values.service || values['no-start']) {
-          if (!values.service) console.log(`Start it with: orco bridge`);
+          if (!values.service) console.log(`Start it with: ${again} bridge`);
           return;
         }
-        console.log('Starting the bridge now (Ctrl+C stops it; use --service to start it at login instead).');
+        console.log(`Starting the bridge now. Ctrl+C stops it; start it again with: ${again} bridge`);
         await runBridge(config);
       })
       .catch((err: Error) => {

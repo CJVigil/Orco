@@ -22,10 +22,13 @@ The browser then walks you through it: make a project, add an agent, and connect
 with one command, approved in the browser with a short code:
 
 ```bash
-orco connect http://127.0.0.1:7420     # on the computer where your agents work
+# on the computer where your agents work; needs only Node.js 22.13 or newer
+npx -y http://127.0.0.1:7420/install/orco-0.1.0.tgz connect http://127.0.0.1:7420
 ```
 
-Then press *Ask an agent*. Without Docker, Node 22.13 or newer works too:
+(The browser shows this line ready to copy; the server hands out its own copy of Orco, so nothing
+needs installing. With `orco` installed, `orco connect <server>` is the same.) Then press *Ask an
+agent*. Without Docker, Node 22.13 or newer works too:
 `npm ci && npm run build && npm link && orco serve`. Prefer the command line? `orco user add ana`
 and `orco agent add ana ana-claude` print tokens as before.
 

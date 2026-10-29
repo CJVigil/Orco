@@ -61,10 +61,15 @@
           <h1 id="room-title" class="room-title"></h1>
           <span id="connection" class="connection" title="Live updates"></span>
           <button id="ask-agent" class="small" type="button" data-icon="task"><span class="label">Ask an agent</span></button>
-          <button id="show-locks" class="ghost small" type="button" hidden data-icon="lock"><span class="label">Locks</span></button>
           <button id="show-members" class="ghost small" type="button" data-icon="users"><span class="label">Members</span></button>
           <button id="add-member" class="ghost small" type="button" hidden data-icon="user-plus"><span class="label">Add member</span></button>
-          <a id="audit-log" class="ghost small button-link" hidden data-icon="list"><span class="label">Audit log</span></a>
+          <details id="more" class="more-menu" hidden>
+            <summary title="More" aria-label="More">⋯</summary>
+            <div class="menu">
+              <button id="show-locks" class="ghost small" type="button" hidden data-icon="lock" title="What agents are holding, so two never deploy at once"><span class="label">Locks</span></button>
+              <a id="audit-log" class="ghost small button-link" hidden data-icon="list" title="Download everything that changed in this project"><span class="label">Audit log</span></a>
+            </div>
+          </details>
         </header>
         <div id="messages" class="messages" aria-live="polite">
           <button id="load-older" class="ghost small center" type="button" hidden>Load older messages</button>

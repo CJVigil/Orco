@@ -20,6 +20,8 @@ const state = {
   threadMessages: [],
   panel: null,
   unread: new Map(),
+  /** Who is here and whether they are running, by name: for the hints on task cards. */
+  status: new Map(),
   mentioned: new Map(),
   view: 'room',
   loadedRef: null,
@@ -435,6 +437,59 @@ const TASK_LABEL = {
   cancelled: 'Cancelled',
 };
 
+/** What each state means, for people new to tasks. */
+const TASK_HELP = {
+  awaiting_approval: 'The agent belongs to someone else, who decides whether it takes this task',
+  requested: 'Sent: waiting for the agent to pick it up',
+  accepted: 'The agent is working on it',
+  needs_input: 'The agent is waiting for an answer from a person',
+  done: 'Finished: the result is in the thread',
+  failed: 'The agent could not finish: the thread and the Trail say why',
+  declined: 'The agent or its owner turned it down',
+  cancelled: 'Stopped before it finished',
+};
+
+/** A line under an open (or failed) task that says why it is waiting and what to do about it. */
+function fillHint(node) {
+  const { assignee, taskState, mine } = node.dataset;
+  const agent = state.status.get(assignee);
+  const ownsAgent = agent?.owner === state.me.name;
+  let text = '';
+  let action = null;
+  if (taskState === 'requested' && agent?.status === 'offline') {
+    text = ownsAgent
+      ? `${assignee} is not running on any computer, so nothing picks this up yet.`
+      : `${assignee} is not running right now; it starts when ${agent.owner} connects it.`;
+    if (ownsAgent) action = el('button', { class: 'small', type: 'button', text: 'Connect a computer', onclick: () => void guide.connectComputer() });
+  } else if (taskState === 'requested' && agent?.status === 'standby') {
+    text = `Starting ${assignee} on its computer…`;
+  } else if (taskState === 'awaiting_approval') {
+    text = ownsAgent ? 'This waits for you: approve or decline it in your Inbox.' : `Waiting for ${agent?.owner ?? 'the agent’s owner'} to allow it.`;
+    if (ownsAgent) action = el('button', { class: 'small', type: 'button', text: 'Open Inbox', onclick: () => void showInbox() });
+  } else if (taskState === 'needs_input') {
+    text = `${assignee} asked something: answer in the thread and it carries on.`;
+  } else if (taskState === 'failed' && mine === '1') {
+    text = 'The Trail shows what happened. You can ask again, maybe with more detail.';
+    action = el('button', { class: 'small', type: 'button', text: 'Ask again', onclick: () => void guide.askAgent(node.dataset.request, assignee) });
+  }
+  node.replaceChildren(...(text ? [el('span', { text }), action].filter(Boolean) : []));
+  node.hidden = !text;
+}
+
+let statusTimer = null;
+
+/** Refreshes who is running, then the task hints. */
+function refreshStatus(delay = 0) {
+  clearTimeout(statusTimer);
+  statusTimer = setTimeout(async () => {
+    const project = state.room?.project;
+    const people = await api(`/participants${project ? `?project=${encodeURIComponent(project)}` : ''}`).catch(() => null);
+    if (!people || state.room?.project !== project) return;
+    state.status = new Map(people.map((p) => [p.name, p]));
+    for (const node of document.querySelectorAll('.task-hint')) fillHint(node);
+  }, delay);
+}
+
 function elapsed(iso) {
   const seconds = Math.max(0, Math.round((Date.now() - new Date(iso)) / 1000));
   if (seconds < 45) return 'just now';
@@ -476,7 +531,7 @@ function taskCard(message) {
       ? el('span', { class: 'chip stalled', title: `No sign of life from ${assignee} for a while; it may have crashed`, text: 'Stalled' })
       : el(
           'span',
-          { class: 'chip' },
+          { class: 'chip', title: TASK_HELP[taskState] },
           taskState === 'accepted' ? el('span', { class: 'working-dot', 'aria-hidden': 'true' }) : null,
           taskState === 'accepted' && since ? liveElapsed('In progress · ', since) : TASK_LABEL[taskState],
         ),
@@ -514,7 +569,16 @@ function taskCard(message) {
         })
       : null,
   );
-  return followups.length ? el('div', { class: 'task-wrap' }, card, followupList(followups)) : card;
+  const hint = el('div', {
+    class: 'task-hint small',
+    'data-assignee': assignee,
+    'data-task-state': taskState,
+    'data-mine': mine ? '1' : '0',
+    'data-request': (message.text ?? '').replace(/^@[a-z0-9-]+\s*/, ''),
+  });
+  fillHint(hint);
+  if (!state.status.has(assignee)) refreshStatus(200);
+  return el('div', { class: 'task-wrap' }, card, hint, followups.length ? followupList(followups) : null);
 }
 
 const APPROVAL_LABEL = { pending: 'Waiting for a decision', approved: 'Approved', denied: 'Denied', expired: 'Expired' };
@@ -997,7 +1061,7 @@ function renderRoomTitle() {
   title.replaceChildren();
   if (state.view === 'portfolio') {
     title.append('Portfolio');
-    for (const id of ['add-member', 'show-locks', 'audit-log', 'show-members']) $(id).hidden = true;
+    for (const id of ['add-member', 'show-locks', 'audit-log', 'show-members', 'more']) $(id).hidden = true;
     document.title = 'Portfolio · Orco';
     return;
   }
@@ -1011,6 +1075,7 @@ function renderRoomTitle() {
   title.append(`#${state.room.name}`);
   $('add-member').hidden = !state.room.project;
   $('show-locks').hidden = !state.room.project;
+  $('more').hidden = !state.room.project;
   const audit = $('audit-log');
   audit.hidden = !state.room.project;
   if (state.room.project) audit.href = `/api/audit?project=${encodeURIComponent(state.room.project)}&format=jsonl`;
@@ -1098,6 +1163,7 @@ async function selectRoom() {
       state.messages = messages;
       $('load-older').hidden = state.messages.length < PAGE;
       renderMessages();
+      refreshStatus();
       if (state.panel === 'members') showMembers();
       else if (state.panel === 'locks' && state.room.project) showLocks();
       else if (state.panel === 'thread' || state.panel === 'locks') closePanel();
@@ -1460,7 +1526,7 @@ async function openThread(message) {
   $('thread-text').focus();
 }
 
-const STATUS_TEXT = { online: 'Online', listening: 'Listening for mentions', standby: 'Standby · wakes on tasks', offline: 'Offline' };
+const STATUS_TEXT = { online: 'Online', listening: 'Ready · waiting for mentions', standby: 'Asleep · wakes up for tasks', offline: 'Offline · not connected' };
 
 async function showMembers() {
   openPanel('members', 'Members');
@@ -1635,6 +1701,7 @@ function connect() {
     peopleCache.clear();
     await loadStructure();
     await selectRoom();
+    refreshStatus();
   });
   events.addEventListener('task', (event) => {
     onTask(JSON.parse(event.data));
@@ -1670,6 +1737,7 @@ function connect() {
     if (state.panel === 'locks') void showLocks();
   });
   events.addEventListener('presence', () => {
+    refreshStatus(500);
     if (state.panel !== 'members') return;
     clearTimeout(presenceTimer);
     presenceTimer = setTimeout(() => void showMembers(), 300);
@@ -2409,6 +2477,12 @@ $('add-member').addEventListener('click', () => void addMember());
 $('show-members').addEventListener('click', () => (state.panel === 'members' ? closePanel() : void showMembers()));
 $('show-locks').addEventListener('click', () => (state.panel === 'locks' ? closePanel() : void showLocks()));
 $('close-panel').addEventListener('click', closePanel);
+$('more').addEventListener('click', (event) => {
+  if (event.target.closest('.menu')) $('more').open = false;
+});
+document.addEventListener('click', (event) => {
+  if (!event.target.closest('#more')) $('more').open = false;
+});
 $('load-older').addEventListener('click', () => void loadOlder());
 $('toggle-sidebar').addEventListener('click', () => $('sidebar').classList.toggle('open'));
 window.addEventListener('hashchange', () => void selectRoom());

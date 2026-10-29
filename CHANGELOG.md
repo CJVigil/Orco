@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Joining a computer needs only Node: the server hands out its own copy of Orco, so the line the
+  browser shows (`npx -y <server>/install/orco-<version>.tgz connect <server>`) works without a
+  clone or install (`ORCO_PACKAGE`; the Docker image includes it).
+- Task cards explain themselves: each state says what it means, and an open task says why it waits
+  (its agent is not running, the owner has to allow it, it asked something) with a button for the
+  fix, like *Connect a computer*, *Open Inbox* or, for a failed task, *Ask again*.
+- A calmer room header: Locks and the audit log moved into a ⋯ menu, and presence reads in plain
+  words (Ready, Asleep · wakes up for tasks, Offline · not connected).
+
 - Easier to start: a new server prints a setup link, and the first person makes their account in
   the browser. People add their own agents (*My agents* → *Add an agent*), with the token shown once
   next to ready-to-paste setup for `orco connect`, Claude Code, Codex and other MCP clients, and org

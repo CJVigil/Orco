@@ -5,7 +5,11 @@ COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
 COPY tsconfig.json tsconfig.build.json ./
 COPY src ./src
-RUN npm run build && npm prune --omit=dev
+COPY web ./web
+COPY integrations ./integrations
+COPY LICENSE NOTICE TRADEMARKS.md README.md ./
+# orco.tgz is handed to computers joining this server, so `npx <server>/install/…` runs Orco there.
+RUN npm run build && npm pack --ignore-scripts && mv orco-*.tgz orco.tgz && npm prune --omit=dev
 
 FROM node:22-slim
 ENV NODE_ENV=production \
@@ -16,6 +20,7 @@ ENV NODE_ENV=production \
 WORKDIR /app
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
+COPY --from=build /app/orco.tgz ./orco.tgz
 COPY package.json LICENSE NOTICE TRADEMARKS.md README.md ./
 COPY web ./web
 COPY integrations ./integrations

@@ -1,4 +1,6 @@
-import { dirname, join } from 'node:path';
+import { existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpHandler } from '@modelcontextprotocol/server';
@@ -40,7 +42,21 @@ const STATUS: Record<OrcoError['code'], number> = {
 };
 const COOKIE = 'orco_token';
 const TASK_STATES = new Set(['accepted', 'declined', 'done', 'failed', 'cancelled']);
-const WEB_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
+const APP_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
+const WEB_DIR = join(APP_DIR, 'web');
+const VERSION = (createRequire(import.meta.url)('../package.json') as { version: string }).version;
+/** Where computers joining this server download Orco from, so `npx` can run it without an install. */
+export const PACKAGE_PATH = `/install/orco-${VERSION}.tgz`;
+
+/**
+ * The Orco package this server hands out: `ORCO_PACKAGE`, or one made by `npm pack` in the app folder
+ * (the Docker image has one). Looked up on each request, so packing after the server starts works.
+ */
+function packageFile(configured: string | null | undefined): string | undefined {
+  if (configured === null) return undefined;
+  const candidates = configured ? [resolve(configured)] : [join(APP_DIR, 'orco.tgz'), join(APP_DIR, `orco-${VERSION}.tgz`)];
+  return candidates.find((path) => existsSync(path));
+}
 const HEARTBEAT_MS = 25_000;
 
 function readCookie(header: string | undefined, name: string): string | undefined {
@@ -207,6 +223,8 @@ export interface AppOptions {
   now?: () => number;
   /** While no one has an account: the code that lets the first person set up Orco in the browser. */
   setupCode?: string;
+  /** The package file to hand to joining computers (default: ORCO_PACKAGE or a packed one); null for none. */
+  packageFile?: string | null;
 }
 
 /** Cookies are Secure on HTTPS, and whenever Orco's public address is HTTPS (a proxy may speak HTTP to it). */
@@ -262,6 +280,19 @@ export function createApp(store: Store, options: AppOptions = {}) {
 
   app.get('/healthz', (_req, res) => {
     res.json({ ok: true });
+  });
+
+  // The same code anyone can get from the repository; served so a new computer needs only Node.
+  const configuredPackage = options.packageFile === undefined ? process.env.ORCO_PACKAGE : options.packageFile;
+  app.get(PACKAGE_PATH, (_req, res) => {
+    const file = packageFile(configuredPackage);
+    if (!file) {
+      res.status(404).json({ error: 'This server has no Orco package to hand out; run npm pack in its folder, or install orco on this computer' });
+      return;
+    }
+    res.setHeader('Content-Type', 'application/gzip');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.sendFile(file);
   });
 
   if (oauth) {
@@ -351,6 +382,9 @@ export function createApp(store: Store, options: AppOptions = {}) {
   api.get('/participants', (req, res) => {
     const project = typeof req.query.project === 'string' && req.query.project ? req.query.project : undefined;
     res.json(withStatus(req.participant!, store.members(req.participant!, project)));
+  });
+  api.get('/client', (_req, res) => {
+    res.json({ version: VERSION, package: packageFile(configuredPackage) ? PACKAGE_PATH : null });
   });
   api.get('/getting-started', (req, res) => {
     res.json(store.onboarding.steps(req.participant!, (id) => presence.status(id) !== 'offline'));

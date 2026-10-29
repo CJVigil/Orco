@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,7 +7,7 @@ import { after, before, describe, it } from 'node:test';
 import { parseBridgeConfig } from '../src/bridge/config.js';
 import { connect, detectTools } from '../src/connect.js';
 import { openDatabase } from '../src/db.js';
-import { createApp } from '../src/http.js';
+import { createApp, PACKAGE_PATH } from '../src/http.js';
 import { Store } from '../src/store.js';
 
 let store: Store;
@@ -153,5 +153,44 @@ describe('orco connect', () => {
     });
     assert.deepEqual(found, ['gemini']);
     assert.equal(asked.length, new Set(asked).size);
+  });
+});
+
+describe('the Orco package for joining computers', () => {
+  it('is served for npx when the server has one, and says so', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'orco-pkg-'));
+    const file = join(dir, 'orco.tgz');
+    writeFileSync(file, 'not really a tarball');
+    const local = createApp(new Store(openDatabase(':memory:')), { packageFile: file });
+    const server = local.app.listen(0, '127.0.0.1');
+    await new Promise((resolve) => server.once('listening', resolve));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try {
+      const res = await fetch(`${base}${PACKAGE_PATH}`);
+      assert.equal(res.status, 200, 'npx cannot sign in, so the package needs none');
+      assert.equal(res.headers.get('content-type'), 'application/gzip');
+      assert.equal(await res.text(), 'not really a tarball');
+      assert.equal((await fetch(`${base}/install/orco-0.0.1.tgz`)).status, 404);
+    } finally {
+      await local.close();
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
+    // The main test server was made without one in its folder: the UI offers `orco connect` instead.
+    const info = (await http('GET', '/api/client')).body;
+    assert.equal(typeof info.version, 'string');
+  });
+
+  it('can be turned off', async () => {
+    const none = createApp(new Store(openDatabase(':memory:')), { packageFile: null });
+    const server = none.app.listen(0, '127.0.0.1');
+    await new Promise((resolve) => server.once('listening', resolve));
+    try {
+      assert.equal((await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}${PACKAGE_PATH}`)).status, 404);
+    } finally {
+      await none.close();
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 });
