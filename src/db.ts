@@ -713,6 +713,25 @@ export const MIGRATIONS = [
   );
   CREATE UNIQUE INDEX digests_week ON digests (ifnull(project_id, 0), week);
   `,
+  // 17: sign-in links (invites, other devices) and the browser sessions they start.
+  `
+  CREATE TABLE signin_links (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES participants(id),
+    code_hash TEXT NOT NULL UNIQUE,
+    created_by INTEGER REFERENCES participants(id),
+    expires_at TEXT NOT NULL,
+    used_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+  CREATE TABLE web_sessions (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES participants(id),
+    token_hash TEXT NOT NULL UNIQUE,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+  `,
 ];
 
 export interface OpenOptions {

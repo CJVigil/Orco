@@ -156,6 +156,82 @@ export function createGuide(ctx) {
     (code ? name : setupCode).focus();
   }
 
+  /* Signing in */
+
+  /** A one-time link that signs you in on another device (15 minutes). */
+  async function signInLink() {
+    const link = await api('/signin-links', { method: 'POST', body: {} });
+    return { url: `${origin}/#signin=${link.code}`, expiresAt: link.expiresAt };
+  }
+
+  async function showOtherDevice() {
+    try {
+      const link = await signInLink();
+      modal(
+        'Sign in on another device',
+        el('p', { class: 'small', text: 'Open this link on your phone or other computer. It signs you in there once, within 15 minutes.' }),
+        copyBlock(link.url, 'Copy link'),
+        el('p', { class: 'small muted', text: 'Keep it to yourself: anyone who opens it first is signed in as you.' }),
+      );
+    } catch (err) {
+      modal('Sign in on another device', el('p', { class: 'error', text: err.message }));
+    }
+  }
+
+  /** The first screen after someone opens their invite. */
+  function showWelcome(name) {
+    modal(
+      `Welcome to Orco, ${name}`,
+      el('p', { class: 'small', text: 'You are signed in. Orco is a team chat where people and their AI agents work together: you talk in rooms, give agents tasks, and they report back here.' }),
+      el('p', { class: 'small muted', text: 'To bring your own AI helper (like Claude Code or Codex), add an agent and connect the computer it works on. Or look around first.' }),
+      el(
+        'div',
+        { class: 'row-end' },
+        el('button', { class: 'ghost', type: 'button', text: 'Look around', onclick: (event) => event.target.closest('dialog').close() }),
+        el('button', {
+          class: 'primary',
+          type: 'button',
+          text: 'Add my agent',
+          onclick: (event) => {
+            event.target.closest('dialog').close();
+            addAgent();
+          },
+        }),
+      ),
+    );
+  }
+
+  /** After your first task: offer to tell you when agents finish or need you, once. */
+  function offerNotifications() {
+    const asked = 'orco.notifyOffered';
+    const n = ctx.notify;
+    if (!n || !n.supported() || n.enabled()) return;
+    try {
+      if (localStorage.getItem(asked)) return;
+      localStorage.setItem(asked, '1');
+    } catch {
+      return;
+    }
+    modal(
+      'Get told when it is done?',
+      el('p', { class: 'small', text: 'Agents can take a while. Orco can notify you when one finishes, asks you something, or needs your approval, even when this tab is in the background.' }),
+      el(
+        'div',
+        { class: 'row-end' },
+        el('button', { class: 'ghost', type: 'button', text: 'Not now', onclick: (event) => event.target.closest('dialog').close() }),
+        el('button', {
+          class: 'primary',
+          type: 'button',
+          text: 'Turn on notifications',
+          onclick: async (event) => {
+            event.target.closest('dialog').close();
+            await n.toggle();
+          },
+        }),
+      ),
+    );
+  }
+
   /* Agents */
 
   /** Ways to connect an agent, each ready to paste. */
@@ -455,6 +531,7 @@ export function createGuide(ctx) {
               await api('/tasks', { method: 'POST', body });
               dialog.close();
               ctx.onChange?.();
+              offerNotifications();
             } catch (err) {
               showError(problem, err);
             }
@@ -551,5 +628,5 @@ export function createGuide(ctx) {
     );
   }
 
-  return { stepsDismissed: dismissed, showSetup, addAgent, showConnect, connectComputer, openPairCode, askAgent, refreshSteps, showSteps, showHelp };
+  return { stepsDismissed: dismissed, signInLink, showOtherDevice, showWelcome, copyBlock, showSetup, addAgent, showConnect, connectComputer, openPairCode, askAgent, refreshSteps, showSteps, showHelp };
 }

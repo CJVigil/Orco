@@ -12,6 +12,7 @@ import { Reminders } from './reminders.js';
 import { Controls } from './controls.js';
 import { Decisions } from './decisions.js';
 import { Groups } from './groups.js';
+import { SignIns } from './signins.js';
 import { Onboarding } from './onboarding.js';
 import { Policies } from './policies.js';
 import { Portfolios } from './portfolio.js';
@@ -250,6 +251,7 @@ export class Store {
   readonly runs: Runs;
   readonly groups: Groups;
   readonly onboarding: Onboarding;
+  readonly signins: SignIns;
   readonly controls: Controls;
   readonly policies: Policies;
   readonly decisions: Decisions;
@@ -286,6 +288,7 @@ export class Store {
     this.runs = new Runs(this);
     this.groups = new Groups(this);
     this.onboarding = new Onboarding(this);
+    this.signins = new SignIns(this);
     this.controls = new Controls(this);
     this.policies = new Policies(this);
     this.decisions = new Decisions(this);

@@ -335,19 +335,45 @@ export function createPortfolio(ctx) {
     return [pausesCard(state.pauses, administered, agents), budgetsCard(state.budgets, administered, agents), admin ? peopleCard() : null, policy ? policyCard(policy, administered) : null, admin ? groupsCard(groups) : null];
   }
 
-  /** Org admins invite people: each gets a sign-in token, shown once. */
+  /** Org admins invite people with a sign-in link. */
   function peopleCard() {
     const name = el('input', { placeholder: 'Their name, like ana', pattern: '[a-z0-9][a-z0-9\\-]{0,31}', 'aria-label': 'Name of the person to add' });
-    const result = el('div');
+    const result = el('div', { class: 'people-result' });
+    const copyRow = (text, label) =>
+      el(
+        'div',
+        { class: 'copy-block' },
+        el('pre', {}, el('code', { text })),
+        el('button', {
+          class: 'small',
+          type: 'button',
+          text: label,
+          onclick: (event) =>
+            void navigator.clipboard.writeText(text).then(
+              () => (event.target.textContent = 'Copied'),
+              () => (event.target.textContent = 'Select and copy'),
+            ),
+        }),
+      );
+    const showLink = (who, code, intro) =>
+      result.replaceChildren(
+        el('p', { class: 'small', text: intro }),
+        copyRow(`${location.origin}/#signin=${code}`, 'Copy link'),
+        el('p', { class: 'small muted', text: `It works once, within 7 days. Send it to ${who} privately: whoever opens it first is signed in as ${who}.` }),
+      );
     const add = async () => {
       try {
         const person = await api('/users', { method: 'POST', body: { name: name.value.trim() } });
         name.value = '';
-        const token = el('code', { text: person.token });
-        result.replaceChildren(
-          el('p', { class: 'small', text: `Send ${person.name} this address and token privately. It is shown only now; they sign in with it and can then add their own agents.` }),
-          el('div', { class: 'copy-block' }, el('pre', {}, token), el('button', { class: 'small', type: 'button', text: 'Copy', onclick: (event) => void navigator.clipboard.writeText(`${location.origin}\n${person.token}`).then(() => (event.target.textContent = 'Copied')) })),
-          el('p', { class: 'small muted', text: 'Add them to projects from the project’s Members button.' }),
+        showLink(person.name, person.signin.code, `Send ${person.name} this link. It signs them in; then they can add their own agents.`);
+        result.append(
+          el(
+            'details',
+            { class: 'small' },
+            el('summary', { text: 'Their token, for the command line (shown once)' }),
+            copyRow(person.token, 'Copy token'),
+          ),
+          el('p', { class: 'small muted', text: 'Add them to projects from each project’s Add member button.' }),
         );
       } catch (err) {
         notify(err.message);
@@ -360,6 +386,7 @@ export function createPortfolio(ctx) {
       el('p', { class: 'small muted', text: 'Add someone to this Orco. They see only the projects you add them to.' }),
       el('div', { class: 'pf-row' }, name, el('button', { class: 'small', type: 'button', text: 'Add person', onclick: () => void add() })),
       result,
+      el('p', { class: 'small muted', text: 'Someone lost access? Whoever runs the server makes them a new sign-in link with orco user link <name>.' }),
     );
   }
 

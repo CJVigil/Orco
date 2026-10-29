@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Sign-in links: inviting someone gives a link that signs them in once (7 days) and welcomes them,
+  instead of a token to paste. Anyone makes a 15-minute one for their own other device (click your
+  name), and for someone who lost access `orco user link <name>` prints one on the server. Nobody
+  can make one for another existing person in the browser, not even an org admin. Each starts a
+  30-day browser session of its own.
+- *Add member* suggests the people not in the project yet, and after your first task Orco offers,
+  once, to notify you when agents finish or need you. Your name in the sidebar opens a menu with
+  *Sign in on another device* and *Sign out*.
+
 - Joining a computer needs only Node: the server hands out its own copy of Orco, so the line the
   browser shows (`npx -y <server>/install/orco-<version>.tgz connect <server>`) works without a
   clone or install (`ORCO_PACKAGE`; the Docker image includes it).

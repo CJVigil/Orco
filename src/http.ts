@@ -18,6 +18,7 @@ import type { Approval } from './approvals.js';
 import type { Question, QuestionTarget } from './questions.js';
 import { byWorkOrder, type Priority, type StatusCategory, type TicketFilter, type TicketInput } from './tickets.js';
 import { importTickets, parseImport } from './import.js';
+import { SESSION_TTL_MS } from './signins.js';
 import { SEARCH_KINDS, type SearchKind, searchAll } from './search.js';
 import { catchUp } from './catchup.js';
 import type { Wake } from './reminders.js';
@@ -73,7 +74,17 @@ function authenticate(store: Store, presence: Presence, oauth?: OAuth) {
   return (req: Request, res: Response, next: NextFunction) => {
     const bearer = /^Bearer (\S+)$/.exec(req.headers.authorization ?? '')?.[1];
     const token = bearer ?? readCookie(req.headers.cookie, COOKIE);
-    const participant = !token ? null : oauth && bearer ? (oauth.verifyAccessToken(bearer) ?? store.authenticate(bearer)) : store.authenticate(token);
+    // Browser sessions from sign-in links work only as the cookie, and only for the web app's API.
+    const session = bearer === undefined && token !== undefined && store.signins.isSession(token);
+    const participant = !token
+      ? null
+      : session
+        ? req.originalUrl.startsWith('/api/')
+          ? store.signins.session(token)
+          : null
+        : oauth && bearer
+          ? (oauth.verifyAccessToken(bearer) ?? store.authenticate(bearer))
+          : store.authenticate(token);
     if (!token || !participant) {
       const challenge = oauth
         ? `Bearer resource_metadata="${oauth.issuer}/.well-known/oauth-protected-resource/mcp", scope="${OAUTH_SCOPE}"`
@@ -367,7 +378,27 @@ export function createApp(store: Store, options: AppOptions = {}) {
     res.json({ name: participant.name });
   });
 
-  app.delete('/api/session', (_req, res) => {
+  // Opening a sign-in link: no token to handle, and the link works once.
+  app.post('/api/signin', express.json({ limit: '4kb' }), (req, res) => {
+    const ip = req.ip ?? 'unknown';
+    if (logins.blocked(ip)) {
+      res.status(429).json({ error: 'Too many failed sign-ins. Wait 15 minutes and try again.' });
+      return;
+    }
+    let used: ReturnType<typeof store.signins.use>;
+    try {
+      used = store.signins.use(String(req.body?.code ?? ''));
+    } catch (err) {
+      logins.hit(ip);
+      throw err;
+    }
+    res.cookie(COOKIE, used.session, { httpOnly: true, sameSite: 'strict', secure: secureCookies(req, options.publicUrl), path: '/', maxAge: SESSION_TTL_MS });
+    res.json({ name: used.participant.name, firstTime: used.firstTime });
+  });
+
+  app.delete('/api/session', (req, res) => {
+    const token = readCookie(req.headers.cookie, COOKIE);
+    if (token && store.signins.isSession(token)) store.signins.end(token);
     res.clearCookie(COOKIE, { path: '/' });
     res.status(204).end();
   });
@@ -418,7 +449,11 @@ export function createApp(store: Store, options: AppOptions = {}) {
     const me = req.participant!;
     if (!store.isOrgAdmin(me)) throw new OrcoError('forbidden', 'Only org admins add people');
     const { participant, token } = store.createUser(String(req.body?.name ?? '').trim().toLowerCase(), { orgAdmin: req.body?.admin === true });
-    res.status(201).json({ name: participant.name, token, orgAdmin: store.isOrgAdmin(participant) });
+    const link = store.signins.createLink(me, participant.name, { invite: true });
+    res.status(201).json({ name: participant.name, token, orgAdmin: store.isOrgAdmin(participant), signin: link });
+  });
+  api.post('/signin-links', (req, res) => {
+    res.status(201).json(store.signins.createLink(req.participant!, req.participant!.name));
   });
   api.get('/projects', (req, res) => {
     res.json(store.listProjects(req.participant!));

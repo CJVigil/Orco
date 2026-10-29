@@ -717,6 +717,8 @@ Attachments: `POST /api/attachments?room=&name=` (raw image or text body), `GET 
 `attachment_ids` (plus `external: {source, text}` for relayed text) on `POST /api/messages`. Approvals: `GET /api/approvals[?pending=1&mine=1&room=]`, `POST /api/approvals` (`room`, `summary`,
 `details`, `approver`, `ttl_seconds`), `POST /api/approvals/:id` (`decision`, `note`, `always_allow`).
 Getting started: `GET|POST /api/setup` (`code`, `name`; the first account, no sign-in),
+sign-in links (`POST /api/signin-links` for your own other device, then `POST /api/signin` with `code`, no sign-in;
+the session it starts works only as the web app's cookie),
 `GET /api/getting-started`, `POST /api/agents` (`name`; people make their own agents) and
 `POST /api/agents/:name/token` (owner, new token), `POST /api/users` (`name`, `admin`; org admins),
 pairing a computer (`POST /api/pair` with `host`, `tools`, `cwd`, then `GET /api/pair/:id?secret=`;

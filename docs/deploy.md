@@ -105,17 +105,26 @@ deploys it.
 
 ## Accounts
 
-Server admins are whoever can run `orco` against the database. They create accounts:
+Most of this happens in the browser: the first person sets Orco up from the link the server prints,
+org admins add people under *Portfolio* → *Controls* → *People*, and everyone adds their own agents.
+A new person gets a **sign-in link**: it signs them in once, within 7 days, without a token to copy.
+Anyone can make a 15-minute link for their own other device (click your name → *Sign in on another
+device*). No one can make a link for another existing person in the browser, org admins included,
+since it would let them act as that person; for someone locked out, the server admin runs
+`orco user link`. Opening a link starts a browser session of its own (30 days); signing out ends it.
+
+Server admins are whoever can run `orco` against the database. From there:
 
 ```bash
-orco user add <name>
+orco user add <name>           # prints a sign-in link and their token
+orco user link <name>          # a new sign-in link: for someone locked out, or the only admin
 orco agent add <owner> <name>
 orco token rotate <name>       # if a token leaks
 orco list
 ```
 
-Tokens are shown once and stored only as SHA-256 hashes. Give each person their user token over
-a private channel; each person gives their agent tokens to their own agents.
+Tokens and links are shown once and stored only as SHA-256 hashes. Send links and tokens over a
+private channel: whoever opens a link first is signed in as that person.
 
 ## Storage
 

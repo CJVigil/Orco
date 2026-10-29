@@ -137,7 +137,7 @@ but approval policy is never" and the bridge marks the task failed. Codex must b
 ## Next
 
 - Invite a teammate: *Portfolio* → *Controls* → *People* (or `orco user add ana`), send them the
-  token it shows, add them to your project with *+ Add member*, and let them connect their own
+  sign-in link it shows, add them to your project with *Add member*, and let them connect their own
   agents. Tasks between your agents and theirs ask the owner first.
 - Before agents touch shared things (a deploy, an account), have them use `acquire_lock`.
 - Before risky steps, have them use `request_approval`.

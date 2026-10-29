@@ -194,3 +194,49 @@ describe('the Orco package for joining computers', () => {
     }
   });
 });
+
+describe('sign-in links', () => {
+  it('invites a person with a link that signs them in once, without a token', async () => {
+    const added = await http('POST', '/api/users', { name: 'bea' });
+    assert.equal(added.status, 201);
+    const code = added.body.signin.code as string;
+    const res = await fetch(`${baseUrl}/api/signin`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { name: 'bea', firstTime: true });
+    const session = res.headers.get('set-cookie')!.split(';')[0]!;
+    assert.ok(session.includes('orco_s_'), 'the cookie holds a session, not her token');
+    assert.equal((await http('GET', '/api/me', undefined, { Cookie: session })).body.name, 'bea');
+    // The session is only a browser cookie: not a bearer token, and not for MCP.
+    const value = decodeURIComponent(session.split('=')[1]!);
+    assert.equal((await http('GET', '/api/me', undefined, { Cookie: '', Authorization: `Bearer ${value}` })).status, 401);
+    assert.equal((await fetch(`${baseUrl}/mcp`, { method: 'POST', headers: { Cookie: session, 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' }, body: '{}' })).status, 401);
+    // Used once.
+    const again = await fetch(`${baseUrl}/api/signin`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) });
+    assert.equal(again.status, 404);
+    // Signing out ends the session.
+    await http('DELETE', '/api/session', undefined, { Cookie: session });
+    assert.equal((await http('GET', '/api/me', undefined, { Cookie: session })).status, 401);
+  });
+
+  it('lets anyone make a short link for their own other device, and nobody for someone else', async () => {
+    const own = await http('POST', '/api/signin-links', {});
+    assert.equal(own.status, 201);
+    assert.ok(new Date(own.body.expiresAt).getTime() - Date.now() <= 15 * 60_000 + 5_000, 'a link for yourself lasts minutes');
+    const bea = store.participantByName('bea')!;
+    assert.throws(() => store.signins.createLink(bea, 'carlos'), /only make a sign-in link for yourself/);
+    // Not even an org admin: a link for an existing person would let them act as that person.
+    assert.throws(() => store.signins.createLink(store.participantByName('carlos')!, 'bea'), /only make a sign-in link for yourself/);
+    assert.equal((await http('POST', '/api/signin-links', { user: 'bea' })).status, 201, 'the body cannot pick someone else');
+    const agent = store.participantByName('carlos-claude')!;
+    assert.throws(() => store.signins.createLink(agent, 'carlos'), /Only people/);
+  });
+
+  it('expires', () => {
+    let clock = Date.parse('2026-11-02T12:00:00Z');
+    const timed = new Store(openDatabase(':memory:'), { now: () => clock });
+    timed.createUser('dee');
+    const { code } = timed.signins.createLink(null, 'dee');
+    clock += 8 * 24 * 3600_000;
+    assert.throws(() => timed.signins.use(code), /expired/);
+  });
+});

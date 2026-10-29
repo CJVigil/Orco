@@ -24,6 +24,7 @@ Server commands (run where the database lives):
   serve                      Start the server
   user add <name> [--admin]  Create a user and print their token (the first user is an org admin)
   user admin <name> [--off]  Make a user an org admin, or stop
+  user link <name>           Print a one-time sign-in link for a person (an invite, or a way back in)
   agent add <owner> <name>   Create an agent owned by a user and print its token
   token rotate <name>        Replace a user's or agent's token and print the new one
   agent policy <agent> <p>   Who may give the agent tasks: open, ask (default) or owner_only
@@ -331,7 +332,7 @@ export function main(): void {
           console.log('  Not bound to localhost: put TLS in front of this (see docs/deploy.md).');
         }
         if (setupCode) {
-          const base = (publicUrl ?? `http://${values.host === '0.0.0.0' ? 'localhost' : values.host}:${port}`).replace(/\/+$/, '');
+          const base = serverBase(values);
           console.log('');
           console.log('  No one has an account yet. Open this link to set up Orco and make yours:');
           console.log(`  ${base}/#setup=${setupCode}`);
@@ -362,7 +363,16 @@ export function main(): void {
       if (!name) throw new OrcoError('invalid', 'Usage: orco user add <name> [--admin]');
       const { participant, token } = store.createUser(name, { orgAdmin: values.admin });
       const admin = store.isOrgAdmin(participant) ? ' (an org admin)' : '';
-      console.log(`Created user ${name}${admin}. Token (shown once):\n${token}`);
+      const link = store.signins.createLink(null, name);
+      console.log(`Created user ${name}${admin}. Send them this link to sign in (works once, for 7 days):\n${serverBase(values)}/#signin=${link.code}`);
+      console.log(`Their token for the command line (shown once):\n${token}`);
+      return;
+    }
+    case 'user link': {
+      const [name] = args;
+      if (!name) throw new OrcoError('invalid', 'Usage: orco user link <name>');
+      const link = store.signins.createLink(null, name);
+      console.log(`Sign-in link for ${name} (works once, for 7 days):\n${serverBase(values)}/#signin=${link.code}`);
       return;
     }
     case 'user admin': {
@@ -438,4 +448,11 @@ export function main(): void {
       process.stderr.write(USAGE);
       process.exitCode = 1;
   }
+}
+
+/** The address people open, for links printed on the server: ORCO_PUBLIC_URL, or the address it listens on. */
+function serverBase(values: { host?: string; port?: string }): string {
+  const publicUrl = process.env.ORCO_PUBLIC_URL;
+  const host = values.host === '0.0.0.0' || !values.host ? 'localhost' : values.host;
+  return (publicUrl || `http://${host}:${values.port ?? '7420'}`).replace(/\/+$/, '');
 }

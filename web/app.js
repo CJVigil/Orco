@@ -1750,8 +1750,10 @@ function connect() {
 
 /* Dialog */
 
-function ask({ title, label, hint, value = '', submit }) {
+function ask({ title, label, hint, value = '', submit, options = [] }) {
   const dialog = $('ask');
+  // Suggestions to pick from (people, rooms…), so nobody has to remember exact names.
+  $('ask-options').replaceChildren(...options.map((option) => el('option', { value: option })));
   $('ask-title').textContent = title;
   $('ask-label').textContent = label;
   $('ask-hint').textContent = hint || '';
@@ -1813,10 +1815,16 @@ async function newRoom(projectName) {
 
 async function addMember() {
   const project = state.room.project;
+  const [everyone, members] = await Promise.all([api('/participants'), api(`/participants?project=${encodeURIComponent(project)}`)]);
+  const inProject = new Set(members.map((p) => p.name));
+  const candidates = everyone.filter((p) => p.kind === 'user' && !inProject.has(p.name)).map((p) => p.name);
   const user = await ask({
     title: `Add someone to ${project}`,
-    label: 'User name',
-    hint: 'Their agents will be able to see this project’s rooms too.',
+    label: 'Who',
+    options: candidates,
+    hint: candidates.length
+      ? `Not in ${project} yet: ${candidates.slice(0, 8).join(', ')}${candidates.length > 8 ? ', …' : ''}. Their agents will see this project too.`
+      : `Everyone on this Orco is already in ${project}. ${state.me.orgAdmin ? 'Add new people under Portfolio → Controls → People.' : 'An org admin can add new people.'}`,
     submit: async (name) => {
       await api(`/projects/${encodeURIComponent(project)}/members`, { method: 'POST', body: { user: name } });
       return name;
@@ -2058,6 +2066,8 @@ function renderNotifyButton() {
   button.setAttribute('aria-label', button.title);
   button.setAttribute('aria-pressed', String(on));
 }
+
+$('other-device').addEventListener('click', () => void guide.showOtherDevice());
 
 $('notify').addEventListener('click', async () => {
   try {
@@ -2477,11 +2487,14 @@ $('add-member').addEventListener('click', () => void addMember());
 $('show-members').addEventListener('click', () => (state.panel === 'members' ? closePanel() : void showMembers()));
 $('show-locks').addEventListener('click', () => (state.panel === 'locks' ? closePanel() : void showLocks()));
 $('close-panel').addEventListener('click', closePanel);
-$('more').addEventListener('click', (event) => {
-  if (event.target.closest('.menu')) $('more').open = false;
-});
+for (const menu of [$('more'), $('me-menu')]) {
+  menu.addEventListener('click', (event) => {
+    if (event.target.closest('.menu')) menu.open = false;
+  });
+}
 document.addEventListener('click', (event) => {
   if (!event.target.closest('#more')) $('more').open = false;
+  if (!event.target.closest('#me-menu')) $('me-menu').open = false;
 });
 $('load-older').addEventListener('click', () => void loadOlder());
 $('toggle-sidebar').addEventListener('click', () => $('sidebar').classList.toggle('open'));
@@ -2533,6 +2546,18 @@ const guide = createGuide({
   newProject,
   showMyAgents,
   onChange: () => void guide.refreshSteps(),
+  notify: {
+    supported: notify.supported,
+    enabled: notify.enabled,
+    toggle: async () => {
+      try {
+        await notify.toggle();
+      } catch (err) {
+        alert(err.message);
+      }
+      renderNotifyButton();
+    },
+  },
 });
 
 const TASK_COMMAND = /^\/task\s+@?([a-z0-9][a-z0-9-]{0,31})\s+([\s\S]+)$/;
@@ -2564,6 +2589,28 @@ wireComposer($('thread-composer'), $('thread-text'), $('thread-pending'), () => 
   api('/messages', { method: 'POST', body: { room: state.thread.room, text, thread_id: state.thread.id, attachment_ids: ids } }),
 );
 
-start().catch((err) => {
+/** Opens a sign-in link (#signin=…) if there is one, then starts the app. */
+async function boot() {
+  const link = /^#signin=([\w-]+)$/.exec(location.hash);
+  if (!link) return start();
+  history.replaceState(null, '', location.pathname + location.search);
+  let signedIn = null;
+  let problem = null;
+  try {
+    signedIn = await api('/signin', { method: 'POST', body: { code: link[1] } });
+  } catch (err) {
+    problem = err.message;
+  }
+  await start();
+  if (signedIn?.firstTime) guide.showWelcome(signedIn.name);
+  if (problem && !$('login').hidden) {
+    $('login-error').textContent = `${problem}.`;
+    $('login-error').hidden = false;
+  } else if (problem) {
+    alert(`That sign-in link did not work: ${problem}. You are still signed in as ${state.me.name}.`);
+  }
+}
+
+boot().catch((err) => {
   document.body.textContent = `Orco failed to load: ${err.message}`;
 });

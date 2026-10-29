@@ -383,8 +383,31 @@ select:focus {
   border-top: 1px solid var(--border);
 }
 
+.me-menu {
+  flex: 1;
+  min-width: 0;
+}
+
+.me-menu > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.2rem 0.35rem;
+  margin-left: -0.35rem;
+}
+
+.more-menu.me-menu .menu {
+  min-width: 14rem;
+  top: auto;
+  bottom: calc(100% + 0.35rem);
+  left: 0;
+  right: auto;
+}
+
 .me-name {
   flex: 1;
+  min-width: 0;
+  white-space: nowrap;
   font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
