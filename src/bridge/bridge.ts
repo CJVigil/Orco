@@ -17,7 +17,8 @@ Task #{task_id} in room {room}, from {via}:
 {request}
 
 How to work it:
-1. Call the orco tool update_task with task_id {task_id} and state "accepted" right away.
+1. Call the orco tool update_task with task_id {task_id} and state "accepted" right away. Its answer may
+   include "knowledge": what your company's documents say about the task. Use it as background.
 2. Read the thread for context: read with room "{room}" and thread_id {thread_id}. If the task names a ticket, read it with get_ticket.
 3. Do the work. Before touching a shared resource, take its lock with acquire_lock and release it after.
 4. If you need information only a person has, ask with ask_question and stop; you will be started again with the answer.

@@ -407,11 +407,12 @@ export function createPortfolio(ctx) {
     const persona = el('input', { placeholder: 'Onyx agent id (optional)', 'aria-label': 'Onyx agent id', inputmode: 'numeric', value: current?.persona ?? '' });
     const sets = el('input', { placeholder: 'Document sets, comma-separated (optional)', 'aria-label': 'Document sets', value: current?.documentSets.join(', ') ?? '' });
     const sources = el('input', { placeholder: 'Sources, like slack, google_drive (optional)', 'aria-label': 'Sources', value: current?.sources.join(', ') ?? '' });
+    const brief = el('input', { type: 'checkbox', checked: current ? current.brief : true });
     const save = () =>
       void act(() =>
         api('/onyx', {
           method: 'POST',
-          body: { base_url: url.value.trim(), api_key: key.value, persona: persona.value.trim(), document_sets: sets.value, sources: sources.value },
+          body: { base_url: url.value.trim(), api_key: key.value, persona: persona.value.trim(), document_sets: sets.value, sources: sources.value, brief: brief.checked },
         }),
       );
     return el(
@@ -440,6 +441,7 @@ export function createPortfolio(ctx) {
             el('div', { class: 'pf-row' }, url),
             el('div', { class: 'pf-row' }, key, persona),
             el('div', { class: 'pf-row' }, sets, sources),
+            el('label', { class: 'check small' }, brief, 'When an agent accepts a task, give it the top Onyx results for that task'),
             el('p', { class: 'small muted', text: 'Make the key in Onyx under Admin → API Keys; a limited key needs only Search (read).' }),
             el('div', { class: 'row-end' }, el('button', { class: 'small', type: 'button', text: current ? 'Save' : 'Connect Onyx', onclick: save })),
           )

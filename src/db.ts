@@ -809,6 +809,10 @@ export const MIGRATIONS = [
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
   `,
+  // 23: whether agents get Onyx results for a task when they accept it.
+  `
+  ALTER TABLE onyx_settings ADD COLUMN brief INTEGER NOT NULL DEFAULT 1;
+  `,
 ];
 
 export interface OpenOptions {

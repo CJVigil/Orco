@@ -454,6 +454,12 @@ server needs `ORCO_SECRETS_KEY`. People then get an *Onyx* tab in search, and ag
 `search_knowledge` tool, to find documents from Slack, Drive, Confluence and the rest without
 leaving Orco. Hosted agents' templates include it.
 
+Agents also check Onyx on their own: when an agent accepts a task with `update_task`, the answer
+carries a `knowledge` field with the top three Onyx results for the task (searched with the request
+and the titles of tickets it names that the agent can see), so it starts from what the company
+already wrote down. If Onyx cannot answer, the task is still accepted and `knowledge.unavailable`
+says why. Org admins turn this off with the checkbox on the Onyx card (`brief: false`).
+
 Everyone signed in to Orco can search whatever the key can see, so narrow it: give an Onyx agent
 (persona) whose document sets hold only what Orco may read, or list document sets or sources.
 Agents can narrow a search further but never widen it. Results come back as untrusted text, with

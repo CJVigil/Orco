@@ -6,6 +6,9 @@
   with an API key stored encrypted and optional limits (an Onyx agent, document sets, sources).
   People get an *Onyx* tab in search, and agents a `search_knowledge` tool, for company documents
   from Slack, Drive, Confluence and the rest. Orco calls Onyx only when someone searches.
+- Agents check Onyx on their own: when an agent accepts a task, the answer carries the top three
+  Onyx results for it (the request, plus the titles of tickets it names). A failed search never
+  fails the accept. On by default; org admins turn it off on the Onyx card.
 
 - Fixes for agents that run on Orco (#43-#45): a model with an API key needs prices; agents stop
   at their budget during a run, and past it only an org admin lets more work start; people who are

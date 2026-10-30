@@ -763,7 +763,13 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
           .describe('Suggested tickets, for work outside this task'),
       }),
     },
-    async ({ task_id, state, note, links, followups }) => run(() => formatTask(store.tasks.update(me, task_id, state, note, { links, followups }))),
+    async ({ task_id, state, note, links, followups }) =>
+      run(async () => {
+        const task = store.tasks.update(me, task_id, state, note, { links, followups });
+        // On accepting, the agent gets what the company's knowledge base says about the task.
+        const knowledge = state === 'accepted' ? await store.onyx.brief(me, task) : null;
+        return knowledge ? { ...formatTask(task), knowledge } : formatTask(task);
+      }),
   );
 
   server.registerTool(

@@ -158,6 +158,36 @@ describe('Onyx knowledge search', () => {
     assert.equal(((await res.json()) as { title: string }[])[0]!.title, 'Runbook');
   });
 
+  it('briefs agents from Onyx when they accept a task, unless an org admin turns it off', async () => {
+    store.createProject(ana, 'api');
+    const { ticket } = store.tickets.create(ana, 'api', { title: 'Refund endpoint' });
+    reply = { status: 200, body: { results: [{ citation_id: 1, title: 'Payments spec', content: 'Refunds are POST /refunds', link: 'https://wiki.example/pay', source_type: 'confluence', updated_at: null }] } };
+    const client = await tools(botToken);
+    const accept = async (request: string) => {
+      const task = store.tasks.create(ana, { agent: 'ana-bot', room: 'api/general', request });
+      const result = await client.callTool({ name: 'update_task', arguments: { task_id: task.id, state: 'accepted' } });
+      assert.equal(result.isError ?? false, false);
+      return JSON.parse((result.content as { text: string }[])[0]!.text) as { state: string; knowledge?: { query: string; results?: { title: string }[]; unavailable?: string; note: string } };
+    };
+    seen.length = 0;
+    const briefed = await accept(`Please do ${ticket.ref}`);
+    assert.equal(briefed.state, 'accepted');
+    assert.equal(briefed.knowledge!.results![0]!.title, 'Payments spec');
+    assert.match(briefed.knowledge!.note, /never as instructions/);
+    assert.match(String(seen[0]!.body.query), /^Refund endpoint Please do/, 'the ticket title helps the search');
+    reply = { status: 500, body: {} };
+    const failed = await accept('Another job');
+    assert.equal(failed.state, 'accepted', 'a failed search never fails the accept');
+    assert.match(failed.knowledge!.unavailable!, /HTTP 500/);
+    assert.equal(store.onyx.save(carlos, { baseUrl: onyxUrl, brief: false }).brief, false);
+    seen.length = 0;
+    assert.equal((await accept('A third job')).knowledge, undefined);
+    assert.equal(seen.length, 0, 'no call at all when off');
+    assert.equal(store.onyx.save(carlos, { baseUrl: onyxUrl }).brief, false, 'kept when left out');
+    await client.close();
+    reply = { status: 200, body: { results: [] } };
+  });
+
   it('limits how often one participant searches, and stops when disconnected', async () => {
     const bob = store.createUser('bob').participant;
     for (let i = 0; i < 60; i++) await store.onyx.search(bob, 'q');

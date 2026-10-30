@@ -672,6 +672,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
         persona: b.persona === undefined || b.persona === null || b.persona === '' ? null : Number(b.persona),
         documentSets: b.document_sets,
         sources: b.sources,
+        brief: typeof b.brief === 'boolean' ? b.brief : undefined,
       }),
     );
   });

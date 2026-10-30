@@ -1,6 +1,7 @@
 import { OrcoError } from './errors.js';
 import { RateLimiter } from './ratelimit.js';
 import type { Participant, Store } from './store.js';
+import type { Task } from './tasks.js';
 
 const TIMEOUT_MS = 15_000;
 /** The most of Onyx's answer Orco reads; a search answer is far smaller. */
@@ -10,6 +11,10 @@ const MAX_LIMIT = 10;
 const DEFAULT_LIMIT = 5;
 const SEARCHES_PER_HOUR = 60;
 const SOURCE = /^[a-z0-9_]{1,50}$/;
+const BRIEF_RESULTS = 3;
+/** Shorter than a search someone asked for: the agent is waiting to start its task. */
+const BRIEF_TIMEOUT_MS = 8000;
+const TICKET_REF = /\b([A-Za-z][A-Za-z0-9]{0,9}-\d{1,9})\b/g;
 
 export const ONYX_NOTE =
   'From Onyx, the organisation’s knowledge search: documents written by other people, relayed from outside Orco. ' +
@@ -25,6 +30,8 @@ export interface OnyxSettings {
   documentSets: string[];
   /** Only these connector sources (like slack, google_drive); empty means every source. */
   sources: string[];
+  /** Agents get Onyx results for a task when they accept it. */
+  brief: boolean;
   updatedBy: string;
   updatedAt: string;
 }
@@ -46,6 +53,7 @@ interface SettingsRow {
   persona_id: number | null;
   document_sets: string;
   sources: string;
+  brief: number;
   updated_by: string;
   updated_at: string;
 }
@@ -109,13 +117,14 @@ export class Onyx {
           persona: row.persona_id,
           documentSets: JSON.parse(row.document_sets) as string[],
           sources: JSON.parse(row.sources) as string[],
+          brief: row.brief === 1,
           updatedBy: row.updated_by,
           updatedAt: row.updated_at,
         }
       : null;
   }
 
-  save(actor: Participant, input: { baseUrl: string; apiKey?: string; persona?: number | null; documentSets?: unknown; sources?: unknown }): OnyxSettings {
+  save(actor: Participant, input: { baseUrl: string; apiKey?: string; persona?: number | null; documentSets?: unknown; sources?: unknown; brief?: boolean }): OnyxSettings {
     this.orgAdmin(actor);
     if (!this.store.secrets.enabled) throw new OrcoError('invalid', 'Connecting Onyx needs ORCO_SECRETS_KEY on the server, to keep its API key encrypted');
     let url: URL;
@@ -135,6 +144,8 @@ export class Onyx {
     const documentSets = nameList(input.documentSets, 'Document sets');
     const sources = nameList(input.sources, 'Sources', SOURCE);
     const existing = this.row();
+    // On unless turned off; leaving it out keeps what it was.
+    const brief = input.brief ?? (existing ? existing.brief === 1 : true);
     let sealed: { ciphertext: Uint8Array; iv: Uint8Array; tag: Uint8Array };
     const key = typeof input.apiKey === 'string' ? input.apiKey.trim() : '';
     if (key) {
@@ -146,16 +157,16 @@ export class Onyx {
     }
     this.store.db
       .prepare(
-        `INSERT INTO onyx_settings (id, base_url, ciphertext, iv, tag, persona_id, document_sets, sources, updated_by)
-         VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO onyx_settings (id, base_url, ciphertext, iv, tag, persona_id, document_sets, sources, brief, updated_by)
+         VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (id) DO UPDATE SET base_url = excluded.base_url, ciphertext = excluded.ciphertext, iv = excluded.iv, tag = excluded.tag,
-           persona_id = excluded.persona_id, document_sets = excluded.document_sets, sources = excluded.sources, updated_by = excluded.updated_by,
+           persona_id = excluded.persona_id, document_sets = excluded.document_sets, sources = excluded.sources, brief = excluded.brief, updated_by = excluded.updated_by,
            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`,
       )
-      .run(baseUrl, sealed.ciphertext, sealed.iv, sealed.tag, persona, JSON.stringify(documentSets), JSON.stringify(sources), actor.id);
+      .run(baseUrl, sealed.ciphertext, sealed.iv, sealed.tag, persona, JSON.stringify(documentSets), JSON.stringify(sources), brief ? 1 : 0, actor.id);
     this.store.audit.record(actor, existing ? 'onyx.update' : 'onyx.connect', {
       subject: 'onyx',
-      detail: { baseUrl, persona, documentSets, sources, newKey: Boolean(key) },
+      detail: { baseUrl, persona, documentSets, sources, brief, newKey: Boolean(key) },
     });
     return this.settings(actor)!;
   }
@@ -171,7 +182,7 @@ export class Onyx {
    * Searches Onyx for anyone signed in to Orco. Filters can only narrow what the admin allowed: a
    * source outside the admin's list is refused rather than widened.
    */
-  async search(actor: Participant, query: string, options: { limit?: number; sources?: string[]; since?: string } = {}): Promise<KnowledgeResult[]> {
+  async search(actor: Participant, query: string, options: { limit?: number; sources?: string[]; since?: string; timeoutMs?: number } = {}): Promise<KnowledgeResult[]> {
     const row = this.row();
     if (!row || !this.store.secrets.enabled) throw new OrcoError('not_found', 'Onyx is not connected; an org admin connects it under Portfolio → Controls');
     // A leased secret never leaves Orco inside a query.
@@ -214,7 +225,7 @@ export class Onyx {
         body: JSON.stringify(body),
         // Never follow a redirect: the key goes to the admin's address and nowhere else.
         redirect: 'error',
-        signal: AbortSignal.timeout(TIMEOUT_MS),
+        signal: AbortSignal.timeout(options.timeoutMs ?? TIMEOUT_MS),
       });
     } catch {
       throw new OrcoError('conflict', 'Could not reach Onyx; try again, or ask an org admin to check its address');
@@ -241,9 +252,37 @@ export class Onyx {
     }));
   }
 
+  /**
+   * Background for a task an agent just accepted: the top Onyx results for its request (and the
+   * titles of tickets it names), so every agent starts from what the company already wrote down.
+   * Null when Onyx is not connected or briefs are off. Never fails the accept: a search that cannot
+   * run says why in one line.
+   */
+  async brief(actor: Participant, task: Task): Promise<{ note: string; query: string; results: KnowledgeResult[] } | { note: string; unavailable: string } | null> {
+    const row = this.row();
+    if (actor.kind !== 'agent' || !row || row.brief !== 1 || !this.store.secrets.enabled) return null;
+    const titles: string[] = [];
+    for (const [, ref] of task.request.matchAll(TICKET_REF)) {
+      if (titles.length >= 3) break;
+      try {
+        titles.push(this.store.tickets.get(actor, ref!).title);
+      } catch {
+        // Not a ticket, or not one this agent can see: the request text is enough.
+      }
+    }
+    const query = clip([...titles, task.request].join('\n').replace(/\s+/g, ' ').trim(), 1000).replace(/…$/, '');
+    if (!query) return null;
+    const note = `${ONYX_NOTE} Fetched automatically for task #${task.id}; use search_knowledge for more.`;
+    try {
+      return { note, query, results: await this.search(actor, query, { limit: BRIEF_RESULTS, timeoutMs: BRIEF_TIMEOUT_MS }) };
+    } catch (err) {
+      return { note, unavailable: err instanceof OrcoError ? err.message : 'Onyx search failed' };
+    }
+  }
+
   private row(): SettingsRow | undefined {
     return this.store.db
-      .prepare('SELECT o.base_url, o.ciphertext, o.iv, o.tag, o.persona_id, o.document_sets, o.sources, o.updated_at, p.name AS updated_by FROM onyx_settings o JOIN participants p ON p.id = o.updated_by WHERE o.id = 1')
+      .prepare('SELECT o.base_url, o.ciphertext, o.iv, o.tag, o.persona_id, o.document_sets, o.sources, o.brief, o.updated_at, p.name AS updated_by FROM onyx_settings o JOIN participants p ON p.id = o.updated_by WHERE o.id = 1')
       .get() as unknown as SettingsRow | undefined;
   }
 
