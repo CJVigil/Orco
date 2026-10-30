@@ -686,7 +686,7 @@ export class Store {
 
   createProject(actor: Participant, name: string): Project {
     this.unscoped(actor, 'create projects');
-    if (actor.kind !== 'user') throw new OrcoError('forbidden', 'Only people create projects');
+    if (actor.kind !== 'user') throw new OrcoError('forbidden', 'Only people create projects; ask your owner to create it');
     checkName('Project', name);
     const userId = this.humanOf(actor);
     this.begin();

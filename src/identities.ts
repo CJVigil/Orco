@@ -29,18 +29,23 @@ export class Identities {
   }
 
   /**
-   * Ties a login to the provider account behind it the first time it signs in that way, and checks it
-   * every time after: an email alone can move to another account (a self-hosted Gitea without email
-   * confirmation lets anyone claim an address), the provider's account id cannot.
+   * Whether a provider account may sign in with a login: only the account the login is tied to. A
+   * login nobody has signed in with that way yet (an org admin added it, or a proxy linked it) is
+   * 'unbound': it is tied only once its person confirms from a sign-in of their own (see bind), never
+   * by whoever reaches the provider first. An email alone can move between accounts (a self-hosted
+   * Gitea without email confirmation lets anyone claim an address); the provider's account id cannot.
    */
-  checkAccount(identity: string, issuer: string, subject: string): boolean {
+  accountStatus(identity: string, issuer: string, subject: string): 'ok' | 'mismatch' | 'unbound' {
     const row = this.store.db.prepare('SELECT issuer, subject FROM identities WHERE identity = ?').get(identity) as { issuer: string | null; subject: string | null } | undefined;
-    if (!row) return false;
-    if (row.subject === null) {
-      this.store.db.prepare('UPDATE identities SET issuer = ?, subject = ? WHERE identity = ?').run(issuer, subject, identity);
-      return true;
-    }
-    return row.issuer === issuer && row.subject === subject;
+    if (!row || row.subject === null) return 'unbound';
+    return row.issuer === issuer && row.subject === subject ? 'ok' : 'mismatch';
+  }
+
+  /** Ties an unbound login to a provider account, for its person, who is signed in right now. */
+  bind(person: Participant, identity: string, account: { issuer: string; subject: string }): void {
+    if (this.userFor(identity)?.id !== person.id) throw new OrcoError('forbidden', 'That login is not yours');
+    const { changes } = this.store.db.prepare('UPDATE identities SET issuer = ?, subject = ? WHERE identity = ? AND subject IS NULL').run(account.issuer, account.subject, identity);
+    if (changes) this.store.audit.record(person, 'identity.bind', { subject: `user:${person.name}`, detail: { identity, issuer: account.issuer } });
   }
 
   of(userId: number): string[] {

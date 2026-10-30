@@ -813,6 +813,30 @@ export const MIGRATIONS = [
   `
   ALTER TABLE onyx_settings ADD COLUMN brief INTEGER NOT NULL DEFAULT 1;
   `,
+  // 24: a spend ledger, dated when the money was spent (not when its task was made), that outlives
+  // its agent: monthly budgets and the per-person cap on the org's models count from it.
+  `
+  CREATE TABLE spend (
+    id INTEGER PRIMARY KEY,
+    agent_id INTEGER NOT NULL REFERENCES participants(id),
+    owner_id INTEGER REFERENCES participants(id),
+    task_id INTEGER REFERENCES tasks(id),
+    project_id INTEGER REFERENCES projects(id),
+    org_model INTEGER NOT NULL DEFAULT 0,
+    cents REAL NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+  CREATE INDEX spend_agent ON spend (agent_id, created_at);
+  CREATE INDEX spend_project ON spend (project_id, created_at);
+  CREATE INDEX spend_owner ON spend (owner_id, org_model, created_at);
+  INSERT INTO spend (agent_id, owner_id, task_id, project_id, org_model, cents, note, created_at)
+    SELECT t.assignee_id, a.owner_id, t.id, r.project_id, EXISTS (SELECT 1 FROM hosted_agents h WHERE h.agent_id = t.assignee_id), t.spent_cents, 'before the ledger', t.created_at
+    FROM tasks t JOIN rooms r ON r.id = t.room_id JOIN participants a ON a.id = t.assignee_id WHERE t.spent_cents > 0;
+  INSERT INTO spend (agent_id, owner_id, org_model, cents, note, created_at)
+    SELECT s.agent_id, a.owner_id, 1, s.cents, s.note, s.created_at FROM agent_spend s JOIN participants a ON a.id = s.agent_id;
+  DROP TABLE agent_spend;
+  `,
 ];
 
 export interface OpenOptions {

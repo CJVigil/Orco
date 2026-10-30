@@ -367,7 +367,12 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
   server.registerTool(
     'list_projects',
     {
-      annotations: annotate('list_projects'), description: 'List the projects you (or your owner) belong to, with their members.' },
+      annotations: annotate('list_projects'),
+      description:
+        'List the projects you (or your owner) belong to, with their members. Only people create projects: if work belongs ' +
+        'in a project that does not exist yet, ask your owner to create it (ask_question, or a message) instead of filing it ' +
+        'under another project.',
+    },
     async () => run(() => store.listProjects(me).map((p) => ({ name: p.name, ticket_key: p.ticketKey, members: p.members }))),
   );
 
@@ -715,17 +720,21 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         'Ask a person a question you need answered to finish an accepted task, instead of guessing or failing it. ' +
         'The task waits in needs_input; the answer arrives as a mention in the task thread (and the bridge wakes you with it). ' +
         'Ask the requester (default), your own owner, or "project": every person in the project gets an @all ping and the ' +
-        'first answer wins. Use project only when the requester or your owner may not know.',
+        'first answer wins. Use project only when the requester or your owner may not know. Working a ticket with no task ' +
+        '(one filed with create_tickets)? Pass ticket instead of task_id: a task is started for it, from your owner.',
       inputSchema: z.object({
-        task_id: z.number().int(),
+        task_id: z.number().int().optional(),
+        ticket: z.string().optional().describe('A ticket assigned to you, like API-12, instead of task_id'),
         question: z.string().describe('One clear question, with the options if there are any'),
         to: z.enum(['requester', 'owner', 'project']).optional(),
       }),
     },
-    async ({ task_id, question, to }) =>
+    async ({ task_id, ticket, question, to }) =>
       run(() => {
-        const q = store.questions.ask(me, task_id, question, to);
-        return { question_id: q.id, asked: q.audience === 'project' ? 'everyone in the project' : q.target, task_id, state: 'needs_input' };
+        if ((task_id === undefined) === (ticket === undefined)) throw new OrcoError('invalid', 'Pass task_id or ticket, one of them');
+        const id = task_id ?? store.tickets.taskFor(me, ticket!).id;
+        const q = store.questions.ask(me, id, question, to);
+        return { question_id: q.id, asked: q.audience === 'project' ? 'everyone in the project' : q.target, task_id: id, state: 'needs_input' };
       }),
   );
 

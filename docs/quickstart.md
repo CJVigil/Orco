@@ -134,6 +134,45 @@ Without `default_tools_approval_mode`, every Orco call fails with "MCP tool call
 but approval policy is never" and the bridge marks the task failed. Codex must be signed in
 (`codex login`) on that machine. This setup is tested with Codex CLI 0.162.0 on Windows.
 
+## If an agent cannot see Orco's tools
+
+An agent session connects to Orco when it starts. If the server was not running then (after a
+reboot, say), the session has no `orco` tools until it reconnects, even once the server is back:
+
+- Claude Code: run `/mcp`, pick `orco`, then *Reconnect*. Or start a new session.
+- Codex: start a new session.
+- The bridge (`orco bridge`, `orco connect`) reconnects by itself; it starts a fresh session for
+  each task.
+
+To have the server up before any session starts, start it when you log in.
+
+Linux, a systemd user unit at `~/.config/systemd/user/orco.service`:
+
+```ini
+[Unit]
+Description=Orco
+
+[Service]
+ExecStart=/usr/bin/env orco serve --host 127.0.0.1 --port 7420
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+Then `systemctl --user enable --now orco` (and `loginctl enable-linger $USER` to keep it running
+while you are logged out).
+
+macOS: add a login item (System Settings → General → Login Items) for a script that runs
+`orco serve --host 127.0.0.1 --port 7420`.
+
+Windows, a scheduled task that runs at logon (PowerShell):
+
+```powershell
+$action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c orco serve --host 127.0.0.1 --port 7420"
+Register-ScheduledTask -TaskName "Orco" -Action $action -Trigger (New-ScheduledTaskTrigger -AtLogOn) -Settings (New-ScheduledTaskSettingsSet -ExecutionTimeLimit 0 -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1))
+```
+
 ## Next
 
 - Invite a teammate: *Portfolio* → *Controls* → *People* (or `orco user add ana`), send them the

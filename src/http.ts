@@ -349,7 +349,16 @@ export function createApp(store: Store, options: AppOptions = {}) {
     // ago is only offered for linking, and never stands in the way of signing in.
     const binding = proxyIdentity(req) !== null;
     const owner = store.identities.userFor(identity);
-    if (owner?.id === person.id) return;
+    if (owner?.id === person.id) {
+      // Their own login, added for them but never used with the provider: signing in themselves
+      // confirms it, and ties it to the provider account that just vouched for it in this browser.
+      const pending = binding ? null : pendingEntry(req);
+      if (pending) {
+        store.identities.bind(person, identity, { issuer: pending.issuer, subject: pending.subject });
+        oidcPending.delete(readCookie(req.headers.cookie, OIDC_PENDING_COOKIE)!);
+      }
+      return;
+    }
     if (owner) {
       if (binding) throw new OrcoError('forbidden', `${label} says you are ${identity}, which signs in as ${owner.name}, not ${person.name}`);
       return;
@@ -437,11 +446,14 @@ export function createApp(store: Store, options: AppOptions = {}) {
       if (logins.blocked(ip)) throw new OidcError('provider', 'Too many failed sign-ins. Wait 15 minutes and try again.', false);
       const { identity, issuer, subject } = await oidc.finish(req.query, readCookie(req.headers.cookie, OIDC_COOKIE));
       const user = store.identities.userFor(identity);
-      if (user && !store.identities.checkAccount(identity, issuer, subject)) {
-        throw new OidcError('account', `${identity} now belongs to a different ${oidc.config.label} account than the one linked to ${user.name}`);
+      const status = user ? store.identities.accountStatus(identity, issuer, subject) : 'unbound';
+      if (status === 'mismatch') {
+        throw new OidcError('account', `${identity} now belongs to a different ${oidc.config.label} account than the one linked to ${user!.name}`);
       }
-      if (!user) {
-        // Known to the provider, not yet to Orco: remember it briefly so a sign-in another way can link it.
+      if (status === 'unbound') {
+        // Known to the provider, not yet tied in Orco (unknown, or added but never used this way):
+        // remember it briefly, so its person signing in another way can confirm it. The page says
+        // the same either way, so it tells nobody whether an address was invited.
         for (const [key, entry] of oidcPending) if (entry.expiresAt <= now()) oidcPending.delete(key);
         if (oidcPending.size >= 1000) oidcPending.delete(oidcPending.keys().next().value!);
         const id = randomBytes(24).toString('base64url');
@@ -450,8 +462,8 @@ export function createApp(store: Store, options: AppOptions = {}) {
         res.redirect(302, '/#!signin=unlinked');
         return;
       }
-      res.cookie(COOKIE, store.signins.startSession(user), { httpOnly: true, sameSite: 'strict', secure: secureCookies(req, options.publicUrl), path: '/', maxAge: SESSION_TTL_MS });
-      store.audit.record(user, 'signin.oidc', { subject: `user:${user.name}`, detail: { identity, issuer: oidc.config.issuer } });
+      res.cookie(COOKIE, store.signins.startSession(user!), { httpOnly: true, sameSite: 'strict', secure: secureCookies(req, options.publicUrl), path: '/', maxAge: SESSION_TTL_MS });
+      store.audit.record(user!, 'signin.oidc', { subject: `user:${user!.name}`, detail: { identity, issuer: oidc.config.issuer } });
       res.redirect(302, '/');
     } catch (err) {
       // Only a sign-in that really came back to this browser counts against it: stray callbacks

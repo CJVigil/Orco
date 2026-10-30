@@ -71,6 +71,8 @@ export type BridgeAgentConfig = Omit<z.infer<typeof agentSchema>, 'command' | 'l
   token_env: string;
   /** Set in code, never from a config file: asked before each model turn (see runModel). */
   beforeTurn?: (runCostMicros: number) => string | null;
+  /** Set in code: what the run may still spend (micro-dollars), so each turn's output is capped to fit. */
+  budgetLeftMicros?: (runCostMicros: number) => number | null;
   command: string[];
   lifecycle: 'agent' | 'bridge';
   worktree?: WorktreeSettings;

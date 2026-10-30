@@ -76,8 +76,12 @@ export class HostedRunner {
       run_logs: true,
       // The budget is checked between turns too, so one long run cannot overshoot it by much.
       beforeTurn: (runCostMicros) => {
-        const left = this.store.controls.agentBudgetLeft(run.agentId);
+        const left = this.store.hosted.budgetLeft(run.agentId);
         return left !== null && left * 10_000 - runCostMicros <= 0 ? `${name}'s monthly budget ran out during this run` : null;
+      },
+      budgetLeftMicros: (runCostMicros) => {
+        const left = this.store.hosted.budgetLeft(run.agentId);
+        return left === null ? null : left * 10_000 - runCostMicros;
       },
     };
     const bridge = new Bridge(

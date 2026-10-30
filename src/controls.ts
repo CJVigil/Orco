@@ -61,8 +61,9 @@ export class Controls {
     // An agent that runs on the org's model keeps a capped budget unless an org admin says otherwise.
     const agent = scope === 'agent' ? this.store.participantById(targetId)! : null;
     if (agent && !this.store.isOrgAdmin(actor) && this.store.hosted.of(agent)) {
-      const others = this.store.hosted.memberBudgets(agent.ownerId!, agent.id);
-      if (monthlyCents === null || monthlyCents + others > MAX_MEMBER_BUDGET_CENTS) {
+      const others = this.store.hosted.memberCommitted(agent.ownerId!, agent.id);
+      // Lowering a budget below what was spent frees nothing: the money is gone.
+      if (monthlyCents === null || Math.max(monthlyCents, this.spentThisMonth('agent', agent.id)) + others > MAX_MEMBER_BUDGET_CENTS) {
         throw new OrcoError('invalid', `${name} runs on the org's model: your agents there can have at most $${MAX_MEMBER_BUDGET_CENTS / 100} a month between them; an org admin can raise it`);
       }
     }
@@ -106,22 +107,35 @@ export class Controls {
       .sort((a, b) => b.percent - a.percent);
   }
 
-  /** What a project or agent has spent this month, in cents. */
+  /** What a project or agent has spent this month, in cents: counted when the money was spent. */
   spentThisMonth(scope: BudgetScope, targetId: number): number {
-    const since = this.monthStart();
-    const row = (
-      scope === 'project'
-        ? this.store.db
-            .prepare('SELECT coalesce(sum(t.spent_cents), 0) AS cents FROM tasks t JOIN rooms r ON r.id = t.room_id WHERE r.project_id = ? AND t.created_at >= ?')
-            .get(targetId, since)
-        : this.store.db
-            .prepare(
-              `SELECT (SELECT coalesce(sum(spent_cents), 0) FROM tasks WHERE assignee_id = ? AND created_at >= ?)
-                    + (SELECT coalesce(sum(cents), 0) FROM agent_spend WHERE agent_id = ? AND created_at >= ?) AS cents`,
-            )
-            .get(targetId, since, targetId, since)
-    ) as { cents: number };
-    return row.cents;
+    return this.spentSince(scope, targetId, this.monthStart());
+  }
+
+  spentSince(scope: BudgetScope, targetId: number, since: string): number {
+    const column = scope === 'project' ? 'project_id' : 'agent_id';
+    return (this.store.db.prepare(`SELECT coalesce(sum(cents), 0) AS cents FROM spend WHERE ${column} = ? AND created_at >= ?`).get(targetId, since) as { cents: number }).cents;
+  }
+
+  /**
+   * Books money an agent just spent, dated now. Whether it ran on the org's model, and who owned it,
+   * are kept with it, so removing the agent or lowering its budget never makes the money unspent.
+   */
+  recordSpend(agentId: number, cents: number, context: { taskId?: number; projectId?: number | null; note?: string } = {}): void {
+    if (!(cents > 0)) return;
+    const agent = this.store.participantById(agentId);
+    this.store.db
+      .prepare('INSERT INTO spend (agent_id, owner_id, task_id, project_id, org_model, cents, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(agentId, agent?.ownerId ?? null, context.taskId ?? null, context.projectId ?? null, agent && this.store.hosted.of(agent) ? 1 : 0, cents, context.note ?? '', new Date(this.store.now()).toISOString());
+  }
+
+  /** What a person's agents spent on the org's models this month, removed agents included. */
+  ownerOrgSpend(ownerId: number): number {
+    return (
+      this.store.db.prepare('SELECT coalesce(sum(cents), 0) AS cents FROM spend WHERE owner_id = ? AND org_model = 1 AND created_at >= ?').get(ownerId, this.monthStart()) as {
+        cents: number;
+      }
+    ).cents;
   }
 
   /** What an agent may still spend this month, in cents, or null without a budget. */
@@ -305,7 +319,7 @@ export class Controls {
     return (this.store.db.prepare('SELECT name FROM projects WHERE id = ?').get(id) as { name: string } | undefined)?.name ?? '?';
   }
 
-  private monthStart(): string {
+  monthStart(): string {
     const now = new Date(this.store.now());
     return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
   }

@@ -53,6 +53,13 @@ export const MAX_MEMBER_AGENTS = 3;
 /** How many hosted agents one server runs at most: each is a loop inside the server process. */
 export const MAX_HOSTED_AGENTS = 50;
 const TRY_PER_HOUR = 20;
+const MODEL_ERRORS: Record<number, string> = {
+  400: 'The model did not accept the request; an org admin checks the model name',
+  401: 'The model refused its API key; an org admin checks it',
+  403: 'The model refused its API key; an org admin checks it',
+  404: 'The model or its address was not found; an org admin checks them',
+  429: 'The model is busy or out of credit; try again later',
+};
 const TRY_MAX_TOKENS = 300;
 
 export interface ModelProvider {
@@ -233,7 +240,7 @@ export class Hosted {
       // Safe defaults: tasks from anyone else wait for the owner's yes, and spending is capped low.
       this.store.setTaskPolicy(actor, agent.name, input.policy ?? 'ask');
       const budget = input.budgetCents === undefined ? DEFAULT_BUDGET_CENTS : input.budgetCents;
-      if (!admin && (budget === null || budget + this.memberBudgets(actor.id, agent.id) > MAX_MEMBER_BUDGET_CENTS)) {
+      if (!admin && (budget === null || budget + this.memberCommitted(actor.id, agent.id) > MAX_MEMBER_BUDGET_CENTS)) {
         throw new OrcoError('invalid', `Your agents on the org's models can have at most $${MAX_MEMBER_BUDGET_CENTS / 100} a month between them; an org admin can raise it`);
       }
       if (budget !== null) this.store.controls.setBudget(actor, 'agent', agent.name, budget);
@@ -336,7 +343,7 @@ export class Hosted {
     const hour = this.store.now() - 3600_000;
     const recent = (this.tries.get(agent.id) ?? []).filter((t) => t > hour);
     if (recent.length >= TRY_PER_HOUR) throw new OrcoError('rate_limited', `${name} can be tried ${TRY_PER_HOUR} times an hour`);
-    const left = this.store.controls.agentBudgetLeft(agent.id);
+    const left = this.budgetLeft(agent.id);
     if (left !== null && left <= 0) throw new OrcoError('forbidden', `${name}'s monthly budget is used up`);
     if (run.apiKey && !run.price) throw new OrcoError('conflict', `${name}'s model has no prices set; an org admin adds them so its budget can work`);
     this.tries.set(agent.id, [...recent, this.store.now()]);
@@ -353,21 +360,23 @@ export class Hosted {
       }),
       redirect: 'error',
       signal: AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(60_000)]),
-    }).catch((err: Error) => {
-      throw new OrcoError('conflict', `Could not reach the model at ${new URL(run.baseUrl).host}: ${err.message}`);
+    }).catch(() => {
+      throw new OrcoError('conflict', 'Could not reach the model; an org admin checks its address');
     });
     const data = (await res.json().catch(() => ({}))) as {
       choices?: { message?: { content?: string } }[];
       usage?: { prompt_tokens?: number; completion_tokens?: number };
       error?: { message?: string } | string;
     };
-    if (!res.ok) {
-      const error = typeof data.error === 'string' ? data.error : data.error?.message;
-      throw new OrcoError('conflict', `The model answered ${res.status}${error ? `: ${error.slice(0, 300)}` : ''}`);
-    }
+    // The provider's own error text stays out: it can echo the key or name internal hosts.
+    if (!res.ok) throw new OrcoError('conflict', MODEL_ERRORS[res.status] ?? `The model answered with an error (HTTP ${res.status})`);
     if (run.price) {
-      const cents = ((Number(data.usage?.prompt_tokens) || 0) * run.price.input_per_million + (Number(data.usage?.completion_tokens) || 0) * run.price.output_per_million) / 10_000;
-      if (cents > 0) this.store.db.prepare("INSERT INTO agent_spend (agent_id, cents, note) VALUES (?, ?, 'try it')").run(agent.id, cents);
+      const reply = String(data.choices?.[0]?.message?.content ?? '');
+      // No usage reported is charged by an estimate (four characters a token), never as free.
+      const input = data.usage ? Number(data.usage.prompt_tokens) || 0 : Math.ceil((run.prompt.length + text.length + 200) / 4);
+      const output = data.usage ? Number(data.usage.completion_tokens) || 0 : Math.ceil(reply.length / 4);
+      const cents = (input * run.price.input_per_million + output * run.price.output_per_million) / 10_000;
+      this.store.controls.recordSpend(agent.id, cents, { note: 'try it' });
     }
     return { reply: String(data.choices?.[0]?.message?.content ?? '').slice(0, 8000) };
   }
@@ -382,16 +391,41 @@ export class Hosted {
     return creator && this.store.isOrgAdmin(creator) ? creator : (this.store.orgAdmins()[0] ?? null);
   }
 
-  /** What a person's other hosted agents may spend a month, together. */
-  memberBudgets(ownerId: number, except?: number): number {
-    return (
+  /**
+   * What a person has committed on the org's models this month, apart from one agent: each of their
+   * other hosted agents counts its budget or what it spent, whichever is more, and money spent by
+   * agents that no longer run here (removed ones too) counts as spent.
+   */
+  memberCommitted(ownerId: number, except?: number): number {
+    const hosted = this.store.db
+      .prepare(
+        `SELECT a.id, b.monthly_cents FROM hosted_agents h JOIN participants a ON a.id = h.agent_id
+         LEFT JOIN budgets b ON b.scope = 'agent' AND b.target_id = a.id WHERE a.owner_id = ?`,
+      )
+      .all(ownerId) as { id: number; monthly_cents: number | null }[];
+    const since = this.store.controls.monthStart();
+    let cents = 0;
+    for (const row of hosted) if (row.id !== except) cents += Math.max(row.monthly_cents ?? 0, this.store.controls.spentThisMonth('agent', row.id));
+    const ids = hosted.map((r) => r.id);
+    cents += (
       this.store.db
-        .prepare(
-          `SELECT coalesce(sum(b.monthly_cents), 0) AS cents FROM hosted_agents h JOIN participants a ON a.id = h.agent_id
-           JOIN budgets b ON b.scope = 'agent' AND b.target_id = a.id WHERE a.owner_id = ? AND a.id IS NOT ?`,
-        )
-        .get(ownerId, except ?? null) as { cents: number }
+        .prepare(`SELECT coalesce(sum(cents), 0) AS cents FROM spend WHERE owner_id = ? AND org_model = 1 AND created_at >= ? AND agent_id NOT IN (${ids.map(() => '?').join(',') || 'NULL'})`)
+        .get(ownerId, since, ...ids) as { cents: number }
     ).cents;
+    return cents;
+  }
+
+  /**
+   * What an agent may still spend this month, in cents, under both its own budget and its owner's cap
+   * on the org's models (people who are not org admins); null when neither applies.
+   */
+  budgetLeft(agentId: number): number | null {
+    const own = this.store.controls.agentBudgetLeft(agentId);
+    const agent = this.store.participantById(agentId);
+    const owner = agent?.ownerId ? this.store.participantById(agent.ownerId) : null;
+    const cap = owner && !this.store.isOrgAdmin(owner) && this.hostedRow(agentId) ? MAX_MEMBER_BUDGET_CENTS - this.store.controls.ownerOrgSpend(owner.id) : null;
+    if (own === null) return cap;
+    return cap === null ? own : Math.min(own, cap);
   }
 
   private readonly tries = new Map<number, number[]>();

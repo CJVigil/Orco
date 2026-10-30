@@ -126,6 +126,7 @@ describe('hosted agents', () => {
     const call = seen.find((s) => s.withTools)!;
     assert.equal(call.auth, 'Bearer sk-test-0123456789abcdef', 'the key goes to the model, and only there');
     assert.ok(call.tools.includes('update_task') && !call.tools.includes('write_project_file') && !call.tools.includes('acquire_lock'), call.tools.join(','));
+    assert.ok(call.maxTokens! > 0 && call.maxTokens! <= 8192, 'each turn asks for no more output than the budget can pay for (#52)');
     await until(() => store.db.prepare('SELECT count(*) AS n FROM task_runs WHERE task_id = ?').get(task.id) !== undefined && (store.db.prepare('SELECT count(*) AS n FROM task_runs WHERE task_id = ?').get(task.id) as { n: number }).n > 0, 'the run report');
     assert.ok(store.tasks.get(ana, task.id).budget!.spentCents >= 0);
   });
@@ -148,7 +149,7 @@ describe('hosted agents', () => {
     assert.equal(code(() => store.hosted.create(bea, { name: 'bea-four', provider: 'fake', template: 'replies', budgetCents: 100 })), 'conflict', 'three each');
     // Spent out: the owner's own tasks wait for an org admin too.
     const one = store.participantByName('bea-one')!;
-    store.db.prepare("INSERT INTO agent_spend (agent_id, cents) VALUES (?, 3000)").run(one.id);
+    store.controls.recordSpend(one.id, 3000);
     const held = store.tasks.create(bea, { agent: 'bea-one', room: 'api/general', request: 'x' });
     assert.equal(held.state, 'awaiting_approval');
     for (const n of ['bea-one', 'bea-two', 'bea-three']) store.hosted.remove(bea, n);
@@ -158,7 +159,7 @@ describe('hosted agents', () => {
     store.hosted.create(ana, { name: 'ana-meter', provider: 'fake', template: 'questions', budgetCents: 100 });
     const meter = store.participantByName('ana-meter')!;
     // 0.001 cents left: the first turn (140 micro-dollars) uses it up, so the second never starts.
-    store.db.prepare('INSERT INTO agent_spend (agent_id, cents) VALUES (?, 99.999)').run(meter.id);
+    store.controls.recordSpend(meter.id, 99.999);
     await until(() => runner.running.includes('ana-meter'), 'the runner to start ana-meter');
     const task = store.tasks.create(ana, { agent: 'ana-meter', room: 'api/general', request: 'Which port?' });
     await until(() => ['failed', 'done'].includes(store.tasks.get(ana, task.id).state), 'the run to stop');

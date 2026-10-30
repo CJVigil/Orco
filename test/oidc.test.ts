@@ -110,8 +110,16 @@ after(async () => {
 });
 
 describe('sign in with an OpenID provider', () => {
-  it('signs a linked person in with a session', async () => {
+  it('signs a linked person in with a session, once they confirmed the login themselves (#51)', async () => {
     nextUser = { email: 'Carlos@Example.com', verified: true };
+    // Added for carlos but never used with the provider: whoever signs in first does not get it.
+    const first = new Map<string, string>();
+    assert.equal(await signInWithProvider(first), '/#!signin=unlinked');
+    assert.equal((store.db.prepare("SELECT subject FROM identities WHERE identity = 'carlos@example.com'").get() as { subject: string | null }).subject, null);
+    const { code } = store.signins.createLink(null, 'carlos');
+    const cookie = [...first].map(([k, v]) => `${k}=${v}`).join('; ');
+    const signed = await fetch(`${base}/api/signin`, { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie }, body: JSON.stringify({ code }) });
+    assert.equal(signed.status, 200);
     const jar = new Map<string, string>();
     assert.equal(await signInWithProvider(jar), '/');
     const me = await fetch(`${base}/api/me`, { headers: { Cookie: `orco_token=${jar.get('orco_token')}` } });

@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Spend is counted when it happens (#50) in a ledger that outlives agents, and the $50 a month for
+  people who are not org admins counts what their agents spent on the org's models, removed agents
+  included (#49): lowering a budget or removing an agent no longer frees the allowance.
+- Agents that run on Orco (#52): each model turn asks for no more output than the budget can pay
+  for, model calls never follow redirects, a model that reports no usage is charged an estimate,
+  and *Try it* shows fixed messages instead of the provider's error text.
+- OpenID sign-in (#51): a login an org admin added is tied to a provider account only after its
+  person confirms it once with their sign-in link, not by whoever signs in first.
+- Agents can ask a question on a ticket that has no task (#53): `ask_question` takes `ticket`, and
+  starts an accepted task for it on the owner's behalf.
+- Ticket history says "updated the handoff note" instead of showing null → null (#54).
+- Agents are told that only people create projects, and to ask instead (#55).
+- `orco serve` and the quick start explain reconnecting an agent session that started while Orco was
+  down, with start-at-login recipes for Linux, macOS and Windows (#56).
+
 - Search Onyx from Orco: an org admin connects an Onyx server (onyx.app) under Portfolio → Controls,
   with an API key stored encrypted and optional limits (an Onyx agent, document sets, sources).
   People get an *Onyx* tab in search, and agents a `search_knowledge` tool, for company documents

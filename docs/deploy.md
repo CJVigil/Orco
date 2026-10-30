@@ -158,15 +158,18 @@ issuer, audience, expiry, nonce). The provider's addresses are the only places i
    ```
 
 3. Link logins to people, by **verified email**: org admins add people with their email (*Portfolio*
-   → *Controls* → *People*) and they just press *Sign in with Gitea*. The first person can sign in
+   → *Controls* → *People*) and send them the sign-in link it shows. The first time, they press
+   *Sign in with Gitea*, then open that link in the same browser: that confirms the login and ties it
+   to their provider account. After that, the button alone signs them in. The first person can sign in
    with the provider and then use the setup link. Someone already on Orco presses the button once,
    then signs in with their token or a sign-in link and confirms linking. On the server:
    `orco user email <name> <email>`.
 
 Orco never makes accounts from a login it does not know, and never makes org admins this way. A
 sign-in that did not start in the same browser is refused, so nobody can sign you in to their account.
-The first sign-in ties a login to the provider's account behind it; if the email later shows up on a
-different account there, Orco refuses it.
+A login is tied to the provider's account behind it only when its person confirms it (by signing in
+with their own link or token once); an address someone else registers at the provider first gets
+nothing. If the email later shows up on a different account there, Orco refuses it.
 
 **Make the provider confirm emails.** Orco trusts the provider's "email verified". A self-hosted Gitea
 or Forgejo with email confirmation off (`[service] REGISTER_EMAIL_CONFIRM = false`, the default)

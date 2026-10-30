@@ -522,7 +522,8 @@ export class Tickets {
         set('handoff', handoff);
         set('handoff_by', actor.id);
         sets.push(`handoff_at = ${NOW_SQL}`);
-        changes.push({ field: 'handoff', from: null, to: null });
+        // The note itself is not copied into the history (it can be long); say what happened instead.
+        changes.push({ field: 'handoff', from: row.handoff ? '(earlier note)' : null, to: handoff ? '(updated: see handoff)' : '(cleared)' });
       }
     }
     if (input.blockedReason !== undefined) {
@@ -722,6 +723,28 @@ export class Tickets {
     if (warning) throw new OrcoError('forbidden', warning);
     this.changed(row);
     return { ticket: this.detail(row.id) };
+  }
+
+  /**
+   * The open task an agent works its ticket under. A ticket filed without one (create_tickets) gets
+   * one now, on the agent's owner's behalf, already accepted: so the agent can ask a question, which
+   * always belongs to a task (#53).
+   */
+  taskFor(agent: Participant, ref: string): Task {
+    const row = this.byRef(agent, ref);
+    if (agent.kind !== 'agent' || row.assignee_id !== agent.id) {
+      throw new OrcoError('forbidden', `${refOf(row)} is not assigned to you; claim it with claim_ticket first`);
+    }
+    if (row.task_id === null || !OPEN_STATES.includes(taskState(row)!)) {
+      const owner = this.store.participantById(agent.ownerId!)!;
+      const warning = this.dispatch(owner, row);
+      if (warning) throw new OrcoError('conflict', warning);
+      this.changed(row);
+    }
+    let task = this.store.tasks.get(agent, this.byRef(agent, ref).task_id!);
+    if (task.state === 'requested') task = this.store.tasks.update(agent, task.id, 'accepted');
+    if (task.state === 'awaiting_approval') throw new OrcoError('conflict', `Task #${task.id} for ${refOf(row)} waits for approval before you can work on it`);
+    return task;
   }
 
   /** A ticket; with `since` (an activity id), only the activity after it. */

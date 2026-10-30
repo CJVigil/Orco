@@ -2571,7 +2571,7 @@ async function showLogin() {
       parts.push(
         el('p', {
           class: 'small',
-          text: `${oidc.label} says you are ${oidc.pending}, but that login is not linked to anyone on this Orco yet. Ask an org admin to add you with it, or sign in once below with your own token or sign-in link.`,
+          text: `${oidc.label} says you are ${oidc.pending}, but that login is not confirmed on this Orco yet. Sign in once below with the sign-in link an org admin sent you (or your own token); from then on, ${oidc.label} signs you in. No link yet? Ask an org admin to add you.`,
         }),
         el('label', { class: 'check small' }, el('input', { id: 'login-link', type: 'checkbox', checked: true }), `Link ${oidc.pending} to the account I sign in to, so ${oidc.label} signs me in from now on.`),
       );

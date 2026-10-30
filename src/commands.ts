@@ -335,6 +335,7 @@ export function main(): void {
       const server = app.listen(port, values.host, () => {
         console.log(`Orco ${VERSION} listening on http://${values.host}:${port}`);
         console.log(`  MCP endpoint: http://${values.host}:${port}/mcp`);
+        console.log('  Agent sessions started while Orco was down do not see its tools until they reconnect (Claude Code: /mcp, then reconnect orco).');
         console.log(`  Database: ${values.db}`);
         if (oauth) console.log(`  OAuth for cloud agents: on, issuer ${oauth.issuer}`);
         if (oidcConfig) console.log(`  Sign-in with ${oidcConfig.label}: on, issuer ${oidcConfig.issuer}, back to ${oidcConfig.redirectUri}`);

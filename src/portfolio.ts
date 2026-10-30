@@ -125,7 +125,7 @@ export class Portfolios {
       updated_at: string;
     }[]).map((c) => ({ source: c.source, state: c.state, summary: c.summary, at: c.updated_at }));
     const week = db
-      .prepare('SELECT coalesce(sum(t.spent_cents), 0) AS cents FROM tasks t JOIN rooms r ON r.id = t.room_id WHERE r.project_id = ? AND t.created_at >= ?')
+      .prepare('SELECT coalesce(sum(cents), 0) AS cents FROM spend WHERE project_id = ? AND created_at >= ?')
       .get(project.id, weekAgo) as { cents: number };
     const monthCents = this.store.controls.spentThisMonth('project', project.id);
     const budget = db.prepare("SELECT monthly_cents FROM budgets WHERE scope = 'project' AND target_id = ?").get(project.id) as { monthly_cents: number } | undefined;
@@ -342,7 +342,7 @@ export class Portfolios {
     }
 
     const week = db
-      .prepare('SELECT coalesce(sum(t.spent_cents), 0) AS cents FROM tasks t JOIN rooms r ON r.id = t.room_id WHERE r.project_id = ? AND t.created_at >= ?')
+      .prepare('SELECT coalesce(sum(cents), 0) AS cents FROM spend WHERE project_id = ? AND created_at >= ?')
       .get(projectId, weekAgo) as { cents: number };
     const month = this.store.controls.spentThisMonth('project', projectId);
     const budget = db.prepare("SELECT monthly_cents FROM budgets WHERE scope = 'project' AND target_id = ?").get(projectId) as { monthly_cents: number } | undefined;

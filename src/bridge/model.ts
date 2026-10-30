@@ -11,6 +11,12 @@ export const DEFAULT_MODEL_TOOLS = [
 ];
 
 const MAX_TOOL_RESULT = 20_000;
+/** The most output one turn may ask for when a budget applies, and the least worth starting a turn for. */
+const MAX_TURN_OUTPUT = 8192;
+const MIN_TURN_OUTPUT = 64;
+
+/** A rough token count (four characters a token), for budgets and for providers that report no usage. */
+const estimateTokens = (text: string) => Math.ceil(text.length / 4);
 const CALL_TIMEOUT_MS = 300_000;
 
 export interface ModelRun {
@@ -61,6 +67,8 @@ export async function runModel(options: {
   output?: RunOutput;
   /** Asked before each turn with what this run has cost so far (micro-dollars): a reason stops the run. */
   beforeTurn?: (runCostMicros: number) => string | null;
+  /** What the run may still spend (micro-dollars), or null: each turn's output is capped to fit it. */
+  budgetLeftMicros?: (runCostMicros: number) => number | null;
 }): Promise<ModelRun> {
   const { model } = options;
   const client = new Client({ name: `orco-bridge-${options.agent}`, version: '1.0.0' });
@@ -83,14 +91,30 @@ export async function runModel(options: {
     let lastText = '';
     for (let turn = 1; turn <= model.max_turns; turn++) {
       if (options.signal.aborted) throw new Error('stopped');
-      const stop = options.beforeTurn?.(options.output?.usage.costMicros ?? 0);
+      const spent = options.output?.usage.costMicros ?? 0;
+      const stop = options.beforeTurn?.(spent);
       if (stop) throw new Error(stop);
-      const { message: reply, usage } = await chat(model, options.apiKey, messages, functions, options.signal);
-      if (usage && options.output) {
-        const input = Number(usage.prompt_tokens) || 0;
-        const output = Number(usage.completion_tokens) || 0;
-        const cost = model.price ? Math.round(input * model.price.input_per_million + output * model.price.output_per_million) : null;
-        options.output.addUsage(input, output, cost);
+      // With a budget, a turn asks for no more output than the money left can pay for, after its input.
+      const promptTokens = estimateTokens(JSON.stringify(messages) + JSON.stringify(functions));
+      const left = options.budgetLeftMicros?.(spent) ?? null;
+      let maxTokens: number | undefined;
+      if (left !== null && model.price) {
+        const room = left - promptTokens * model.price.input_per_million;
+        const fits = model.price.output_per_million > 0 ? Math.floor(room / model.price.output_per_million) : room > 0 ? MAX_TURN_OUTPUT : 0;
+        if (fits < MIN_TURN_OUTPUT) throw new Error('the monthly budget ran out during this run');
+        maxTokens = Math.min(fits, MAX_TURN_OUTPUT);
+      }
+      const { message: reply, usage } = await chat(model, options.apiKey, messages, functions, options.signal, maxTokens);
+      if (options.output) {
+        // A provider that reports no usage is still charged, by an estimate: otherwise no budget could stop it.
+        const estimated = !usage && Boolean(model.price);
+        const input = usage ? Number(usage.prompt_tokens) || 0 : estimated ? promptTokens : 0;
+        const output = usage ? Number(usage.completion_tokens) || 0 : estimated ? estimateTokens(JSON.stringify({ content: reply.content ?? '', tool_calls: reply.tool_calls ?? [] })) : 0;
+        if (estimated) options.output.note('usage: the model API reported none; charged an estimate');
+        if (usage || estimated) {
+          const cost = model.price ? Math.round(input * model.price.input_per_million + output * model.price.output_per_million) : null;
+          options.output.addUsage(input, output, cost);
+        }
       }
       if (reply.content?.trim()) options.output?.note(`assistant: ${reply.content.trim()}`);
       messages.push({ role: 'assistant', content: reply.content ?? null, ...(reply.tool_calls?.length ? { tool_calls: reply.tool_calls } : {}) });
@@ -137,6 +161,7 @@ async function chat(
   messages: ChatMessage[],
   tools: unknown[],
   signal: AbortSignal,
+  maxTokens?: number,
 ): Promise<{ message: { content?: string | null; tool_calls?: ToolCall[] }; usage?: { prompt_tokens?: number; completion_tokens?: number } }> {
   const res = await fetch(`${model.base_url.replace(/\/+$/, '')}/chat/completions`, {
     method: 'POST',
@@ -147,7 +172,10 @@ async function chat(
       tools,
       tool_choice: 'auto',
       ...(model.temperature !== undefined ? { temperature: model.temperature } : {}),
+      ...(maxTokens !== undefined ? { max_tokens: maxTokens } : {}),
     }),
+    // The API key goes to the configured address only, never to wherever it redirects.
+    redirect: 'error',
     signal: AbortSignal.any([signal, AbortSignal.timeout(CALL_TIMEOUT_MS)]),
   });
   const data = (await res.json().catch(() => ({}))) as {

@@ -816,7 +816,7 @@ export function createTickets(ctx) {
       case 'parent':
         return v(c.to) ? `made it a sub-ticket of ${c.to}` : 'made it a top-level ticket';
       case 'handoff':
-        return 'updated the handoff note';
+        return c.to === '(cleared)' ? 'cleared the handoff note' : 'updated the handoff note';
       case 'criteria': {
         const parts = [];
         if (c.to.added.length) parts.push(`added ${c.to.added.length === 1 ? `“${c.to.added[0]}”` : `${c.to.added.length} criteria`}`);

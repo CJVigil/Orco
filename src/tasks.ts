@@ -527,6 +527,7 @@ export class Tasks {
       }
     }
     // An agent's own figure is a total, and can only raise the spend: what the bridge measured stands.
+    const before = this.spentCents(id);
     this.store.db
       .prepare(
         `UPDATE tasks SET reported_cents = max(reported_cents, coalesce(?, 0)), reported_tokens = max(reported_tokens, coalesce(?, 0)),
@@ -534,6 +535,7 @@ export class Tasks {
          WHERE id = ?`,
       )
       .run(usage.costCents ?? null, usage.tokens ?? null, usage.costCents ?? null, usage.tokens ?? null, id);
+    this.bookSpend(id, before);
     if (usage.costCents != null) this.store.controls.checkSpend(id);
     this.store.audit.record(actor, 'task.progress', {
       projectId: row.project_id,
@@ -549,6 +551,7 @@ export class Tasks {
   /** Adds what a bridge-reported run cost to the task's spend, and checks its budget. */
   addUsage(id: number, cents: number, tokens: number): void {
     if (cents <= 0 && tokens <= 0) return;
+    const before = this.spentCents(id);
     this.store.db
       .prepare(
         `UPDATE tasks SET measured_cents = measured_cents + ?, measured_tokens = measured_tokens + ?,
@@ -556,9 +559,22 @@ export class Tasks {
          WHERE id = ?`,
       )
       .run(cents, tokens, cents, tokens, id);
+    this.bookSpend(id, before);
     this.checkOverBudget(id);
     this.store.controls.checkSpend(id);
     this.store.events.emit('task', this.byId(id)!);
+  }
+
+  private spentCents(id: number): number {
+    return (this.store.db.prepare('SELECT spent_cents FROM tasks WHERE id = ?').get(id) as { spent_cents: number } | undefined)?.spent_cents ?? 0;
+  }
+
+  /** Books what a task's spend went up by in the ledger, dated now (see controls.recordSpend). */
+  private bookSpend(id: number, before: number): void {
+    const row = this.store.db.prepare('SELECT t.spent_cents, t.assignee_id, r.project_id FROM tasks t JOIN rooms r ON r.id = t.room_id WHERE t.id = ?').get(id) as
+      | { spent_cents: number; assignee_id: number; project_id: number | null }
+      | undefined;
+    if (row && row.spent_cents > before) this.store.controls.recordSpend(row.assignee_id, row.spent_cents - before, { taskId: id, projectId: row.project_id });
   }
 
   /** Tells the requester once when a task runs past its time or cost budget. */
