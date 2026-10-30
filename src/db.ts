@@ -794,6 +794,21 @@ export const MIGRATIONS = [
   ALTER TABLE identities ADD COLUMN issuer TEXT;
   ALTER TABLE identities ADD COLUMN subject TEXT;
   `,
+  // 22: one Onyx server to search, connected by an org admin (key sealed with ORCO_SECRETS_KEY).
+  `
+  CREATE TABLE onyx_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    base_url TEXT NOT NULL,
+    ciphertext BLOB NOT NULL,
+    iv BLOB NOT NULL,
+    tag BLOB NOT NULL,
+    persona_id INTEGER,
+    document_sets TEXT NOT NULL DEFAULT '[]',
+    sources TEXT NOT NULL DEFAULT '[]',
+    updated_by INTEGER NOT NULL REFERENCES participants(id),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+  `,
 ];
 
 export interface OpenOptions {

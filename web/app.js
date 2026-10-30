@@ -2386,21 +2386,43 @@ function openHit(hit) {
 
 async function runSearch(query, kind = '') {
   openPanel('search', `Search: ${query}`);
-  let results;
-  try {
-    results = await api(`/search?q=${encodeURIComponent(query)}${kind ? `&kind=${kind}` : ''}&limit=60`);
-  } catch (err) {
-    $('panel-body').replaceChildren(el('p', { class: 'empty muted', text: err.message }));
-    return;
-  }
-  if (state.panel !== 'search') return;
+  const kinds = [['', 'All'], ...Object.entries(KIND_LABEL).map(([k, label]) => [k, `${label}s`]), ...(state.me?.onyx ? [['onyx', 'Onyx']] : [])];
   const filter = el(
     'div',
     { class: 'search-kinds', role: 'group', 'aria-label': 'What to search' },
-    [['', 'All'], ...Object.entries(KIND_LABEL).map(([k, label]) => [k, `${label}s`])].map(([k, label]) =>
+    kinds.map(([k, label]) =>
       el('button', { class: `small${k === kind ? ' active' : ' ghost'}`, type: 'button', 'aria-pressed': String(k === kind), text: label, onclick: () => void runSearch(query, k) }),
     ),
   );
+  let results;
+  try {
+    results = kind === 'onyx' ? await api(`/onyx/search?q=${encodeURIComponent(query)}&limit=10`) : await api(`/search?q=${encodeURIComponent(query)}${kind ? `&kind=${kind}` : ''}&limit=60`);
+  } catch (err) {
+    if (state.panel === 'search') $('panel-body').replaceChildren(filter, el('p', { class: 'empty muted', text: err.message }));
+    return;
+  }
+  if (state.panel !== 'search') return;
+  if (kind === 'onyx') {
+    $('panel-body').replaceChildren(
+      filter,
+      el('p', { class: 'panel-intro muted small', text: results.length ? 'From Onyx, most relevant first. Links open outside Orco.' : 'Onyx found nothing.' }),
+      ...results.map((hit) =>
+        el(
+          hit.link ? 'a' : 'div',
+          { class: 'inbox-row', ...(hit.link ? { href: hit.link, target: '_blank', rel: 'noopener noreferrer' } : {}) },
+          el(
+            'span',
+            { class: 'inbox-meta' },
+            el('span', { class: 'chip', text: hit.source || 'onyx' }),
+            el('strong', { text: ` ${hit.title}` }),
+            hit.updatedAt ? el('time', { class: 'muted', text: ` · ${formatTime(hit.updatedAt)}` }) : null,
+          ),
+          el('span', { class: 'inbox-text', text: hit.text.length > 400 ? `${hit.text.slice(0, 400)}…` : hit.text }),
+        ),
+      ),
+    );
+    return;
+  }
   $('panel-body').replaceChildren(
     filter,
     el('p', { class: 'panel-intro muted small', text: results.length ? `${results.length}${results.length === 60 ? '+' : ''} ${results.length === 1 ? 'result' : 'results'}, newest first` : 'Nothing matches every word.' }),

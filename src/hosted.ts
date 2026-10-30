@@ -11,26 +11,26 @@ export const TEMPLATES = {
   questions: {
     title: 'Answers questions',
     description: 'Answers questions from the project’s tickets, notes and files, and says when it does not know.',
-    prompt: 'You answer questions from what is in Orco: tickets, notes, files and earlier messages. Say where an answer comes from, and say so plainly when you do not know.',
-    tools: ['whoami', 'my_work', 'catch_up', 'read', 'post', 'get_task', 'update_task', 'report_progress', 'ask_question', 'get_ticket', 'list_tickets', 'search', 'project_notes', 'read_file', 'project_files', 'read_project_file', 'my_notes', 'remember', 'flag_message'],
+    prompt: 'You answer questions from what is in Orco (tickets, notes, files and earlier messages) and, when it is there, the company knowledge in search_knowledge. Say where an answer comes from, and say so plainly when you do not know.',
+    tools: ['whoami', 'my_work', 'catch_up', 'read', 'post', 'get_task', 'update_task', 'report_progress', 'ask_question', 'get_ticket', 'list_tickets', 'search', 'search_knowledge', 'project_notes', 'read_file', 'project_files', 'read_project_file', 'my_notes', 'remember', 'flag_message'],
   },
   summaries: {
     title: 'Writes summaries',
     description: 'Sums up threads, tickets and progress, and can comment its summary on a ticket.',
     prompt: 'You write short, accurate summaries: what was decided, what is open, who is doing what. Quote ticket refs. Do not invent progress.',
-    tools: ['whoami', 'my_work', 'catch_up', 'read', 'post', 'get_task', 'update_task', 'report_progress', 'ask_question', 'get_ticket', 'list_tickets', 'comment_ticket', 'search', 'project_notes', 'read_file', 'project_files', 'read_project_file', 'my_notes', 'remember', 'flag_message'],
+    tools: ['whoami', 'my_work', 'catch_up', 'read', 'post', 'get_task', 'update_task', 'report_progress', 'ask_question', 'get_ticket', 'list_tickets', 'comment_ticket', 'search', 'search_knowledge', 'project_notes', 'read_file', 'project_files', 'read_project_file', 'my_notes', 'remember', 'flag_message'],
   },
   replies: {
     title: 'Drafts replies',
     description: 'Drafts answers to messages, emails or issues for a person to check and send.',
     prompt: 'You draft replies for a person to review: clear, kind and short. Post the draft as your result; never send anything outside Orco yourself.',
-    tools: ['whoami', 'my_work', 'catch_up', 'read', 'post', 'get_task', 'update_task', 'report_progress', 'ask_question', 'get_ticket', 'search', 'project_notes', 'read_file', 'project_files', 'read_project_file', 'my_notes', 'remember', 'flag_message'],
+    tools: ['whoami', 'my_work', 'catch_up', 'read', 'post', 'get_task', 'update_task', 'report_progress', 'ask_question', 'get_ticket', 'search', 'search_knowledge', 'project_notes', 'read_file', 'project_files', 'read_project_file', 'my_notes', 'remember', 'flag_message'],
   },
   tickets: {
     title: 'Keeps tickets tidy',
     description: 'Files, updates and comments on tickets: splits plans into tickets, fills in details, links blockers.',
     prompt: 'You keep the project’s tickets clear and current: split work into small tickets, write acceptance criteria, link blockers. Ask before closing anything.',
-    tools: ['whoami', 'my_work', 'catch_up', 'read', 'post', 'get_task', 'update_task', 'report_progress', 'ask_question', 'propose_plan', 'get_ticket', 'list_tickets', 'update_ticket', 'comment_ticket', 'search', 'project_notes', 'read_file', 'project_files', 'read_project_file', 'my_notes', 'remember', 'flag_message'],
+    tools: ['whoami', 'my_work', 'catch_up', 'read', 'post', 'get_task', 'update_task', 'report_progress', 'ask_question', 'propose_plan', 'get_ticket', 'list_tickets', 'update_ticket', 'comment_ticket', 'search', 'search_knowledge', 'project_notes', 'read_file', 'project_files', 'read_project_file', 'my_notes', 'remember', 'flag_message'],
   },
   general: {
     title: 'General helper',

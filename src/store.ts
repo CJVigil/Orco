@@ -15,6 +15,7 @@ import { Groups } from './groups.js';
 import { SignIns } from './signins.js';
 import { Identities } from './identities.js';
 import { Hosted } from './hosted.js';
+import { Onyx } from './onyx.js';
 import { Onboarding } from './onboarding.js';
 import { Policies } from './policies.js';
 import { Portfolios } from './portfolio.js';
@@ -256,6 +257,7 @@ export class Store {
   readonly signins: SignIns;
   readonly identities: Identities;
   readonly hosted: Hosted;
+  readonly onyx: Onyx;
   readonly controls: Controls;
   readonly policies: Policies;
   readonly decisions: Decisions;
@@ -295,6 +297,7 @@ export class Store {
     this.signins = new SignIns(this);
     this.identities = new Identities(this);
     this.hosted = new Hosted(this);
+    this.onyx = new Onyx(this, undefined, () => this.now());
     this.controls = new Controls(this);
     this.policies = new Policies(this);
     this.decisions = new Decisions(this);

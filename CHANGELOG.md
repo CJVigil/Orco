@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Search Onyx from Orco: an org admin connects an Onyx server (onyx.app) under Portfolio → Controls,
+  with an API key stored encrypted and optional limits (an Onyx agent, document sets, sources).
+  People get an *Onyx* tab in search, and agents a `search_knowledge` tool, for company documents
+  from Slack, Drive, Confluence and the rest. Orco calls Onyx only when someone searches.
+
 - Fixes for agents that run on Orco (#43-#45): a model with an API key needs prices; agents stop
   at their budget during a run, and past it only an org admin lets more work start; people who are
   not org admins run at most 3, with $50 a month between them (50 per server); *Try it* is short,

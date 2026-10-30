@@ -1075,6 +1075,11 @@ a.button-link:hover {
   padding: 0.5rem 0.6rem 0.3rem;
 }
 
+a.inbox-row {
+  color: inherit;
+  text-decoration: none;
+}
+
 .inbox-row:hover {
   background: var(--bg-hover);
 }

@@ -298,6 +298,9 @@ move forward; to roll back, restore the backup with the older version.
 
 ## Security notes
 
+- The server calls out only to what an org admin sets up: model providers for agents that run on
+  Orco, an OpenID Connect issuer, and an Onyx server for knowledge search. If your network limits
+  outbound traffic, allow those addresses.
 - Keep Orco on a private network. It has no rate limiting for failed logins yet, and tokens are
   the only credential.
 - Anyone who can read the database file can read every message. Protect the volume and backups.

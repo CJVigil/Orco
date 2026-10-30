@@ -329,10 +329,10 @@ export function createPortfolio(ctx) {
   async function controls() {
     const admin = isAdmin();
     const administered = admin ? projects().map((pr) => pr.name) : adminOf();
-    const [state, agents, groups, setup, models] = await Promise.all([api('/controls'), api('/agents'), admin ? api('/groups') : Promise.resolve([]), admin ? api('/setup') : Promise.resolve({}), admin ? api('/models') : Promise.resolve(null)]);
+    const [state, agents, groups, setup, models, onyx] = await Promise.all([api('/controls'), api('/agents'), admin ? api('/groups') : Promise.resolve([]), admin ? api('/setup') : Promise.resolve({}), admin ? api('/models') : Promise.resolve(null), admin ? api('/onyx') : Promise.resolve(null)]);
     if (!p.policyProject && administered[0] && !admin) p.policyProject = administered[0];
     const policy = p.policyProject || admin ? await api(`/policy${p.policyProject ? `?project=${encodeURIComponent(p.policyProject)}` : ''}`) : null;
-    return [pausesCard(state.pauses, administered, agents), budgetsCard(state.budgets, administered, agents), admin ? peopleCard(setup.proxy ?? (setup.oidc ? { label: setup.oidc.label } : null)) : null, admin ? modelsCard(models) : null, policy ? policyCard(policy, administered) : null, admin ? groupsCard(groups) : null];
+    return [pausesCard(state.pauses, administered, agents), budgetsCard(state.budgets, administered, agents), admin ? peopleCard(setup.proxy ?? (setup.oidc ? { label: setup.oidc.label } : null)) : null, admin ? modelsCard(models) : null, admin ? onyxCard(onyx) : null, policy ? policyCard(policy, administered) : null, admin ? groupsCard(groups) : null];
   }
 
   /**
@@ -391,6 +391,57 @@ export function createPortfolio(ctx) {
             el('div', { class: 'pf-row' }, key, priceIn, priceOut),
             el('label', { class: 'check small' }, shared, 'Everyone may make agents on it (otherwise org admins only)'),
             el('div', { class: 'row-end' }, el('button', { class: 'small', type: 'button', text: 'Save model', onclick: save })),
+          )
+        : null,
+    );
+  }
+
+  /**
+   * Onyx knowledge search: one Onyx server and its API key (stored encrypted). People search it from
+   * the search box, agents with search_knowledge. Orco calls it only when someone searches.
+   */
+  function onyxCard(onyx) {
+    const current = onyx?.settings;
+    const url = el('input', { placeholder: 'Onyx address, like https://onyx.example.com', 'aria-label': 'Onyx address', value: current?.baseUrl ?? '' });
+    const key = el('input', { placeholder: current ? 'API key (leave empty to keep it)' : 'API key', 'aria-label': 'Onyx API key', type: 'password', autocomplete: 'off' });
+    const persona = el('input', { placeholder: 'Onyx agent id (optional)', 'aria-label': 'Onyx agent id', inputmode: 'numeric', value: current?.persona ?? '' });
+    const sets = el('input', { placeholder: 'Document sets, comma-separated (optional)', 'aria-label': 'Document sets', value: current?.documentSets.join(', ') ?? '' });
+    const sources = el('input', { placeholder: 'Sources, like slack, google_drive (optional)', 'aria-label': 'Sources', value: current?.sources.join(', ') ?? '' });
+    const save = () =>
+      void act(() =>
+        api('/onyx', {
+          method: 'POST',
+          body: { base_url: url.value.trim(), api_key: key.value, persona: persona.value.trim(), document_sets: sets.value, sources: sources.value },
+        }),
+      );
+    return el(
+      'section',
+      { class: 'plan-card' },
+      el('h3', { text: 'Onyx knowledge search' }),
+      el('p', {
+        class: 'small muted',
+        text: 'Connect Onyx so people and agents can search your company’s documents (Slack, Drive, Confluence and the rest) from Orco. Everyone signed in can search what this key sees, so limit it with an Onyx agent, document sets or sources. Orco calls Onyx only when someone searches.',
+      }),
+      onyx?.secrets ? null : el('p', { class: 'small warn-text', text: 'Turn on ORCO_SECRETS_KEY on the server first: the Onyx key is stored encrypted with it.' }),
+      current
+        ? el(
+            'p',
+            { class: 'small' },
+            el('strong', { text: 'Connected' }),
+            el('span', { class: 'muted', text: ` to ${current.baseUrl} by ${current.updatedBy}` }),
+            ' ',
+            el('button', { class: 'ghost small', type: 'button', text: 'Disconnect', onclick: () => confirm('Disconnect Onyx? Searches stop until it is connected again.') && void act(() => api('/onyx', { method: 'DELETE', body: {} })) }),
+          )
+        : null,
+      onyx?.secrets
+        ? el(
+            'div',
+            { class: 'pf-stack' },
+            el('div', { class: 'pf-row' }, url),
+            el('div', { class: 'pf-row' }, key, persona),
+            el('div', { class: 'pf-row' }, sets, sources),
+            el('p', { class: 'small muted', text: 'Make the key in Onyx under Admin → API Keys; a limited key needs only Search (read).' }),
+            el('div', { class: 'row-end' }, el('button', { class: 'small', type: 'button', text: current ? 'Save' : 'Connect Onyx', onclick: save })),
           )
         : null,
     );

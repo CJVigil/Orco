@@ -13,6 +13,7 @@ import { type Message, OrcoError, type Participant, type Store } from './store.j
 import { MAX_BUDGET_CENTS, MAX_BUDGET_MINUTES, type Task } from './tasks.js';
 import { waitFor } from './waits.js';
 import { myWork } from './work.js';
+import { ONYX_NOTE } from './onyx.js';
 import { LABEL_COLORS, PRIORITIES, STATUS_CATEGORIES, type Ticket, type TicketInput, type TicketSummary } from './tickets.js';
 
 const MAX_WAIT_SECONDS = 300;
@@ -305,6 +306,7 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         'Projects also keep tickets (like API-12): see project_plan, list_tickets and get_ticket. When a task asks you to work on a ' +
         'ticket, read it with get_ticket, keep it current with update_ticket and comment_ticket, and mark the task done when the ' +
         'work is ready for review. ' +
+        (store.onyx.enabled ? 'For company knowledge outside Orco (docs, wikis, chat history), use search_knowledge. ' : '') +
         UNTRUSTED_NOTE,
     },
   );
@@ -531,6 +533,26 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
     async ({ query, project, kinds, limit }) =>
       run(() => ({ note: UNTRUSTED_NOTE, results: searchAll(store, me, query, { project, kinds, limit }) })),
   );
+
+  // Only where an org admin connected Onyx; the search leaves Orco, so it is marked open-world.
+  if (store.onyx.enabled) {
+    server.registerTool(
+      'search_knowledge',
+      {
+        annotations: { readOnlyHint: true, openWorldHint: true },
+        description:
+          'Search the organisation’s knowledge in Onyx: documents from its Slack, Drive, Confluence, wikis and the rest. ' +
+          'Use it for company facts and past decisions that are not in Orco; use search for what is in Orco. Most relevant first.',
+        inputSchema: z.object({
+          query: z.string().describe('A question or keywords, up to 2048 characters'),
+          sources: z.array(z.string()).optional().describe('Only these Onyx sources, like slack or google_drive'),
+          since: z.string().optional().describe('Only documents updated on or after this date, like 2026-01-31'),
+          limit: z.number().int().min(1).max(10).optional().describe('Default 5'),
+        }),
+      },
+      async ({ query, sources, since, limit }) => run(async () => ({ note: ONYX_NOTE, results: await store.onyx.search(me, query, { sources, since, limit }) })),
+    );
+  }
 
   server.registerTool(
     'my_notes',

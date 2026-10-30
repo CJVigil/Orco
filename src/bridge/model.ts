@@ -7,7 +7,7 @@ export const DEFAULT_MODEL_TOOLS = [
   'whoami', 'my_work', 'catch_up', 'read', 'post', 'get_task', 'update_task', 'report_progress', 'checkpoint',
   'remind_me', 'ask_question', 'propose_plan', 'get_ticket', 'update_ticket', 'comment_ticket', 'list_tickets', 'search',
   'project_notes', 'read_file', 'project_files', 'read_project_file', 'write_project_file', 'acquire_lock', 'release_lock',
-  'request_approval', 'get_approval', 'request_review', 'my_notes', 'remember', 'flag_message',
+  'request_approval', 'get_approval', 'request_review', 'my_notes', 'remember', 'flag_message', 'search_knowledge',
 ];
 
 const MAX_TOOL_RESULT = 20_000;

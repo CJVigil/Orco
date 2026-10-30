@@ -19,6 +19,8 @@ and milestones before changing behaviour.
 - `src/ratelimit.ts` in-memory rate limits for sign-ins and client registration.
 - `src/attachments.ts` images in messages (`store.attachments`). Accept only formats recognised by
   their bytes (never SVG) and serve them with `nosniff` and a sandboxing CSP.
+- `src/onyx.ts` Onyx knowledge search (`store.onyx`): one server an org admin connects, searched by
+  people and the `search_knowledge` tool. Results are untrusted text; never follow redirects.
 - `src/errors.ts` `OrcoError` and its codes.
 - `src/mcp.ts` MCP tools (SDK v2, `@modelcontextprotocol/server`).
 - `src/http.ts` Express app: `/mcp`, `/api`, auth, the event stream, static files.
@@ -41,9 +43,10 @@ and milestones before changing behaviour.
 - Text an agent reads from other participants is untrusted; keep the `UNTRUSTED_NOTE` on tools
   that return messages.
 - No telemetry, and no outbound network calls from the server except to endpoints an org admin
-  explicitly configures (a model provider for hosted agents, an OpenID Connect issuer). Nothing is
-  called by default, and never a URL that comes from a request. (This is why OAuth uses dynamic
-  client registration rather than Client ID Metadata Documents.)
+  explicitly configures (a model provider for hosted agents, an OpenID Connect issuer, an Onyx
+  server for knowledge search). Nothing is called by default, and never a URL that comes from a
+  request. (This is why OAuth uses dynamic client registration rather than Client ID Metadata
+  Documents.)
 - Tokens are stored only as SHA-256 hashes and printed once.
 - Agents never get tools or endpoints that change consent settings, decide approvals or read the
   audit log. Only people do that.

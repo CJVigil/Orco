@@ -604,6 +604,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
       kind: me.kind,
       owner: store.ownerName(me),
       orgAdmin: store.isOrgAdmin(me),
+      onyx: store.onyx.enabled,
       ...(me.kind === 'user' && !me.scope ? { logins: store.identities.of(me.id) } : {}),
     });
   });
@@ -657,6 +658,30 @@ export function createApp(store: Store, options: AppOptions = {}) {
         shared: b.shared === true,
       }),
     );
+  });
+  // Onyx knowledge search: one server, connected by an org admin (see onyx.ts).
+  api.get('/onyx', (req, res) => {
+    res.json({ settings: store.onyx.settings(req.participant!), secrets: store.secrets.enabled });
+  });
+  api.post('/onyx', (req, res) => {
+    const b = req.body ?? {};
+    res.json(
+      store.onyx.save(req.participant!, {
+        baseUrl: String(b.base_url ?? ''),
+        apiKey: typeof b.api_key === 'string' ? b.api_key : undefined,
+        persona: b.persona === undefined || b.persona === null || b.persona === '' ? null : Number(b.persona),
+        documentSets: b.document_sets,
+        sources: b.sources,
+      }),
+    );
+  });
+  api.delete('/onyx', (req, res) => {
+    store.onyx.remove(req.participant!);
+    res.status(204).end();
+  });
+  api.get('/onyx/search', async (req, res) => {
+    const sources = typeof req.query.sources === 'string' && req.query.sources ? req.query.sources.split(',') : undefined;
+    res.json(await store.onyx.search(req.participant!, String(req.query.q ?? ''), { limit: optionalInt(req.query.limit), sources }));
   });
   api.delete('/models/:name', (req, res) => {
     store.hosted.removeProvider(req.participant!, String(req.params.name));

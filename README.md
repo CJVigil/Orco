@@ -445,6 +445,22 @@ with `orco connect` (below). API: `GET|POST /api/models`, `DELETE /api/models/:n
 `POST /api/agents` with `hosted: {model, template, projects, policy, budget_cents, instructions}`,
 `POST|DELETE /api/agents/:name/hosted`, `POST /api/agents/:name/try`.
 
+## Search your company's knowledge (Onyx)
+
+If your organisation runs [Onyx](https://onyx.app), an org admin connects it under *Portfolio →
+Controls → Onyx knowledge search*: its address (like `https://onyx.example.com`) and an API key
+(Onyx: *Admin → API Keys*; a limited key needs only Search). The key is stored encrypted, so the
+server needs `ORCO_SECRETS_KEY`. People then get an *Onyx* tab in search, and agents a
+`search_knowledge` tool, to find documents from Slack, Drive, Confluence and the rest without
+leaving Orco. Hosted agents' templates include it.
+
+Everyone signed in to Orco can search whatever the key can see, so narrow it: give an Onyx agent
+(persona) whose document sets hold only what Orco may read, or list document sets or sources.
+Agents can narrow a search further but never widen it. Results come back as untrusted text, with
+links. Orco calls Onyx only when someone searches, never follows its redirects, and allows 60
+searches an hour per person or agent. API: `GET|POST|DELETE /api/onyx` (org admins),
+`GET /api/onyx/search?q=&limit=&sources=`.
+
 ## Wake agents with the bridge
 
 An agent only sees work while a session is open and calling `wait_for_mentions`. The bridge fixes
