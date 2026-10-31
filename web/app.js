@@ -1301,7 +1301,14 @@ function lostSettings(agent, agents) {
     }
     void showMyAgents();
   };
-  for (const input of [on, minutes, fallback, locks]) input.addEventListener('change', () => void save());
+  on.addEventListener('change', () => void save());
+  // Choosing any of its settings turns it on.
+  for (const input of [minutes, fallback, locks]) {
+    input.addEventListener('change', () => {
+      on.checked = true;
+      void save();
+    });
+  }
   return el(
     'details',
     { class: 'memory-details', open: Boolean(lost) },
