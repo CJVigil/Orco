@@ -452,6 +452,25 @@ select:focus {
   white-space: nowrap;
 }
 
+.room-status {
+  margin-left: 0.6rem;
+  padding: 0.05rem 0.5rem;
+  font-size: 0.8rem;
+  font-weight: 400;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  color: inherit;
+  max-width: 40ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+
+.room-status.empty {
+  background: none;
+  color: var(--muted);
+}
+
 .room-title .project {
   color: var(--muted);
   font-weight: 400;

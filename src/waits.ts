@@ -1,4 +1,5 @@
 import { OrcoError } from './errors.js';
+import { roomMatcher } from './rooms.js';
 import type { Participant, Store } from './store.js';
 import { OPEN_STATES } from './tasks.js';
 
@@ -11,11 +12,15 @@ export interface WaitConditions {
   locks?: { project: string; name: string }[];
   /** Also wake on an unseen mention (it stays unseen). */
   mentions?: boolean;
+  /** Wake on a new message in rooms matching these patterns (ops/*, or a * project with an alerts room), after a message id (default: now). */
+  rooms?: { patterns: string[]; afterId?: number };
 }
 
 export interface WaitResult {
   fired: string[];
   timedOut: boolean;
+  /** With rooms: the new messages' ids, oldest first. */
+  messages?: number[];
 }
 
 const RECHECK_MS = 5_000;
@@ -29,9 +34,12 @@ export async function waitFor(store: Store, actor: Participant, conditions: Wait
   const tickets = conditions.tickets ?? [];
   const tasks = conditions.tasks ?? [];
   const locks = conditions.locks ?? [];
-  if (tickets.length + tasks.length + locks.length === 0 && !conditions.mentions) {
-    throw new OrcoError('invalid', 'Give at least one ticket, task, lock or mentions to wait for');
+  const rooms = conditions.rooms ? roomMatcher(conditions.rooms.patterns) : null;
+  const roomsAfter = conditions.rooms?.afterId ?? store.latestMessageId();
+  if (tickets.length + tasks.length + locks.length === 0 && !conditions.mentions && !rooms) {
+    throw new OrcoError('invalid', 'Give at least one ticket, task, lock, room or mentions to wait for');
   }
+  let newMessages: number[] = [];
   if (tickets.length + tasks.length + locks.length > MAX_CONDITIONS) throw new OrcoError('invalid', `Wait for at most ${MAX_CONDITIONS} things at once`);
   // Check everything once up front, so a bad ref fails now instead of after the wait.
   for (const t of tickets) {
@@ -57,13 +65,22 @@ export async function waitFor(store: Store, actor: Participant, conditions: Wait
       if (!store.locks.list(actor, l.project).some((held) => held.name === l.name)) fired.push(`Lock ${l.name} in ${l.project} is free`);
     }
     if (conditions.mentions && store.unseenMentions(actor).length > 0) fired.push('You have unseen mentions; read them with wait_for_mentions');
+    if (rooms) {
+      const fresh = store.messagesAfter(actor, roomsAfter, 200).filter((m) => rooms.room(m.room));
+      if (fresh.length) {
+        newMessages = fresh.map((m) => m.id);
+        const where = [...new Set(fresh.map((m) => m.room))].join(', ');
+        fired.push(`${fresh.length} new message${fresh.length === 1 ? '' : 's'} in ${where}`);
+      }
+    }
     return fired;
   };
 
+  const result = (fired: string[], timedOut: boolean): WaitResult => (rooms && !timedOut ? { fired, timedOut, messages: newMessages } : { fired, timedOut });
   const now = check();
-  if (now.length > 0 || timeoutMs <= 0) return { fired: now, timedOut: now.length === 0 };
+  if (now.length > 0 || timeoutMs <= 0) return result(now, now.length === 0);
   return new Promise<WaitResult>((resolve) => {
-    const events = ['ticket', 'task', 'lock', `mention:${actor.id}`];
+    const events = ['ticket', 'task', 'lock', `mention:${actor.id}`, ...(rooms ? ['message'] : [])];
     let pending: ReturnType<typeof setTimeout> | null = null;
     const finish = (result: WaitResult) => {
       clearTimeout(timer);
@@ -77,7 +94,7 @@ export async function waitFor(store: Store, actor: Participant, conditions: Wait
       pending = null;
       try {
         const fired = check();
-        if (fired.length > 0) finish({ fired, timedOut: false });
+        if (fired.length > 0) finish(result(fired, false));
       } catch {
         // Lost access mid-wait (removed from a project); report it as a wake-up with nothing fired.
         finish({ fired: ['Something you were waiting on is no longer visible to you'], timedOut: false });

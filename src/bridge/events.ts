@@ -15,6 +15,8 @@ export interface EventStreamOptions {
 export class EventStream {
   private readonly controller = new AbortController();
   private stopped = false;
+  /** The id of the last frame read: sent back on reconnect so the server replays what was missed. */
+  private lastEventId: string | null = null;
 
   constructor(private readonly options: EventStreamOptions) {}
 
@@ -33,7 +35,8 @@ export class EventStream {
     let backoff = min;
     while (!this.stopped) {
       try {
-        const res = await fetch(this.options.url, { headers: this.options.headers, signal: this.controller.signal });
+        const headers = this.lastEventId === null ? this.options.headers : { ...this.options.headers, 'Last-Event-ID': this.lastEventId };
+        const res = await fetch(this.options.url, { headers, signal: this.controller.signal });
         if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
         this.options.onStatus?.('connected');
         backoff = min;
@@ -65,6 +68,7 @@ export class EventStream {
         const data: string[] = [];
         for (const line of chunk.split('\n')) {
           if (line.startsWith('event:')) event = line.slice(6).trim();
+          else if (line.startsWith('id:')) this.lastEventId = line.slice(3).trim();
           else if (line.startsWith('data:')) data.push(line.slice(5).trimStart());
         }
         if (data.length === 0) continue;

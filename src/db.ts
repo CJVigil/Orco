@@ -837,6 +837,20 @@ export const MIGRATIONS = [
     SELECT s.agent_id, a.owner_id, 1, s.cents, s.note, s.created_at FROM agent_spend s JOIN participants a ON a.id = s.agent_id;
   DROP TABLE agent_spend;
   `,
+  // 25: one current-state line per room, replaced in place and optionally expiring.
+  `
+  CREATE TABLE room_status (
+    room_id INTEGER PRIMARY KEY REFERENCES rooms(id),
+    text TEXT NOT NULL,
+    set_by INTEGER NOT NULL REFERENCES participants(id),
+    set_at TEXT NOT NULL,
+    expires_at TEXT
+  );
+  `,
+  // 26: when each participant was last seen, so presence survives a restart.
+  `
+  ALTER TABLE participants ADD COLUMN last_seen_at TEXT;
+  `,
 ];
 
 export interface OpenOptions {

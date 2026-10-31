@@ -1110,6 +1110,17 @@ function renderRoomTitle() {
   }
   if (state.room.project) title.append(el('span', { class: 'project', text: `${state.room.project} / ` }));
   title.append(`#${state.room.name}`);
+  // The room's status line: its current state, set by anyone who can write here.
+  const status = roomStatuses.get(state.room.ref);
+  title.append(
+    el('button', {
+      class: `room-status${status ? '' : ' empty'}`,
+      type: 'button',
+      title: status ? `Set by ${status.setBy}${status.expiresAt ? `, clears ${formatTime(status.expiresAt)}` : ''}. Click to change.` : 'Set this room\'s current status',
+      text: status ? status.text : 'Set status',
+      onclick: () => void setRoomStatus(),
+    }),
+  );
   $('add-member').hidden = !state.room.project;
   $('show-locks').hidden = !state.room.project;
   $('more').hidden = !state.room.project;
@@ -1258,6 +1269,20 @@ async function releaseLock(lock, force) {
   } catch (err) {
     alert(err.message);
   }
+}
+
+/** Room status lines by room ref, kept current by the event stream. */
+const roomStatuses = new Map();
+
+async function setRoomStatus() {
+  const room = state.room.ref;
+  await ask({
+    title: `Status of #${state.room.name}`,
+    label: 'Current state, in one line',
+    hint: 'Like "aisle 12 blocked, wave 2 released". Everyone here sees it under the room name. Leave it empty to clear it.',
+    value: roomStatuses.get(room)?.text ?? '',
+    submit: (text) => api('/room-status', { method: 'POST', body: { room, text } }),
+  });
 }
 
 async function takeLock() {
@@ -1779,6 +1804,25 @@ function connect() {
     if (state.panel !== 'members') return;
     clearTimeout(presenceTimer);
     presenceTimer = setTimeout(() => void showMembers(), 300);
+  });
+  events.addEventListener('status', (event) => {
+    const { room, status } = JSON.parse(event.data);
+    if (status) roomStatuses.set(room, status);
+    else roomStatuses.delete(room);
+    if (state.view === 'room' && state.room?.ref === room) renderRoomTitle();
+  });
+  // Back after a drop: missed messages were replayed; reload what may have changed meanwhile.
+  events.addEventListener('resync', async () => {
+    peopleCache.clear();
+    await loadStructure();
+    await selectRoom();
+    refreshStatus();
+    scheduleInbox();
+    portfolio.onEvent();
+  });
+  events.addEventListener('shutdown', () => {
+    dot.classList.remove('live');
+    dot.title = 'Orco is restarting…';
   });
   events.onerror = () => {
     dot.classList.remove('live');

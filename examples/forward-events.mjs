@@ -44,12 +44,15 @@ function handle(me, event, data) {
   }
 }
 
+// The id of the last frame seen: after a drop, the server replays what was posted meanwhile.
+let lastEventId = null;
+
 async function run() {
   const me = await fetch(`${base}/api/me`, { headers }).then((r) => {
     if (!r.ok) throw new Error(`Orco said ${r.status}; check ORCO_URL and ORCO_TOKEN`);
     return r.json();
   });
-  const res = await fetch(`${base}/api/events`, { headers });
+  const res = await fetch(`${base}/api/events`, { headers: lastEventId === null ? headers : { ...headers, 'Last-Event-ID': lastEventId } });
   if (!res.ok || !res.body) throw new Error(`Event stream failed: ${res.status}`);
   console.log(`Forwarding events for ${me.name}`);
   let buffer = '';
@@ -61,6 +64,7 @@ async function run() {
       buffer = buffer.slice(end + 2);
       const event = /^event: (.*)$/m.exec(block)?.[1];
       const data = /^data: (.*)$/m.exec(block)?.[1];
+      lastEventId = /^id: (.*)$/m.exec(block)?.[1] ?? lastEventId;
       if (event && data) handle(me.name, event, JSON.parse(data));
     }
   }

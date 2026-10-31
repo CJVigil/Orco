@@ -308,7 +308,7 @@ export function main(): void {
       const proxyAuth = proxyAuthSetting(process.env.ORCO_AUTH_HEADER, process.env.ORCO_AUTH_LABEL, trust, process.env.ORCO_AUTH_SECRET);
       const oidcConfig = oidcSetting(process.env, publicUrl);
       const oidc = oidcConfig ? new Oidc(oidcConfig) : undefined;
-      const { app, close, oauth } = createApp(store, { publicUrl, setupCode, proxyAuth, oidc });
+      const { app, close, closeStreams, oauth } = createApp(store, { publicUrl, setupCode, proxyAuth, oidc });
       const warning = networkFilesystemWarning(values.db);
       if (warning) console.error(warning);
       const backups = backupsFromEnv(store);
@@ -368,6 +368,7 @@ export function main(): void {
         console.log(`${signal} received, shutting down`);
         if (backupTimer) clearInterval(backupTimer);
         void hosted?.stop();
+        closeStreams();
         server.close();
         server.closeAllConnections();
         void close().finally(() => {

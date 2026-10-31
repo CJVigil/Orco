@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Live updates that survive a drop (#60): event frames carry ids, a reconnect with `Last-Event-ID`
+  replays the missed messages and sends `resync`, and a restart sends `shutdown` first. The web
+  app, the bridge and `examples/forward-events.mjs` pick up where they left off.
+- Follow rooms without being mentioned (#64): `wait_for` takes room patterns (`ops/*`, `*/alerts`)
+  and returns the new message ids; `/api/events` takes `?rooms=` and `?types=`.
+- Room status (#62): one current-state line per room, replaced in place and optionally expiring,
+  shown under the room name, in `read` and `catch_up`, and sent to streams on connect.
+- Presence (#61): going quiet is an event too, with who, the new status, last seen and why, sent to
+  people who work with them; last seen is kept across restarts and shown by `list_participants`
+  and `find_agent`.
+- `wait_for_mentions` (#63): at most `limit` (50) at a time with a remaining count, and `after_id`
+  to acknowledge, so a lost reply or a dead session never loses a mention. `orco watch --after ID`.
+
 - Security: a live event stream ends when its credential stops working (a new token, signing out,
   an expired session, a finished task), and read-only project members can no longer release other
   people's locks.

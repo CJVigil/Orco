@@ -16,6 +16,7 @@ import { SignIns } from './signins.js';
 import { Identities } from './identities.js';
 import { Hosted } from './hosted.js';
 import { Onyx } from './onyx.js';
+import { RoomStatuses } from './room-status.js';
 import { Onboarding } from './onboarding.js';
 import { Policies } from './policies.js';
 import { Portfolios } from './portfolio.js';
@@ -258,6 +259,7 @@ export class Store {
   readonly identities: Identities;
   readonly hosted: Hosted;
   readonly onyx: Onyx;
+  readonly roomStatus: RoomStatuses;
   readonly controls: Controls;
   readonly policies: Policies;
   readonly decisions: Decisions;
@@ -298,6 +300,7 @@ export class Store {
     this.identities = new Identities(this);
     this.hosted = new Hosted(this);
     this.onyx = new Onyx(this, undefined, () => this.now());
+    this.roomStatus = new RoomStatuses(this);
     this.controls = new Controls(this);
     this.policies = new Policies(this);
     this.decisions = new Decisions(this);
@@ -1007,6 +1010,20 @@ export class Store {
     return rows.map((row) => this.toMessage(row));
   }
 
+  /** Messages the actor can see after an id, oldest first (at most `limit`): a live stream catching up after a drop. */
+  messagesAfter(actor: Participant, afterId: number, limit: number): Message[] {
+    const visible = this.projectFilter(actor, 'r.project_id');
+    const rows = this.db
+      .prepare(`${MESSAGE_SELECT} WHERE m.id > ? AND (r.project_id IS NULL OR ${visible.sql}) ORDER BY m.id LIMIT ?`)
+      .all(afterId, ...visible.params, limit) as unknown as MessageRow[];
+    return rows.filter((row) => this.canSeeRoomId(actor, row.room_id)).map((row) => this.toMessage(row));
+  }
+
+  /** The newest message id on the server (0 when there are none). */
+  latestMessageId(): number {
+    return (this.db.prepare('SELECT coalesce(max(id), 0) AS id FROM messages').get() as { id: number }).id;
+  }
+
   unseenMentions(actor: Participant): Message[] {
     const rows = this.db
       .prepare(
@@ -1041,9 +1058,38 @@ export class Store {
     return `${actor.id}:${actor.scope!.taskId}`;
   }
 
+  /**
+   * Waits for unseen mentions and returns at most `limit` of them, with how many more are waiting.
+   * Without `afterId` they count as seen once returned. With it, `afterId` is the acknowledgement:
+   * mentions up to it are marked seen first, and the ones returned stay unseen until the next call
+   * acknowledges them, so a reply lost on the way (or a session that dies) gets the same batch again.
+   */
+  async waitForMentionBatch(
+    actor: Participant,
+    timeoutMs: number,
+    signal?: AbortSignal,
+    options: { afterId?: number; limit?: number } = {},
+  ): Promise<{ messages: Message[]; remaining: number }> {
+    const limit = options.limit ?? 50;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new OrcoError('invalid', 'limit is 1 to 500');
+    return this.mentionBatch(actor, timeoutMs, signal, options.afterId, limit);
+  }
+
+  /** Every unseen mention, each returned once (see waitForMentionBatch for batches and acknowledgement). */
   async waitForMentions(actor: Participant, timeoutMs: number, signal?: AbortSignal): Promise<Message[]> {
+    return (await this.mentionBatch(actor, timeoutMs, signal, undefined, Infinity)).messages;
+  }
+
+  private async mentionBatch(actor: Participant, timeoutMs: number, signal: AbortSignal | undefined, afterId: number | undefined, limit: number) {
+    const options = { afterId };
+    if (options.afterId !== undefined) this.markMentionsSeen(actor, options.afterId);
+    const take = (all: Message[]) => {
+      const messages = Number.isFinite(limit) ? all.slice(0, limit) : all;
+      if (options.afterId === undefined) this.deliver(actor, messages);
+      return { messages, remaining: all.length - messages.length };
+    };
     const ready = this.unseenMentions(actor);
-    if (ready.length > 0 || timeoutMs <= 0) return this.deliver(actor, ready);
+    if (ready.length > 0 || timeoutMs <= 0) return take(ready);
     await new Promise<void>((resolve) => {
       const event = `mention:${actor.id}`;
       const done = () => {
@@ -1056,7 +1102,7 @@ export class Store {
       this.events.on(event, done);
       signal?.addEventListener('abort', done);
     });
-    return this.deliver(actor, this.unseenMentions(actor));
+    return take(this.unseenMentions(actor));
   }
 
   private deliver(actor: Participant, messages: Message[]): Message[] {
@@ -1129,6 +1175,25 @@ export class Store {
       return Object.fromEntries(Object.entries(v).map(([k, x]) => [hide(k), walk(x, depth + 1)]));
     };
     return walk(value, 0) as T;
+  }
+
+  /** Whether two participants work together: the same person (or their agents), or a shared project. */
+  sharesProject(viewer: Participant, otherId: number): boolean {
+    const other = this.participantById(otherId);
+    if (!other) return false;
+    const a = this.humanOf(viewer);
+    const b = this.humanOf(other);
+    if (a === b) return true;
+    return this.db.prepare('SELECT 1 FROM project_access x JOIN project_access y ON y.project_id = x.project_id WHERE x.user_id = ? AND y.user_id = ? LIMIT 1').get(a, b) !== undefined;
+  }
+
+  recordSeen(id: number, at: string): void {
+    this.db.prepare('UPDATE participants SET last_seen_at = ? WHERE id = ?').run(at, id);
+  }
+
+  /** When a participant was last seen, as stored (at most 30 seconds behind), or null. */
+  lastSeenAt(id: number): string | null {
+    return (this.db.prepare('SELECT last_seen_at FROM participants WHERE id = ?').get(id) as { last_seen_at: string | null } | undefined)?.last_seen_at ?? null;
   }
 
   humanOf(actor: Participant): number {

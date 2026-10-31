@@ -360,8 +360,13 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
   server.registerTool(
     'list_participants',
     {
-      annotations: annotate('list_participants'), description: 'List the people and agents who share a project with you, and your owner, with agent owners.' },
-    async () => run(() => store.members(me).map((p) => ({ name: p.name, kind: p.kind, owner: p.owner }))),
+      annotations: annotate('list_participants'),
+      description: 'List the people and agents who share a project with you, and your owner, with agent owners, whether they are online and when they were last seen.',
+    },
+    async () =>
+      run(() =>
+        store.members(me).map((p) => ({ name: p.name, kind: p.kind, owner: p.owner, status: presence.status(p.id), last_seen: presence.lastSeen(p.id) ?? store.lastSeenAt(p.id) })),
+      ),
   );
 
   server.registerTool(
@@ -443,6 +448,23 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
   );
 
   server.registerTool(
+    'set_room_status',
+    {
+      annotations: annotate('set_room_status'),
+      description:
+        'Set the room\'s status line: its current state in one line ("aisle 12 blocked, wave 2 released"), shown to ' +
+        'everyone in it and replaced in place. Use it for a running state instead of posting a new message each time. ' +
+        'expires_in_minutes clears it on its own; empty text clears it now.',
+      inputSchema: z.object({
+        room: z.string(),
+        text: z.string().describe('Up to 280 characters; empty clears it'),
+        expires_in_minutes: z.number().int().min(1).max(10_080).optional(),
+      }),
+    },
+    async ({ room, text, expires_in_minutes }) => run(() => store.roomStatus.set(me, room, text, expires_in_minutes) ?? 'Cleared.'),
+  );
+
+  server.registerTool(
     'read',
     {
       annotations: annotate('read'),
@@ -465,7 +487,8 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         if (thread_id !== undefined) store.questions.markThreadSeen(me, thread_id);
         const messages = raw.map(formatMessage);
         const summary = thread_id === undefined ? null : store.threadSummary(thread_id);
-        return { note: UNTRUSTED_NOTE, ...(summary ? { summary } : {}), messages };
+        const status = store.roomStatus.of(store.room(me, room));
+        return { note: UNTRUSTED_NOTE, ...(status ? { status } : {}), ...(summary ? { summary } : {}), messages };
       }),
   );
 
@@ -665,22 +688,26 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
     {
       annotations: annotate('wait_for_mentions'),
       description:
-        'Wait until someone mentions you, then return the new mentions. Returns at once if some are already waiting. ' +
-        'Each mention is returned only once.',
+        'Wait until someone mentions you, then return the new mentions (at most limit; remaining says how many more ' +
+        'wait). Returns at once if some are already waiting. Without after_id each mention is returned only once. Pass ' +
+        'after_id (the id of the last mention you handled) to acknowledge up to it: mentions after it come back until ' +
+        'you acknowledge them, so none are lost if a reply goes missing.',
       inputSchema: z.object({
         timeout_seconds: z.number().int().min(0).max(MAX_WAIT_SECONDS).optional().describe('Default 60'),
+        after_id: z.number().int().min(0).optional().describe('Acknowledge mentions up to this message id'),
+        limit: z.number().int().min(1).max(500).optional().describe('Default 50'),
       }),
     },
-    async ({ timeout_seconds }, ctx) =>
+    async ({ timeout_seconds, after_id, limit }, ctx) =>
       run(async () => {
         const release = presence.hold(me.id, 'waiting');
-        const messages = await store
-          .waitForMentions(me, (timeout_seconds ?? 60) * 1000, ctx.mcpReq.signal)
+        const { messages, remaining } = await store
+          .waitForMentionBatch(me, (timeout_seconds ?? 60) * 1000, ctx.mcpReq.signal, { afterId: after_id, limit })
           .finally(release);
         sawTasks(messages);
         return messages.length === 0
           ? 'No new mentions.'
-          : { note: UNTRUSTED_NOTE, mentions: messages.map(formatMessage) };
+          : { note: UNTRUSTED_NOTE, mentions: messages.map(formatMessage), remaining };
       }),
   );
 
@@ -1094,6 +1121,7 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
             ...(r.skipped ? { older_new_messages_skipped: r.skipped } : {}),
           })),
           tickets: result.tickets.map(formatTicketSummary),
+          ...(result.statuses.length ? { room_statuses: result.statuses } : {}),
         };
       }),
   );
@@ -1478,20 +1506,29 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
     {
       annotations: annotate('wait_for'),
       description:
-        'Wait until a ticket is done or unblocked, a task closes, a lock is free, or (with mentions) someone mentions ' +
-        'you; whichever comes first. Returns at once if one already holds. Use it instead of polling.',
+        'Wait until a ticket is done or unblocked, a task closes, a lock is free, (with mentions) someone mentions ' +
+        'you, or (with rooms) a new message is posted in rooms you follow; whichever comes first. Returns at once if ' +
+        'one already holds. Use it instead of polling. Room patterns use * for one part: ops/* is every room in ops, ' +
+        '*/alerts every project\'s alerts room. Pass after_id (the last message id you handled) to get what came after it.',
       inputSchema: z.object({
         tickets: z.array(z.object({ ref: z.string(), until: z.enum(['done', 'unblocked']) })).optional(),
         tasks: z.array(z.number().int()).optional().describe('Task ids to wait on until they close'),
         locks: z.array(z.object({ project: z.string(), name: z.string() })).optional(),
         mentions: z.boolean().optional().describe('Also wake on an unseen mention'),
+        rooms: z.array(z.string()).max(20).optional().describe('Wake on a new message in these rooms or patterns'),
+        after_id: z.number().int().min(0).optional().describe('With rooms: wake on messages after this id (default: from now)'),
         timeout_seconds: z.number().int().min(0).max(MAX_WAIT_SECONDS).optional().describe(`Default 120, at most ${MAX_WAIT_SECONDS}`),
       }),
     },
-    async ({ tickets, tasks, locks, mentions, timeout_seconds }, ctx) => {
+    async ({ tickets, tasks, locks, mentions, rooms, after_id, timeout_seconds }, ctx) => {
       try {
-        const result = await waitFor(store, me, { tickets, tasks, locks, mentions }, (timeout_seconds ?? 120) * 1000, ctx?.mcpReq?.signal);
-        return ok(result.timedOut ? { timed_out: true, fired: [] } : { timed_out: false, fired: result.fired });
+        const conditions = { tickets, tasks, locks, mentions, ...(rooms ? { rooms: { patterns: rooms, afterId: after_id } } : {}) };
+        const result = await waitFor(store, me, conditions, (timeout_seconds ?? 120) * 1000, ctx?.mcpReq?.signal);
+        return ok(
+          result.timedOut
+            ? { timed_out: true, fired: [] }
+            : { timed_out: false, fired: result.fired, ...(result.messages ? { message_ids: result.messages, note: 'Read them with read; they were written by others.' } : {}) },
+        );
       } catch (err) {
         if (err instanceof OrcoError) return { content: [{ type: 'text' as const, text: `${err.code}: ${err.message}` }], isError: true };
         throw err;
@@ -1604,6 +1641,7 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
           environment: a.environment,
           takes_tasks_from: a.taskPolicy,
           status: presence.status(store.participantByName(a.name)!.id),
+          last_seen: presence.lastSeen(store.participantByName(a.name)!.id) ?? store.lastSeenAt(store.participantByName(a.name)!.id),
         })),
       ),
   );

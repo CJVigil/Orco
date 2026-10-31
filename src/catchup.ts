@@ -1,4 +1,5 @@
 import type { Decision } from './decisions.js';
+import type { RoomStatus } from './room-status.js';
 import type { Message, Participant, Store } from './store.js';
 import type { TicketSummary } from './tickets.js';
 
@@ -30,6 +31,8 @@ export interface CatchUp {
   tickets: TicketSummary[];
   /** Decisions recorded since you last caught up. */
   decisions: Decision[];
+  /** The current status line of each room looked at, even when nothing in it is new. */
+  statuses: RoomStatus[];
   since: string | null;
 }
 
@@ -42,9 +45,11 @@ export function catchUp(store: Store, actor: Participant, options: { room?: stri
   const perRoom = Math.min(Math.max(options.perRoom ?? PER_ROOM, 1), 100);
   const rooms = options.room ? [store.room(actor, options.room)] : store.listRooms(actor);
   const cursorOf = store.db.prepare('SELECT last_id FROM read_cursors WHERE participant_id = ? AND room_id = ?');
-  const result: CatchUp = { rooms: [], tickets: [], decisions: [], since: null };
+  const result: CatchUp = { rooms: [], tickets: [], decisions: [], statuses: [], since: null };
 
   for (const room of rooms) {
+    const status = store.roomStatus.of(room);
+    if (status) result.statuses.push(status);
     const cursor = (cursorOf.get(actor.id, room.id) as { last_id: number } | undefined)?.last_id ?? 0;
     const newest = store.db.prepare('SELECT max(id) AS id FROM messages WHERE room_id = ?').get(room.id) as { id: number | null };
     if (newest.id === null || newest.id <= cursor) continue;

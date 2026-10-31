@@ -32,7 +32,8 @@ export const CLIENT_USAGE = `Client commands (talk to a running server; set ORCO
   catch-up [room]               New messages, thread digests and changed tickets since you last looked
   wait [--timeout S]            Wait until someone mentions you; prints the mentions (exit 2 on timeout)
   watch                         Like wait with --json and no timeout, retrying through network errors and restarts:
-                                prints the new mentions as JSON lines and exits. Each mention is delivered once.
+                                prints the new mentions as JSON lines and exits. Each mention is delivered once;
+                                with --after ID (the last one you handled) the rest come back until acknowledged.
   ack <message-id>              Mark your mentions up to that message as handled, without replying
   post <room> <text|-> [--thread ID] [--file PATH]...   Post a message (- reads stdin)
   read <room> [--thread ID] [--limit N]
@@ -227,6 +228,7 @@ export async function runClient(argv: string[], io: ClientIO): Promise<number> {
       priority: { type: 'string' },
       label: { type: 'string', multiple: true },
       timeout: { type: 'string' },
+      after: { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -295,6 +297,8 @@ export async function runClient(argv: string[], io: ClientIO): Promise<number> {
         const result = (await call('GET', `/api/catch-up${rest[0] ? `?room=${enc(rest[0])}` : ''}`)) as Json;
         print(result, () => {
           const out: string[] = [];
+          for (const s of result.statuses ?? []) out.push(`#${s.room} status: ${s.text} (${s.setBy})`);
+          if (result.statuses?.length) out.push('');
           for (const room of result.rooms) {
             out.push(`#${room.room}${room.skipped ? ` (${room.skipped} older new messages skipped)` : ''}`);
             for (const m of room.messages) out.push(formatMessage(m));
@@ -322,7 +326,9 @@ export async function runClient(argv: string[], io: ClientIO): Promise<number> {
           }
           let mentions: Json[];
           try {
-            mentions = (await call('GET', `/api/mentions/wait?timeout=${Math.max(1, Math.min(50, Math.ceil(left / 1000)))}`)) as Json[];
+            // --after <id> acknowledges up to the last mention a script handled; the rest come back until acknowledged.
+            const after = int(values.after, '--after');
+            mentions = (await call('GET', `/api/mentions/wait?timeout=${Math.max(1, Math.min(50, Math.ceil(left / 1000)))}${after !== undefined ? `&after_id=${after}` : ''}`)) as Json[];
             failures = 0;
           } catch (err) {
             // Auth and permission errors will not fix themselves; network errors and restarts will.

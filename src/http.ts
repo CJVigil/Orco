@@ -8,9 +8,10 @@ import { createMcpHandler } from '@modelcontextprotocol/server';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { MAX_ATTACHMENT_BYTES } from './attachments.js';
 import { buildMcpServer } from './mcp.js';
+import { roomMatcher } from './rooms.js';
 import { OAUTH_SCOPE, OAuth } from './oauth.js';
 import { oauthRouter } from './oauth-routes.js';
-import { Presence } from './presence.js';
+import { Presence, type PresenceChange } from './presence.js';
 import { RateLimiter } from './ratelimit.js';
 import { type Message, OrcoError, type Participant, type Store } from './store.js';
 import { parsePolicy } from './policies.js';
@@ -67,6 +68,10 @@ function packageFile(configured: string | null | undefined): string | undefined 
   return candidates.find((path) => existsSync(path));
 }
 const HEARTBEAT_MS = 25_000;
+/** Messages a reconnecting stream gets replayed at most; past that, its resync says it is incomplete. */
+const REPLAY_MAX = 500;
+/** Events every stream gets, whatever its filters. */
+const CONTROL_EVENTS = new Set(['ready', 'revoked', 'resync', 'shutdown', 'takeover']);
 
 function readCookie(header: string | undefined, name: string): string | undefined {
   for (const part of (header ?? '').split(';')) {
@@ -276,7 +281,7 @@ export function secureCookies(req: Request, publicUrl?: string): boolean {
 }
 
 export function createApp(store: Store, options: AppOptions = {}) {
-  const presence = options.presence ?? new Presence();
+  const presence = options.presence ?? new Presence(Date.now, (id, at) => store.recordSeen(id, at));
   const oauth = options.publicUrl ? new OAuth(store, options.publicUrl) : undefined;
   const logins = new RateLimiter(10, 15 * 60_000, options.now);
   const registrations = new RateLimiter(20, 3600_000, options.now);
@@ -383,6 +388,8 @@ export function createApp(store: Store, options: AppOptions = {}) {
   };
   const auth = authenticate(store, presence, undefined, proxyIdentity);
   const credentialOf = resolveCredential(store, undefined, proxyIdentity);
+  /** Open event streams, told when the server shuts down so their clients reconnect instead of guessing. */
+  const streams = new Set<() => void>();
   const mcpAuth = authenticate(store, presence, oauth);
 
   const withStatus = (viewer: Participant, people: (Participant & { owner: string | null })[]) => {
@@ -818,6 +825,15 @@ export function createApp(store: Store, options: AppOptions = {}) {
   api.get('/rooms', (req, res) => {
     const project = typeof req.query.project === 'string' ? req.query.project : undefined;
     res.json(store.listRooms(req.participant!, project));
+  });
+  // Room status lines: the current state of each room you can see, and setting one where you can write.
+  api.get('/room-status', (req, res) => {
+    res.json(store.roomStatus.visible(req.participant!));
+  });
+  api.post('/room-status', (req, res) => {
+    const b = req.body ?? {};
+    const minutes = b.expires_in_minutes === undefined || b.expires_in_minutes === null ? null : optionalInt(b.expires_in_minutes);
+    res.json({ status: store.roomStatus.set(req.participant!, String(b.room ?? ''), String(b.text ?? ''), minutes) });
   });
   api.post('/projects/:project/rooms', (req, res) => {
     res.status(201).json(store.createRoom(req.participant!, String(req.params.project), String(req.body?.name ?? '')));
@@ -1501,7 +1517,13 @@ export function createApp(store: Store, options: AppOptions = {}) {
     req.on('close', () => stop.abort());
     const release = presence.hold(req.participant!.id, 'waiting');
     try {
-      res.json(await store.waitForMentions(req.participant!, seconds * 1000, stop.signal));
+      const { messages, remaining } = await store.waitForMentionBatch(req.participant!, seconds * 1000, stop.signal, {
+        afterId: optionalInt(req.query.after_id),
+        limit: optionalInt(req.query.limit),
+      });
+      // Still a plain list, for older clients; how many more are waiting is in a header.
+      res.setHeader('X-Orco-Remaining', String(remaining));
+      res.json(messages);
     } finally {
       release();
     }
@@ -1605,61 +1627,91 @@ export function createApp(store: Store, options: AppOptions = {}) {
 
   api.get('/events', (req, res) => {
     const me = req.participant!;
+    // Optional filters: rooms by pattern (ops/*, */alerts) and event types. Control events always pass.
+    const rooms = typeof req.query.rooms === 'string' && req.query.rooms ? roomMatcher(req.query.rooms) : null;
+    const types = typeof req.query.types === 'string' && req.query.types ? new Set(req.query.types.split(',').map((t) => t.trim())) : null;
+    const lastEventId = optionalInt(req.headers['last-event-id'] ?? req.query.last_event_id);
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache, no-transform',
       Connection: 'keep-alive',
       'X-Accel-Buffering': 'no',
     });
+    // Every frame carries the newest message id, so a client that drops says where it was (Last-Event-ID).
+    let latest = store.latestMessageId();
+    const projectNames = new Map<number, string>();
+    const projectName = (id: number | null) => {
+      if (id === null) return null;
+      if (!projectNames.has(id)) projectNames.set(id, (store.db.prepare('SELECT name FROM projects WHERE id = ?').get(id) as { name: string } | undefined)?.name ?? '');
+      return projectNames.get(id)!;
+    };
     // Once a stream has ended, events already on their way to it are dropped.
-    const send = (event: string, data: unknown) => !res.writableEnded && res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    const send = (event: string, data: unknown, where?: { room?: string; projectId?: number | null }) => {
+      if (res.writableEnded) return false;
+      if (!CONTROL_EVENTS.has(event)) {
+        if (types && !types.has(event)) return false;
+        if (rooms && where && !(where.room !== undefined ? rooms.room(where.room) : rooms.project(projectName(where.projectId ?? null)))) return false;
+      }
+      const id = event === 'message' ? (data as Message).id : latest;
+      return res.write(`id: ${id}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
     const onMessage = (message: Message) => {
-      if (store.canSee(me, message.projectId)) send('message', message);
+      latest = Math.max(latest, message.id);
+      if (store.canSee(me, message.projectId)) send('message', message, { room: message.room });
     };
     const onStructure = () => send('structure', {});
     const onTask = (task: Task) => {
-      if (store.canSee(me, task.projectId)) send('task', task);
+      if (store.canSee(me, task.projectId)) send('task', task, { room: task.room });
       if (me.scope?.taskId === task.id) recheck(); // a task token ends with its task
     };
     const onApproval = (approval: Approval) => {
-      if (store.canSee(me, approval.projectId)) send('approval', approval);
+      if (store.canSee(me, approval.projectId)) send('approval', approval, { room: approval.room });
     };
     const onQuestion = (question: Question) => {
-      if (store.canSee(me, question.projectId)) send('question', question);
+      if (store.canSee(me, question.projectId)) send('question', question, { room: question.room });
     };
     const onLock = ({ projectId }: { projectId: number }) => {
-      if (store.canSee(me, projectId)) send('locks', { projectId });
+      if (store.canSee(me, projectId)) send('locks', { projectId }, { projectId });
     };
     const onTicket = (event: { projectId: number; ref: string | null }) => {
-      if (store.canSee(me, event.projectId)) send('ticket', event);
+      if (store.canSee(me, event.projectId)) send('ticket', event, { projectId: event.projectId });
     };
     const onNotes = ({ projectId }: { projectId: number }) => {
-      if (store.canSee(me, projectId)) send('notes', { projectId });
+      if (store.canSee(me, projectId)) send('notes', { projectId }, { projectId });
     };
     const onFlag = ({ ownerId }: { ownerId: number | null }) => {
       if (ownerId === me.id) send('flag', {});
     };
     const onSummary = (event: { projectId: number | null; threadId: number }) => {
-      if (store.canSee(me, event.projectId)) send('summary', event);
+      if (store.canSee(me, event.projectId)) send('summary', event, { projectId: event.projectId });
     };
     const onReview = (review: Review) => {
-      if (store.canSee(me, review.projectId)) send('review', { id: review.id, messageId: review.messageId, reviewer: review.reviewer, state: review.state });
+      if (store.canSee(me, review.projectId)) send('review', { id: review.id, messageId: review.messageId, reviewer: review.reviewer, state: review.state }, { projectId: review.projectId });
     };
     const onSuggestion = ({ projectId }: { projectId: number }) => {
-      if (store.canSee(me, projectId)) send('suggestion', { projectId });
+      if (store.canSee(me, projectId)) send('suggestion', { projectId }, { projectId });
     };
     const onSchedule = ({ projectId }: { projectId: number | null }) => {
-      if (store.canSee(me, projectId)) send('schedule', { projectId });
+      if (store.canSee(me, projectId)) send('schedule', { projectId }, { projectId });
     };
     const onWake = (wake: Wake) => {
       if (wake.agentId === me.id) send('wake', wake);
     };
     const onFiles = (event: { projectId: number; path: string }) => {
-      if (store.canSee(me, event.projectId)) send('files', event);
+      if (store.canSee(me, event.projectId)) send('files', event, { projectId: event.projectId });
     };
-    const onPresence = () => send('presence', {});
+    // Who came online or went quiet, for people who work with them (a timeout counts: nobody has to poll).
+    const onPresence = (id: number, change?: PresenceChange) => {
+      if (!change) return send('presence', {});
+      if (!store.sharesProject(me, id)) return false;
+      const who = store.participantById(id);
+      return who ? send('presence', { name: who.name, status: change.status, lastSeen: change.lastSeen, reason: change.reason }) : false;
+    };
+    const onRoomStatus = (event: { projectId: number | null; room: string; status: unknown }) => {
+      if (store.canSee(me, event.projectId)) send('status', { room: event.room, status: event.status }, { room: event.room });
+    };
     const onDecision = ({ projectId }: { projectId: number | null }) => {
-      if (store.canSee(me, projectId)) send('decision', { projectId });
+      if (store.canSee(me, projectId)) send('decision', { projectId }, { projectId });
     };
     const onPause = (event: { scope: string; projectId: number | null; agentId: number | null }) => {
       const mine = event.agentId !== null && (event.agentId === me.id || store.participantById(event.agentId)?.ownerId === me.id);
@@ -1686,6 +1738,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
     store.events.on('pause', onPause);
     store.events.on('decision', onDecision);
     store.events.on('controls', onControls);
+    store.events.on('room_status', onRoomStatus);
     presence.events.on('change', onPresence);
     // A stream lasts as long as the credential that opened it: a new token, a sign-out, an expired
     // session or a finished task's token ends it, at once when Orco knows and otherwise within a heartbeat.
@@ -1701,7 +1754,23 @@ export function createApp(store: Store, options: AppOptions = {}) {
     const release = presence.hold(me.id, req.query.bridge === '1' && me.kind === 'agent' ? 'bridges' : 'streams');
     const heartbeat = setInterval(() => recheck() && !res.writableEnded && res.write(': ping\n\n'), HEARTBEAT_MS);
     send('ready', { name: me.name });
+    // Back after a drop: what was posted meanwhile (that this stream would have carried), then a
+    // resync telling the client to reload tasks, approvals and its inbox.
+    if (lastEventId !== undefined) {
+      const missed = store.messagesAfter(me, lastEventId, REPLAY_MAX + 1);
+      for (const message of missed.slice(0, REPLAY_MAX)) send('message', message, { room: message.room });
+      send('resync', { replayed: Math.min(missed.length, REPLAY_MAX), complete: missed.length <= REPLAY_MAX });
+    }
+    // The current state of each room, so a dashboard has something to show the moment it connects.
+    for (const status of store.roomStatus.visible(me)) send('status', { room: status.room, status }, { room: status.room });
+    const goingAway = () => {
+      if (res.writableEnded) return;
+      res.write('retry: 3000\nevent: shutdown\ndata: {}\n\n');
+      res.end();
+    };
+    streams.add(goingAway);
     req.on('close', () => {
+      streams.delete(goingAway);
       clearInterval(heartbeat);
       store.events.off('credentials', recheck);
       store.events.off('ticket', onTicket);
@@ -1722,6 +1791,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
       store.events.off('pause', onPause);
       store.events.off('decision', onDecision);
       store.events.off('controls', onControls);
+      store.events.off('room_status', onRoomStatus);
       presence.events.off('change', onPresence);
       release();
     });
@@ -1831,6 +1901,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
       store.approvals.remindDue();
       store.runs.pruneLogs(store.limits.runLogDays);
       store.portfolios.runDue(store.digestSchedule);
+      store.roomStatus.sweep();
     } catch (err) {
       console.error('Sweep failed:', err);
     }
@@ -1840,8 +1911,14 @@ export function createApp(store: Store, options: AppOptions = {}) {
     app,
     presence,
     oauth,
+    /** Tells every open event stream the server is going away (with a retry hint), and closes them. */
+    closeStreams: () => {
+      for (const goingAway of [...streams]) goingAway();
+    },
     close: () => {
       clearInterval(stallSweep);
+      presence.stop();
+      for (const goingAway of [...streams]) goingAway();
       return mcp.close();
     },
   };
