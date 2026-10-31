@@ -100,6 +100,20 @@ describe('tickets for agents', () => {
     assert.ok(refs.every((ref) => store.tickets.get(ana, ref).assignee?.name === 'ana-bot'));
   });
 
+  it('posts a comment with each change in a bulk edit, leaving the handoff alone (#76)', () => {
+    const refs = Array.from({ length: 3 }, (_, i) => store.tickets.create(ana, 'api', { title: `Close ${i}`, handoff: 'keep me' }).ticket.ref);
+    store.tickets.updateMany(bot, [
+      { ref: refs[0]!, input: { status: 'Done' }, comment: 'Verified: deployed in v2.3' },
+      { ref: refs[1]!, input: { status: 'Done' }, comment: 'Verified: covered by API-1' },
+      { ref: refs[2]!, input: { status: 'Backlog' }, comment: '  ' },
+    ]);
+    const comments = (ref: string) => store.tickets.get(ana, ref).activity.filter((a) => a.kind === 'comment').map((a) => a.body);
+    assert.deepEqual(comments(refs[0]!), ['Verified: deployed in v2.3']);
+    assert.deepEqual(comments(refs[2]!), [], 'an empty comment adds nothing');
+    assert.equal(store.tickets.get(ana, refs[0]!).handoff?.text, 'keep me');
+    assert.equal(code(() => store.tickets.updateMany(bot, [{ ref: refs[0]!, input: {}, comment: 'x'.repeat(10_001) }])), 'invalid');
+  });
+
   it('opens a task from the owner when an agent starts its own ticket, and names criterion ids (#66, #68)', () => {
     const { ticket } = store.tickets.create(bot, 'api', { title: 'Mine', assignee: 'ana-bot', criteriaAdd: ['a', 'b'] });
     const started = store.tickets.startTask(bot, ticket.ref).ticket;

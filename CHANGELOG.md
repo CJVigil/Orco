@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Waiting tools (`wait_for_mentions`, `wait_for`, approvals and locks) wait at most 280 seconds,
+  still accepting up to 300: a silent 300-second wait was cut off by Node's fetch and many proxies,
+  ending in an error instead of an empty answer (#75).
+- `update_tickets` takes a `comment`, in `set` or per ticket, posted with each change (#76).
+
 - Ticket writes over MCP (`create_ticket`, `update_ticket`, `claim_ticket`, `start_ticket_task`)
   reply with a summary, criterion ids and `last_activity_id` instead of the whole ticket; `full:
   true` gives the old reply (#65). `claim_ticket` and `start_ticket_task` now reply as `{ ticket }`

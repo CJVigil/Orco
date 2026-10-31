@@ -1224,9 +1224,10 @@ export function createApp(store: Store, options: AppOptions = {}) {
     const list = Array.isArray(req.body?.tickets) ? (req.body.tickets as Record<string, unknown>[]) : null;
     if (!list) throw new OrcoError('invalid', 'Expected tickets: [{ ticket, ...fields }]');
     const shared = req.body?.set ? ticketInput(req.body.set) : {};
+    const sharedComment = str(req.body?.set?.comment, 'set.comment');
     const edits = list.map((entry) => {
       const own = Object.fromEntries(Object.entries(ticketInput(entry)).filter(([, v]) => v !== undefined));
-      return { ref: String(entry?.ticket ?? ''), input: { ...shared, ...own } };
+      return { ref: String(entry?.ticket ?? ''), input: { ...shared, ...own }, comment: str(entry?.comment, 'comment') ?? sharedComment };
     });
     res.json(store.tickets.updateMany(req.participant!, edits));
   });

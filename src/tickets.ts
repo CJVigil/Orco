@@ -642,8 +642,9 @@ export class Tickets {
   /**
    * Several ticket edits in one call, all or nothing, counted once against the rate limit: an agent
    * assigning or closing many tickets at once should not need one call (and one rate-limit hit) each.
+   * Each edit may carry a comment (why it closed, where the work went), posted with its change.
    */
-  updateMany(actor: Participant, edits: { ref: string; input: TicketInput }[]): Written[] {
+  updateMany(actor: Participant, edits: { ref: string; input: TicketInput; comment?: string }[]): Written[] {
     if (edits.length === 0 || edits.length > MAX_BULK) throw new OrcoError('invalid', `Change 1 to ${MAX_BULK} tickets at once`);
     if (new Set(edits.map((e) => e.ref.toUpperCase())).size !== edits.length) throw new OrcoError('invalid', 'Each ticket at most once per call');
     this.store.checkRate(actor, 'post');
@@ -652,7 +653,9 @@ export class Tickets {
       const results = this.store.withoutRateLimit(() =>
         edits.map((e) => {
           try {
-            return this.update(actor, e.ref, e.input);
+            const written = this.update(actor, e.ref, e.input);
+            // The why, next to the change in the history (and the handoff note left alone).
+            return e.comment?.trim() ? { ...written, ticket: this.comment(actor, e.ref, e.comment) } : written;
           } catch (err) {
             if (err instanceof OrcoError) throw new OrcoError(err.code, `${e.ref}: ${err.message} (nothing was changed)`);
             throw err;

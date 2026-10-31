@@ -33,6 +33,13 @@ import {
 } from './tickets.js';
 
 const MAX_WAIT_SECONDS = 300;
+/**
+ * How long a wait really lasts at most. A waiting tool sends nothing until it ends, and Node's fetch
+ * (and many proxies) cut a response that is silent for 300 seconds, so a wait at the maximum would
+ * end in an error instead of an empty answer. Up to 300 is accepted, so older callers keep working.
+ */
+const SAFE_WAIT_SECONDS = 280;
+const waitMs = (seconds: number | undefined, fallback: number) => Math.min(seconds ?? fallback, SAFE_WAIT_SECONDS) * 1000;
 
 const IDEMPOTENCY_KEY = z
   .string()
@@ -746,7 +753,7 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         'after_id (the id of the last mention you handled) to acknowledge up to it: mentions after it come back until ' +
         'you acknowledge them, so none are lost if a reply goes missing.',
       inputSchema: z.object({
-        timeout_seconds: z.number().int().min(0).max(MAX_WAIT_SECONDS).optional().describe('Default 60'),
+        timeout_seconds: z.number().int().min(0).max(MAX_WAIT_SECONDS).optional().describe(`Default 60; waits at most ${SAFE_WAIT_SECONDS}`),
         after_id: z.number().int().min(0).optional().describe('Acknowledge mentions up to this message id'),
         limit: z.number().int().min(1).max(500).optional().describe('Default 50'),
       }),
@@ -755,7 +762,7 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
       run(async () => {
         const release = presence.hold(me.id, 'waiting');
         const { messages, remaining } = await store
-          .waitForMentionBatch(me, (timeout_seconds ?? 60) * 1000, ctx.mcpReq.signal, { afterId: after_id, limit })
+          .waitForMentionBatch(me, waitMs(timeout_seconds, 60), ctx.mcpReq.signal, { afterId: after_id, limit })
           .finally(release);
         sawTasks(messages);
         return messages.length === 0
@@ -947,7 +954,7 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
     async ({ room, summary, details, ttl_seconds, wait_seconds }, ctx) =>
       run(async () => {
         const approval = store.approvals.request(me, { room, summary, details, ttlSeconds: ttl_seconds });
-        return store.approvals.wait(me, approval.id, (wait_seconds ?? 0) * 1000, ctx.mcpReq.signal);
+        return store.approvals.wait(me, approval.id, waitMs(wait_seconds, 0), ctx.mcpReq.signal);
       }),
   );
 
@@ -962,7 +969,7 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
       }),
     },
     async ({ approval_id, wait_seconds }, ctx) =>
-      run(() => store.approvals.wait(me, approval_id, (wait_seconds ?? 0) * 1000, ctx.mcpReq.signal)),
+      run(() => store.approvals.wait(me, approval_id, waitMs(wait_seconds, 0), ctx.mcpReq.signal)),
   );
 
   server.registerTool(
@@ -983,7 +990,7 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
     },
     async ({ project, name, ttl_seconds, note, wait_seconds }, ctx) =>
       run(() =>
-        store.locks.acquireWaiting(me, project, name, ttl_seconds ?? 300, note, (wait_seconds ?? 0) * 1000, ctx.mcpReq.signal),
+        store.locks.acquireWaiting(me, project, name, ttl_seconds ?? 300, note, waitMs(wait_seconds, 0), ctx.mcpReq.signal),
       ),
   );
 
@@ -1117,20 +1124,26 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
       annotations: annotate('update_tickets'),
       description:
         `Change up to ${MAX_BULK} tickets in one call: set gives fields for all of them, and each entry can add or override its ` +
-        'own. All or nothing, and it counts as one post toward the rate limit. Replies with one line per ticket.',
+        'own. A comment (in set or per ticket) is posted on each ticket with its change: say why it is done, parked or ' +
+        'superseded, instead of overwriting the handoff. All or nothing, and it counts as one post toward the rate limit. ' +
+        'Replies with one line per ticket.',
       inputSchema: z.object({
-        tickets: z.array(z.object({ ticket: z.string(), ...ticketFields })).min(1).max(MAX_BULK),
-        set: z.object(ticketFields).optional().describe('Fields applied to every ticket in the call'),
+        tickets: z.array(z.object({ ticket: z.string(), ...ticketFields, comment: z.string().max(MAX_COMMENT).optional() })).min(1).max(MAX_BULK),
+        set: z
+          .object({ ...ticketFields, comment: z.string().max(MAX_COMMENT).optional() })
+          .optional()
+          .describe('Fields (and a comment) applied to every ticket in the call'),
       }),
     },
     async ({ tickets, set }) =>
       run(() => {
-        const shared = set ? ticketInput(set) : {};
+        const { comment: sharedComment, ...sharedFields } = set ?? {};
+        const shared = set ? ticketInput(sharedFields) : {};
         const results = store.tickets.updateMany(
           me,
-          tickets.map(({ ticket, ...args }) => {
+          tickets.map(({ ticket, comment, ...args }) => {
             const own = Object.fromEntries(Object.entries(ticketInput(args)).filter(([, v]) => v !== undefined));
-            return { ref: ticket, input: { ...shared, ...own } };
+            return { ref: ticket, input: { ...shared, ...own }, comment: comment ?? sharedComment };
           }),
         );
         return results
@@ -1601,13 +1614,13 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         mentions: z.boolean().optional().describe('Also wake on an unseen mention'),
         rooms: z.array(z.string()).max(20).optional().describe('Wake on a new message in these rooms or patterns'),
         after_id: z.number().int().min(0).optional().describe('With rooms: wake on messages after this id (default: from now)'),
-        timeout_seconds: z.number().int().min(0).max(MAX_WAIT_SECONDS).optional().describe(`Default 120, at most ${MAX_WAIT_SECONDS}`),
+        timeout_seconds: z.number().int().min(0).max(MAX_WAIT_SECONDS).optional().describe(`Default 120; waits at most ${SAFE_WAIT_SECONDS}`),
       }),
     },
     async ({ tickets, tasks, locks, mentions, rooms, after_id, timeout_seconds }, ctx) => {
       try {
         const conditions = { tickets, tasks, locks, mentions, ...(rooms ? { rooms: { patterns: rooms, afterId: after_id } } : {}) };
-        const result = await waitFor(store, me, conditions, (timeout_seconds ?? 120) * 1000, ctx?.mcpReq?.signal);
+        const result = await waitFor(store, me, conditions, waitMs(timeout_seconds, 120), ctx?.mcpReq?.signal);
         return ok(
           result.timedOut
             ? { timed_out: true, fired: [] }
