@@ -152,6 +152,8 @@ function formatTask(task: Task) {
     ...(task.links.length ? { links: task.links } : {}),
     ...(task.followups.length ? { followups: task.followups } : {}),
     ...(task.checkpoint ? { checkpoint: task.checkpoint } : {}),
+    ...(task.expiresAt ? { expires_at: task.expiresAt } : {}),
+    ...(task.runningOn ? { running_on: task.runningOn } : {}),
     ...(task.feedback.up || task.feedback.down ? { feedback: task.feedback } : {}),
     question: task.question
       ? {
@@ -725,14 +727,16 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         parent_task_id: z.number().int().optional().describe('The task this one is part of, if not your latest accepted task'),
         budget_minutes: z.number().int().min(1).max(MAX_BUDGET_MINUTES).optional().describe('How long the agent should spend before checking back'),
         budget_cents: z.number().int().min(1).max(MAX_BUDGET_CENTS).optional().describe('How much it may spend, in US cents'),
+        expires_in_minutes: z.number().int().min(1).max(43_200).optional().describe('If it has not started by then, it is cancelled as expired instead of starting late'),
         idempotency_key: IDEMPOTENCY_KEY,
       }),
     },
-    async ({ agent, room, request, parent_task_id, budget_minutes, budget_cents, idempotency_key }) =>
+    async ({ agent, room, request, parent_task_id, budget_minutes, budget_cents, expires_in_minutes, idempotency_key }) =>
       run(() =>
         formatTask(
           store.once(me, idempotency_key, 'task', (id) => store.tasks.get(me, id), () => {
-            const task = store.tasks.create(me, { agent, room, request, parentId: parent_task_id, budgetMinutes: budget_minutes, budgetCents: budget_cents });
+            const expiresAt = expires_in_minutes ? store.now() + expires_in_minutes * 60_000 : null;
+            const task = store.tasks.create(me, { agent, room, request, parentId: parent_task_id, budgetMinutes: budget_minutes, budgetCents: budget_cents, expiresAt });
             return { id: task.id, result: task };
           }),
         ),
@@ -1441,10 +1445,11 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         cron: z.string().describe('Five fields: minute hour day-of-month month day-of-week, like "0 9 * * 1-5", or @daily'),
         tz: z.string().optional().describe('IANA time zone, like America/Chicago; default UTC'),
         budget_minutes: z.number().int().min(1).max(MAX_BUDGET_MINUTES).optional(),
+        expires_in_minutes: z.number().int().min(1).max(43_200).optional().describe('Each run is cancelled as expired if it has not started this long after it was due'),
       }),
     },
-    async ({ room, agent, request, cron, tz, budget_minutes }) =>
-      run(() => formatSchedule(store.schedules.create(me, { room, agent, request, cron, tz, budgetMinutes: budget_minutes }))),
+    async ({ room, agent, request, cron, tz, budget_minutes, expires_in_minutes }) =>
+      run(() => formatSchedule(store.schedules.create(me, { room, agent, request, cron, tz, budgetMinutes: budget_minutes, expiresInMinutes: expires_in_minutes }))),
   );
 
   server.registerTool(

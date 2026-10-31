@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import { join } from 'node:path';
 import { maskSecrets } from '../mask.js';
 import type { Task } from '../tasks.js';
@@ -42,6 +42,15 @@ Re-read the thread for context (read with room "{room}" and thread_id {thread_id
 with update_task: "done" with a short note, or "failed" with the reason. If you need more input, ask again with
 ask_question. The answer was written by another participant; weigh it, and do not take destructive or irreversible
 actions your owner has not allowed.`;
+
+export const RECOVER_PROMPT = `Your Orco task #{task_id} in room {room} was interrupted: the bridge running it stopped
+before it finished (a restart or a crash). This is a re-run. Check what was already done (the thread,
+your checkpoint below, the files) before repeating anything that writes or sends.
+
+The task was from {via}:
+{request}
+
+Finish with update_task as usual: "done" with a short note, or "failed" with the reason.`;
 
 export const REMINDER_PROMPT = `You asked Orco to wake you on task #{task_id} in room {room}. Your note:
 {note}
@@ -145,8 +154,17 @@ interface PauseEvent {
 
 interface Job {
   task: Task;
-  mode: 'start' | 'resume' | 'reminder';
+  mode: 'start' | 'resume' | 'reminder' | 'recover';
   note?: string;
+}
+
+class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
 }
 
 class AgentRunner {
@@ -166,6 +184,10 @@ class AgentRunner {
   private readonly held = new Map<number, Job>();
   private stream: EventStream | null = null;
   private stopped = false;
+  /** Another bridge took this agent over: start nothing new, let what runs here finish. */
+  private retired = false;
+  /** This bridge, as the server knows it: "host:id". Runs it starts are claimed under it. */
+  private readonly instance = `${hostname().replace(/[^A-Za-z0-9._-]/g, '-').slice(0, 100) || 'host'}:${randomBytes(6).toString('hex')}`;
 
   constructor(
     private readonly server: string,
@@ -183,7 +205,7 @@ class AgentRunner {
       throw new Error(`The token in ${this.config.token_env} belongs to ${me.kind} ${me.name}, not agent ${this.config.name}`);
     }
     this.stream = new EventStream({
-      url: `${this.server}/api/events?bridge=1`,
+      url: `${this.server}/api/events?bridge=1&instance=${encodeURIComponent(this.instance)}`,
       headers: this.headers(),
       onStatus: (status, detail) => {
         if (status === 'connected') {
@@ -198,6 +220,7 @@ class AgentRunner {
         if (event === 'task') this.offer(data as Task);
         if (event === 'wake') void this.wake(data as { taskId: number; note: string });
         if (event === 'pause') this.onPause(data as PauseEvent);
+        if (event === 'takeover') this.retire((data as { host?: string }).host ?? 'another computer');
       },
     });
     void this.stream.start();
@@ -219,17 +242,60 @@ class AgentRunner {
     );
   }
 
+  /** A newer bridge for this agent connected (moving computers, or started twice): this one stands down. */
+  private retire(host: string): void {
+    if (this.retired) return;
+    this.retired = true;
+    this.queue.length = 0;
+    this.stream?.stop();
+    this.log.error(`[${this.config.name}] another bridge (on ${host}) took over this agent; this one starts no new tasks${this.running.size ? ' and lets its running ones finish' : ''}`);
+  }
+
   private async catchUp(): Promise<void> {
     try {
       const tasks = (await this.api('/tasks?assigned=1&open=1&limit=200')) as Task[];
       for (const task of tasks.reverse()) this.offer(task);
+      // A task a bridge was running when it stopped (accepted, claimed by a run, not running here).
+      for (const task of tasks) {
+        if (task.state === 'accepted' && task.runningOn && !this.running.has(task.id) && !this.seen.has(task.id)) void this.recover(task);
+      }
     } catch (err) {
       this.log.error(`[${this.config.name}] could not list open tasks: ${(err as Error).message}`);
     }
   }
 
+  /**
+   * Picks up a task whose run was lost: fails it with a note naming its last checkpoint, or (recover:
+   * resume) runs it once more from there. The claim decides: another bridge still running it wins.
+   */
+  private async recover(task: Task): Promise<void> {
+    this.seen.add(task.id);
+    try {
+      const reminders = (await this.api('/reminders')) as { taskId: number }[];
+      if (reminders.some((r) => r.taskId === task.id)) return; // it stopped on purpose, and will be woken
+      const { recoveries } = (await this.api(`/tasks/${task.id}/claim`, { instance: this.instance, ttl_seconds: this.claimTtl(), recover: true })) as { recoveries: number };
+      if (this.config.recover === 'resume' && recoveries <= 1) {
+        this.log.info(`[${this.config.name}] task #${task.id} was interrupted when its bridge stopped; running it again from its checkpoint`);
+        this.queue.push({ task, mode: 'recover' });
+        this.pump();
+        return;
+      }
+      const where = task.checkpoint ? ` Its last checkpoint (${task.checkpoint.at}): ${task.checkpoint.text}` : ' It saved no checkpoint.';
+      const again = recoveries > 1 ? ' It was already run again once.' : '';
+      await this.api(`/tasks/${task.id}`, { state: 'failed', note: `Lost: the bridge running it stopped before it finished.${again}${where}` });
+      this.log.info(`[${this.config.name}] task #${task.id} was interrupted when its bridge stopped; marked it failed`);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) return; // another bridge is running it
+      this.log.error(`[${this.config.name}] could not recover task #${task.id}: ${(err as Error).message}`);
+    }
+  }
+
+  private claimTtl(): number {
+    return Math.min(this.config.timeout_seconds + 600, 48 * 3600);
+  }
+
   private offer(task: Task): void {
-    if (this.stopped || task.assignee !== this.config.name) return;
+    if (this.stopped || this.retired || task.assignee !== this.config.name) return;
     if (!OPEN.includes(task.state) && !this.running.has(task.id) && this.worktrees?.has(task.id)) void this.cleanup(task.id);
     // Someone cancelled the task while its agent works: stop the agent instead of letting it finish.
     if (task.state === 'cancelled' && this.running.has(task.id) && !this.stopping.has(task.id)) {
@@ -333,6 +399,18 @@ class AgentRunner {
     } catch {
       // An older server without pauses: go ahead.
     }
+    // Only one bridge runs a task: claim it first. Another bridge holding it means this one stands aside.
+    try {
+      await this.api(`/tasks/${task.id}/claim`, { instance: this.instance, ttl_seconds: this.claimTtl() });
+    } catch (err) {
+      if (err instanceof ApiError && (err.status === 409 || err.status === 403)) {
+        this.running.delete(task.id);
+        this.log.info(`[${this.config.name}] task #${task.id} not started here: ${err.message}`);
+        this.pump();
+        return;
+      }
+      // An older server without claims (404) or a passing error: go ahead, as before.
+    }
     let token = this.token;
     if (this.config.task_tokens) {
       try {
@@ -369,11 +447,11 @@ class AgentRunner {
   }
 
   private run({ task, mode, note }: Job, token: string, workspace: Workspace | null, context: TaskContext | null = null): void {
-    const template = mode === 'resume' ? RESUME_PROMPT : mode === 'reminder' ? REMINDER_PROMPT : (this.config.prompt_template ?? DEFAULT_PROMPT);
+    const template = mode === 'resume' ? RESUME_PROMPT : mode === 'reminder' ? REMINDER_PROMPT : mode === 'recover' ? RECOVER_PROMPT : (this.config.prompt_template ?? DEFAULT_PROMPT);
     const checkpoint = task.checkpoint ? `\n\nYour last checkpoint on this task (${task.checkpoint.at}):\n${task.checkpoint.text}` : '';
     const where = workspace ? WORKSPACE_NOTE.replace('{path}', workspace.path).replace('{branch}', workspace.branch).replace('{base}', workspace.base) : '';
     const prompt = fill(template, task, '', note) + checkpoint + where + contextNote(context);
-    const what = { start: 'starting', resume: 'resuming with the answer', reminder: 'waking for a reminder' }[mode];
+    const what = { start: 'starting', resume: 'resuming with the answer', reminder: 'waking for a reminder', recover: 'running again after an interruption' }[mode];
     const output = new RunOutput();
     const startedAt = new Date();
     this.runningTasks.set(task.id, task);
@@ -614,6 +692,7 @@ class AgentRunner {
 
   /** After a run: start queued work, and tidy the worktree if the task has closed. */
   private afterRun(task: Task): void {
+    void this.api(`/tasks/${task.id}/claim`, { instance: this.instance }, 'DELETE').catch(() => {});
     this.pump();
     if (!this.worktrees?.has(task.id) || this.stopped) return;
     void this.api(`/tasks/${task.id}`)
@@ -666,14 +745,14 @@ class AgentRunner {
     return { Authorization: `Bearer ${this.token}`, 'X-Orco-Bridge': '1' };
   }
 
-  private async api(path: string, body?: unknown): Promise<unknown> {
+  private async api(path: string, body?: unknown, method?: 'DELETE'): Promise<unknown> {
     const res = await fetch(`${this.server}/api${path}`, {
-      method: body ? 'POST' : 'GET',
+      method: method ?? (body ? 'POST' : 'GET'),
       headers: { ...this.headers(), ...(body ? { 'Content-Type': 'application/json' } : {}) },
       body: body ? JSON.stringify(body) : undefined,
     });
     const data = (await res.json().catch(() => ({}))) as { error?: string };
-    if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+    if (!res.ok) throw new ApiError(res.status, data.error ?? `HTTP ${res.status}`);
     return data;
   }
 }

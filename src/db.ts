@@ -851,6 +851,24 @@ export const MIGRATIONS = [
   `
   ALTER TABLE participants ADD COLUMN last_seen_at TEXT;
   `,
+  // 27: tasks that expire before they start; a bridge's claim on the run it starts (so two bridges
+  // never run one task); what to do when an agent is lost mid-task.
+  `
+  ALTER TABLE tasks ADD COLUMN expires_at INTEGER;
+  ALTER TABLE tasks ADD COLUMN run_claim TEXT;
+  ALTER TABLE tasks ADD COLUMN run_claim_until INTEGER;
+  ALTER TABLE tasks ADD COLUMN recoveries INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE tasks ADD COLUMN lost_notified INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE schedules ADD COLUMN expires_minutes INTEGER;
+  CREATE TABLE lost_policies (
+    agent_id INTEGER PRIMARY KEY REFERENCES participants(id),
+    minutes INTEGER NOT NULL,
+    fallback_id INTEGER REFERENCES participants(id),
+    release_locks INTEGER NOT NULL DEFAULT 0,
+    set_by INTEGER NOT NULL REFERENCES participants(id),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+  `,
 ];
 
 export interface OpenOptions {

@@ -32,6 +32,14 @@ export interface TaskBudget {
   over: boolean;
 }
 
+/** What happens when an agent goes quiet mid-task; set by its owner. */
+export interface LostPolicy {
+  minutes: number;
+  /** Another agent of the owner's that takes the task over, or null. */
+  fallback: string | null;
+  releaseLocks: boolean;
+}
+
 export interface TaskLink {
   title: string | null;
   url: string;
@@ -137,6 +145,10 @@ export interface Task {
   /** Where the assignee left off, for its next session or whoever takes the task over. */
   checkpoint: TaskCheckpoint | null;
   scheduleId: number | null;
+  /** When it expires if it has not started by then, or null. */
+  expiresAt: string | null;
+  /** The bridge (host) whose run holds the task right now, or null. */
+  runningOn: string | null;
 }
 
 interface TaskRow {
@@ -178,6 +190,10 @@ interface TaskRow {
   checkpoint: string | null;
   checkpoint_at: string | null;
   reminder_due: number | null;
+  expires_at: number | null;
+  run_claim: string | null;
+  run_claim_until: number | null;
+  recoveries: number;
   created_at: string;
   updated_at: string;
 }
@@ -192,7 +208,7 @@ const TASK_SELECT = `
          t.seen_at, t.accepted_at, t.budget_minutes, t.budget_cents, t.spent_cents, t.spent_tokens,
          t.over_budget_notified, t.links, t.schedule_id, t.checkpoint, t.checkpoint_at,
          (SELECT min(rm.due_at) FROM reminders rm WHERE rm.task_id = t.id AND rm.fired_at IS NULL) AS reminder_due,
-         t.created_at, t.updated_at
+         t.expires_at, t.run_claim, t.run_claim_until, t.recoveries, t.created_at, t.updated_at
   FROM tasks t
   LEFT JOIN approvals ap ON ap.id = t.approval_id
   JOIN rooms r ON r.id = t.room_id
@@ -214,6 +230,7 @@ const ASSIGNEE_MOVES: Record<TaskState, TaskState[]> = {
 };
 
 const MAX_REQUEST = 4_000;
+const MAX_EXPIRY_MS = 30 * 24 * 3600_000;
 const MAX_PROGRESS = 300;
 const TOUCH_EVERY_MS = 30_000;
 
@@ -271,7 +288,14 @@ function baseTask(row: TaskRow): Omit<Task, 'chain' | 'question' | 'progress' | 
     updatedAt: row.updated_at,
     scheduleId: row.schedule_id,
     checkpoint: row.checkpoint === null ? null : { text: row.checkpoint, at: row.checkpoint_at! },
+    expiresAt: row.expires_at === null ? null : new Date(row.expires_at).toISOString(),
+    runningOn: row.run_claim === null ? null : claimHost(row.run_claim),
   };
+}
+
+/** A bridge's claim is "host:instance"; people see the host. */
+function claimHost(claim: string): string {
+  return claim.slice(0, claim.lastIndexOf(':')) || claim;
 }
 
 export class Tasks {
@@ -291,9 +315,15 @@ export class Tasks {
       scheduleId?: number;
       /** A person who must approve before the agent starts (webhook tasks: whoever set up the hook). */
       confirmBy?: Participant;
+      /** If it has not started by then (ms), it is cancelled as expired instead of starting late. */
+      expiresAt?: number | null;
     },
   ): Task {
     const request = input.request.trim();
+    const expiresAt = input.expiresAt ?? null;
+    if (expiresAt !== null && !(Number.isFinite(expiresAt) && expiresAt > this.store.now() && expiresAt <= this.store.now() + MAX_EXPIRY_MS)) {
+      throw new OrcoError('invalid', 'A task expires between now and 30 days from now');
+    }
     checkBudget(input.budgetMinutes, input.budgetCents);
     if (!request) throw new OrcoError('invalid', 'Task request is empty');
     if (request.length > MAX_REQUEST) throw new OrcoError('invalid', `Task request is over ${MAX_REQUEST} characters`);
@@ -346,8 +376,8 @@ export class Tasks {
         const { lastInsertRowid } = this.store.db
           .prepare(
             `INSERT INTO tasks (message_id, room_id, requester_id, assignee_id, parent_id, depth, request, approval_id,
-               budget_minutes, budget_cents, schedule_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               budget_minutes, budget_cents, schedule_id, expires_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             messageId,
@@ -361,6 +391,7 @@ export class Tasks {
             budget.minutes,
             budget.cents,
             input.scheduleId ?? null,
+            expiresAt,
           );
         taskId = Number(lastInsertRowid);
       },
@@ -433,6 +464,7 @@ export class Tasks {
     if (followups.length && row.project_id === null) throw new OrcoError('invalid', 'Follow-ups become tickets, so they need a task in a project room');
     for (const f of followups) this.store.suggestions.check(f);
 
+    if (state === 'accepted' && this.expire(row)) throw new OrcoError('conflict', `Task ${id} expired before it started`);
     const current = effectiveState(row);
     if (state === 'cancelled') {
       const allowed = [row.requester_id, row.requester_owner_id, row.assignee_owner_id].includes(actor.id);
@@ -440,6 +472,8 @@ export class Tasks {
       if (!OPEN_STATES.includes(current)) throw new OrcoError('conflict', `Task ${id} is already ${current}`);
     } else {
       if (actor.id !== row.assignee_id) throw new OrcoError('forbidden', `Only ${row.assignee} can update task ${id}`);
+      // Accepting again (a re-run after an interruption, a retried call) changes nothing.
+      if (state === 'accepted' && current === 'accepted') return this.byId(id)!;
       if (!ASSIGNEE_MOVES[current].includes(state)) {
         const why = current === 'awaiting_approval' ? `Task ${id} is waiting for your owner's approval` : `Task ${id} is ${current}`;
         throw new OrcoError('conflict', `${why}; it cannot move to ${state}`);
@@ -456,10 +490,12 @@ export class Tasks {
     });
   }
 
-  private transition(actor: Participant, row: TaskRow, state: TaskState, note: string | null, detail: Record<string, unknown> = {}): Task {
+  private transition(actor: Participant, row: TaskRow, state: TaskState, note: string | null, detail: Record<string, unknown> = {}, notifyName?: string): Task {
     const id = row.id;
     if (state !== 'accepted') this.store.questions.closeForTask(id);
-    const notify = state === 'cancelled' ? row.assignee : row.requester;
+    // A closed task holds no bridge's run any more.
+    if (!OPEN_STATES.includes(state)) this.store.db.prepare('UPDATE tasks SET run_claim = NULL, run_claim_until = NULL WHERE id = ?').run(id);
+    const notify = notifyName ?? (state === 'cancelled' ? row.assignee : row.requester);
     const ping = state === 'accepted' || notify === actor.name ? '' : `@${notify} `;
     const text = `${ping}Task #${id} ${state}.${note ? `\n${note}` : ''}`;
     this.store.post(actor, this.toTask(row).room, text, row.message_id, {
@@ -698,6 +734,7 @@ export class Tasks {
     const row = this.row(id);
     if (!row || !this.store.canSeeRoomId(actor, row.room_id)) throw new OrcoError('not_found', `No task ${id}`);
     if (row.assignee_id !== actor.id) throw new OrcoError('forbidden', `Only ${row.assignee} can get a token for task ${id}`);
+    if (this.expire(row)) throw new OrcoError('conflict', `Task ${id} expired before it started`);
     if (!OPEN_STATES.includes(row.state)) throw new OrcoError('conflict', `Task ${id} is ${row.state}`);
     if (!Number.isInteger(ttlSeconds) || ttlSeconds < 60 || ttlSeconds > MAX_TOKEN_TTL_SECONDS) {
       throw new OrcoError('invalid', `A task token lasts 60 to ${MAX_TOKEN_TTL_SECONDS} seconds`);
@@ -808,11 +845,146 @@ export class Tasks {
     const revived = this.store.db
       .prepare("SELECT id FROM tasks WHERE assignee_id = ? AND state = 'accepted' AND stall_notified = 1")
       .all(actor.id) as unknown as { id: number }[];
-    this.store.db.prepare("UPDATE tasks SET heartbeat_at = ?, stall_notified = 0 WHERE assignee_id = ? AND state = 'accepted'").run(now, actor.id);
+    this.store.db.prepare("UPDATE tasks SET heartbeat_at = ?, stall_notified = 0, lost_notified = 0 WHERE assignee_id = ? AND state = 'accepted'").run(now, actor.id);
     for (const { id } of revived) this.store.events.emit('task', this.byId(id)!);
   }
 
   /** Announces newly stalled tasks once each (as task events); returns them. Also catches tasks that ran out of time. */
+  /** Cancels, as expired, tasks that did not start in time (the once-a-minute sweep). */
+  expireDue(): Task[] {
+    const rows = this.store.db
+      .prepare(`${TASK_SELECT} WHERE t.state IN ('requested', 'awaiting_approval') AND t.expires_at IS NOT NULL AND t.expires_at <= ?`)
+      .all(this.store.now()) as unknown as TaskRow[];
+    return rows.flatMap((row) => (this.expire(row) ? [this.byId(row.id)!] : []));
+  }
+
+  /**
+   * A task that has not started by its time is cancelled with an "Expired" note, and its requester is
+   * told in the thread. Returns whether it expired. Tasks already running are never stopped.
+   */
+  private expire(row: TaskRow): boolean {
+    if (row.expires_at === null || row.expires_at > this.store.now() || !['requested', 'awaiting_approval'].includes(effectiveState(row))) return false;
+    if (row.approval_id !== null) this.store.approvals.withdraw(row.approval_id);
+    const actor = this.store.system() ?? this.store.participantById(row.requester_id)!;
+    const note = `Expired: it had not started by ${new Date(row.expires_at).toISOString().slice(0, 16).replace('T', ' ')} UTC.`;
+    this.transition(actor, row, 'cancelled', note, { expired: true }, row.requester);
+    return true;
+  }
+
+  /**
+   * A bridge claims the run it is about to start, and only one bridge wins: two bridges for the same
+   * agent never run one task twice. The claim lasts `ttlSeconds` (the run's time limit), so a bridge
+   * that dies does not hold it forever; its own host may take it back at once after a restart.
+   */
+  claimRun(actor: Participant, id: number, instance: string, ttlSeconds: number, options: { recover?: boolean } = {}): { recoveries: number } {
+    const row = this.row(id);
+    if (!row || !this.store.canSeeRoomId(actor, row.room_id)) throw new OrcoError('not_found', `No task ${id}`);
+    if (row.assignee_id !== actor.id) throw new OrcoError('forbidden', `Only ${row.assignee} runs task ${id}`);
+    if (!/^[A-Za-z0-9._-]{1,100}:[A-Za-z0-9]{4,40}$/.test(instance)) throw new OrcoError('invalid', 'instance is host:id');
+    if (!Number.isInteger(ttlSeconds) || ttlSeconds < 60 || ttlSeconds > 48 * 3600) throw new OrcoError('invalid', 'ttl_seconds is 60 to 172800');
+    if (this.expire(row)) throw new OrcoError('conflict', `Task ${id} expired before it started`);
+    if (!OPEN_STATES.includes(effectiveState(row))) throw new OrcoError('conflict', `Task ${id} is ${effectiveState(row)}`);
+    const now = this.store.now();
+    const host = claimHost(instance);
+    const { changes } = this.store.db
+      .prepare(
+        `UPDATE tasks SET run_claim = ?, run_claim_until = ?, recoveries = recoveries + ?
+         WHERE id = ? AND (run_claim IS NULL OR run_claim = ? OR run_claim_until < ? OR (? AND substr(run_claim, 1, length(?) + 1) = ? || ':'))`,
+      )
+      .run(instance, now + ttlSeconds * 1000, options.recover ? 1 : 0, id, instance, now, options.recover ? 1 : 0, host, host);
+    if (!changes) throw new OrcoError('conflict', `Task ${id} is already running on ${row.run_claim ? claimHost(row.run_claim) : 'another bridge'}`);
+    return { recoveries: (this.store.db.prepare('SELECT recoveries FROM tasks WHERE id = ?').get(id) as { recoveries: number }).recoveries };
+  }
+
+  /** Lets go of a run claim when the run ends (only the claim's own instance can). */
+  releaseRun(actor: Participant, id: number, instance: string): void {
+    const row = this.row(id);
+    if (!row || row.assignee_id !== actor.id) throw new OrcoError('not_found', `No task ${id}`);
+    this.store.db.prepare('UPDATE tasks SET run_claim = NULL, run_claim_until = NULL WHERE id = ? AND run_claim = ?').run(id, instance);
+  }
+
+  /** What happens when this agent goes quiet mid-task, or null (only the stalled flag, as before). */
+  lostPolicy(agent: Participant): LostPolicy | null {
+    const row = this.store.db
+      .prepare('SELECT l.minutes, f.name AS fallback, l.release_locks FROM lost_policies l LEFT JOIN participants f ON f.id = l.fallback_id WHERE l.agent_id = ?')
+      .get(agent.id) as { minutes: number; fallback: string | null; release_locks: number } | undefined;
+    return row ? { minutes: row.minutes, fallback: row.fallback, releaseLocks: row.release_locks === 1 } : null;
+  }
+
+  /**
+   * The owner decides what happens when their agent goes quiet mid-task (like MQTT's Last Will): after
+   * `minutes` without a sign of life, the requester is told with the last checkpoint, the task goes to
+   * a fallback agent of the owner's, and (if allowed) the agent's locks are freed. Null removes it.
+   */
+  setLostPolicy(actor: Participant, agentName: string, policy: LostPolicy | null): LostPolicy | null {
+    const agent = this.store.participantByName(agentName);
+    if (!agent || agent.kind !== 'agent') throw new OrcoError('not_found', `No agent ${agentName}`);
+    if (actor.kind !== 'user' || actor.scope || agent.ownerId !== actor.id) throw new OrcoError('forbidden', `Only ${agent.name}'s owner decides what happens when it is lost`);
+    if (policy === null) {
+      this.store.db.prepare('DELETE FROM lost_policies WHERE agent_id = ?').run(agent.id);
+    } else {
+      if (!Number.isInteger(policy.minutes) || policy.minutes < 5 || policy.minutes > 1440) throw new OrcoError('invalid', 'minutes is 5 to 1440');
+      let fallbackId: number | null = null;
+      if (policy.fallback) {
+        const fallback = this.store.participantByName(policy.fallback.replace(/^@/, ''));
+        if (!fallback || fallback.kind !== 'agent' || fallback.ownerId !== actor.id || fallback.id === agent.id) {
+          throw new OrcoError('invalid', 'The fallback is another agent of yours');
+        }
+        fallbackId = fallback.id;
+      }
+      this.store.db
+        .prepare(
+          `INSERT INTO lost_policies (agent_id, minutes, fallback_id, release_locks, set_by) VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT (agent_id) DO UPDATE SET minutes = excluded.minutes, fallback_id = excluded.fallback_id, release_locks = excluded.release_locks,
+             set_by = excluded.set_by, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`,
+        )
+        .run(agent.id, policy.minutes, fallbackId, policy.releaseLocks ? 1 : 0, actor.id);
+    }
+    this.store.audit.record(actor, policy ? 'agent.lost_policy' : 'agent.lost_policy_clear', { subject: `agent:${agent.name}`, detail: policy ?? {} });
+    return this.lostPolicy(agent);
+  }
+
+  /** Applies owners' "if lost" settings to accepted tasks whose agent has gone quiet (the once-a-minute sweep). */
+  sweepLost(): Task[] {
+    const rows = this.store.db
+      .prepare(
+        `${TASK_SELECT} JOIN lost_policies lp ON lp.agent_id = t.assignee_id
+         WHERE t.state = 'accepted' AND t.lost_notified = 0 AND t.heartbeat_at IS NOT NULL AND t.heartbeat_at < ? - lp.minutes * 60000`,
+      )
+      .all(this.store.now()) as unknown as TaskRow[];
+    const lost: Task[] = [];
+    for (const row of rows) {
+      if (row.open_question !== null || row.reminder_due !== null) continue;
+      this.store.db.prepare('UPDATE tasks SET lost_notified = 1 WHERE id = ?').run(row.id);
+      const agent = this.store.participantById(row.assignee_id)!;
+      const policy = this.lostPolicy(agent)!;
+      const minutes = Math.round((this.store.now() - row.heartbeat_at!) / 60_000);
+      const lines = [`@${row.requester} Task #${row.id}: ${agent.name} has not been heard from in ${minutes} minutes, so it is treated as lost.`];
+      lines.push(row.checkpoint ? `Its last checkpoint (${row.checkpoint_at}): ${row.checkpoint}` : 'It saved no checkpoint.');
+      if (policy.releaseLocks) {
+        const held = this.store.db
+          .prepare('SELECT p.name AS project, l.name FROM locks l JOIN projects p ON p.id = l.project_id WHERE l.holder_id = ? AND l.expires_at > ?')
+          .all(agent.id, this.store.now()) as { project: string; name: string }[];
+        for (const lock of held) this.store.locks.release(agent, lock.project, lock.name);
+        if (held.length) lines.push(`Released its locks: ${held.map((l) => `${l.project}/${l.name}`).join(', ')}.`);
+      }
+      const system = this.store.system() ?? this.store.participantById(row.requester_id)!;
+      this.store.post(system, this.toTask(row).room, lines.join('\n'), row.message_id, { skipRateLimit: true });
+      if (policy.fallback) {
+        try {
+          const { to } = this.reassign(agent, row.id, policy.fallback, `${agent.name} went quiet for ${minutes} minutes`);
+          lost.push(to);
+        } catch (err) {
+          if (!(err instanceof OrcoError)) throw err;
+          this.store.post(system, this.toTask(row).room, `Could not hand task #${row.id} to ${policy.fallback}: ${err.message}`, row.message_id, { skipRateLimit: true });
+        }
+      }
+      this.store.audit.record(null, 'task.lost', { projectId: row.project_id, subject: `task:${row.id}`, detail: { agent: agent.name, minutes, fallback: policy.fallback, releaseLocks: policy.releaseLocks } });
+      this.store.events.emit('task', this.byId(row.id)!);
+    }
+    return lost;
+  }
+
   sweepStalled(): Task[] {
     const timed = this.store.db
       .prepare("SELECT id FROM tasks WHERE state = 'accepted' AND budget_minutes IS NOT NULL AND over_budget_notified = 0 AND accepted_at < ? - budget_minutes * 60000")

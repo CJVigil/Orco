@@ -56,6 +56,11 @@ const agentSchema = z.object({
   fallback: z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/).optional(),
   /** Without a fallback, or if the handoff fails, try again this many minutes later (or when the tool says it resets). */
   retry_minutes: z.number().int().min(5).max(1440).default(30),
+  /**
+   * A task this agent was running when its bridge stopped (a restart, a crash): "fail" it with a note
+   * naming its last checkpoint (default), or "resume" it once from that checkpoint.
+   */
+  recover: z.enum(['fail', 'resume']).optional(),
   /** Send each run's log to Orco with its usage (default on; usage is always sent). */
   run_logs: z.boolean().default(true),
 });

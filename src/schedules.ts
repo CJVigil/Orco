@@ -31,6 +31,12 @@ export interface Schedule {
   createdAt: string;
 }
 
+function checkExpiry(minutes: number | null | undefined): number | null {
+  if (minutes === undefined || minutes === null) return null;
+  if (!Number.isInteger(minutes) || minutes < 1 || minutes > 43_200) throw new OrcoError('invalid', 'expires_in_minutes is 1 to 43200 (30 days)');
+  return minutes;
+}
+
 export interface ScheduleInput {
   room: string;
   agent: string;
@@ -39,6 +45,8 @@ export interface ScheduleInput {
   tz?: string;
   budgetMinutes?: number | null;
   budgetCents?: number | null;
+  /** Each run expires this long after it was due if it has not started. */
+  expiresInMinutes?: number | null;
 }
 
 interface ScheduleRow {
@@ -62,6 +70,7 @@ interface ScheduleRow {
   cron: string;
   tz: string;
   budget_minutes: number | null;
+  expires_minutes: number | null;
   budget_cents: number | null;
   enabled: number;
   next_run: number;
@@ -76,7 +85,7 @@ const SELECT = `
          c.kind AS creator_kind, c.owner_id AS creator_owner_id, s.run_as_id, ra.name AS run_as,
          s.approval_id, ap.state AS approval_state,
          s.agent_id, a.name AS agent, a.owner_id AS agent_owner_id, s.request, s.cron, s.tz, s.budget_minutes,
-         s.budget_cents, s.enabled, s.next_run, s.last_run, s.last_task_id, s.last_error, s.created_at
+         s.budget_cents, s.expires_minutes, s.enabled, s.next_run, s.last_run, s.last_task_id, s.last_error, s.created_at
   FROM schedules s
   JOIN rooms r ON r.id = s.room_id
   LEFT JOIN projects p ON p.id = r.project_id
@@ -128,10 +137,10 @@ export class Schedules {
     const proposed = actor.kind === 'agent';
     const { lastInsertRowid } = this.store.db
       .prepare(
-        `INSERT INTO schedules (room_id, creator_id, agent_id, request, cron, tz, budget_minutes, budget_cents, next_run, enabled, run_as_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO schedules (room_id, creator_id, agent_id, request, cron, tz, budget_minutes, budget_cents, next_run, enabled, run_as_id, expires_minutes)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(room.id, actor.id, agent.id, request, cron, tz, input.budgetMinutes ?? null, input.budgetCents ?? null, next, proposed ? 0 : 1, proposed ? null : actor.id);
+      .run(room.id, actor.id, agent.id, request, cron, tz, input.budgetMinutes ?? null, input.budgetCents ?? null, next, proposed ? 0 : 1, proposed ? null : actor.id, checkExpiry(input.expiresInMinutes));
     const id = Number(lastInsertRowid);
     if (proposed) {
       const approval = this.store.approvals.request(actor, {
@@ -262,6 +271,7 @@ export class Schedules {
             budgetMinutes: row.budget_minutes,
             budgetCents: row.budget_cents,
             scheduleId: row.id,
+            expiresAt: row.expires_minutes ? now + row.expires_minutes * 60_000 : null,
           });
           taskId = task.id;
           created.push(task);

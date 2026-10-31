@@ -247,6 +247,7 @@ function scheduleInput(body: Record<string, unknown> | undefined): Partial<Sched
     tz: str(b.tz, 'tz'),
     budgetMinutes: nullableInt(b.budgetMinutes, 'budgetMinutes'),
     budgetCents: nullableInt(b.budgetCents, 'budgetCents'),
+    expiresInMinutes: nullableInt(b.expiresInMinutes ?? b.expires_in_minutes, 'expires_in_minutes'),
     enabled: b.enabled as boolean | undefined,
   };
 }
@@ -390,6 +391,8 @@ export function createApp(store: Store, options: AppOptions = {}) {
   const credentialOf = resolveCredential(store, undefined, proxyIdentity);
   /** Open event streams, told when the server shuts down so their clients reconnect instead of guessing. */
   const streams = new Set<() => void>();
+  /** Each agent's bridge stream: a newer bridge for the same agent takes over, and the older one is told. */
+  const bridgeStreams = new Map<number, { instance: string; takeover: (host: string) => void }>();
   const mcpAuth = authenticate(store, presence, oauth);
 
   const withStatus = (viewer: Participant, people: (Participant & { owner: string | null })[]) => {
@@ -1340,12 +1343,29 @@ export function createApp(store: Store, options: AppOptions = {}) {
     const me = req.participant!;
     const budgetMinutes = nullableInt(req.body?.budget_minutes, 'budget_minutes');
     const budgetCents = nullableInt(req.body?.budget_cents, 'budget_cents');
+    // expires_at (ISO) or expires_in_minutes: if it has not started by then, it is cancelled as expired.
+    const minutes = nullableInt(req.body?.expires_in_minutes, 'expires_in_minutes');
+    const at = req.body?.expires_at ? Date.parse(String(req.body.expires_at)) : null;
+    if (at !== null && Number.isNaN(at)) throw new OrcoError('invalid', 'expires_at is a date and time, like 2026-11-02T14:00:00Z');
+    const expiresAt = at ?? (minutes ? store.now() + minutes * 60_000 : null);
     res.status(201).json(
       store.once(me, idempotencyKey(req), 'task', (id) => store.tasks.get(me, id), () => {
-        const task = store.tasks.create(me, { agent: String(agent ?? ''), room: String(room ?? ''), request: String(request ?? ''), budgetMinutes, budgetCents });
+        const task = store.tasks.create(me, { agent: String(agent ?? ''), room: String(room ?? ''), request: String(request ?? ''), budgetMinutes, budgetCents, expiresAt });
         return { id: task.id, result: task };
       }),
     );
+  });
+  // A bridge claims a task's run before starting it, so two bridges never run it twice (see tasks.claimRun).
+  api.post('/tasks/:id/claim', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a task id');
+    res.json(store.tasks.claimRun(req.participant!, id, String(req.body?.instance ?? ''), optionalInt(req.body?.ttl_seconds) ?? 3600, { recover: req.body?.recover === true }));
+  });
+  api.delete('/tasks/:id/claim', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a task id');
+    store.tasks.releaseRun(req.participant!, id, String(req.body?.instance ?? req.query.instance ?? ''));
+    res.status(204).end();
   });
   api.get('/tasks/:id/runs', (req, res) => {
     const id = optionalInt(req.params.id);
@@ -1586,6 +1606,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
           scorecard30d: store.runs.scorecard(req.participant!, agent.name, 30),
           memory: store.memory.list(req.participant!, agent.name).length,
           hosted: store.hosted.of(participant),
+          lost: store.tasks.lostPolicy(participant),
           paused: store.controls.pausedFor(participant, null)?.scope === 'agent',
         };
       }),
@@ -1599,6 +1620,12 @@ export function createApp(store: Store, options: AppOptions = {}) {
   });
   api.post('/agents/:name/policy', (req, res) => {
     res.json(store.setTaskPolicy(req.participant!, String(req.params.name), req.body?.policy));
+  });
+  // What happens when the agent goes quiet mid-task: its owner decides (minutes, fallback, release locks).
+  api.post('/agents/:name/lost', (req, res) => {
+    const b = req.body ?? {};
+    const policy = b.minutes === null || b.off === true ? null : { minutes: Number(b.minutes), fallback: b.fallback ? String(b.fallback) : null, releaseLocks: b.release_locks === true };
+    res.json({ lost: store.tasks.setLostPolicy(req.participant!, String(req.params.name), policy) });
   });
   api.post('/agents/:name/followups', (req, res) => {
     if (typeof req.body?.auto !== 'boolean') throw new OrcoError('invalid', 'auto must be true or false');
@@ -1769,8 +1796,26 @@ export function createApp(store: Store, options: AppOptions = {}) {
       res.end();
     };
     streams.add(goingAway);
+    // One bridge per agent: when another one connects (a new computer, or started twice), the older
+    // stream gets "takeover" and closes, and that bridge stands down instead of reconnecting.
+    const instance = req.query.bridge === '1' && me.kind === 'agent' && !me.scope && typeof req.query.instance === 'string' ? req.query.instance.slice(0, 160) : null;
+    const bridge = instance
+      ? {
+          instance,
+          takeover: (host: string) => {
+            send('takeover', { host });
+            res.end();
+          },
+        }
+      : null;
+    if (bridge) {
+      const previous = bridgeStreams.get(me.id);
+      if (previous && previous.instance !== bridge.instance) previous.takeover(bridge.instance.slice(0, bridge.instance.lastIndexOf(':')) || 'another computer');
+      bridgeStreams.set(me.id, bridge);
+    }
     req.on('close', () => {
       streams.delete(goingAway);
+      if (bridge && bridgeStreams.get(me.id) === bridge) bridgeStreams.delete(me.id);
       clearInterval(heartbeat);
       store.events.off('credentials', recheck);
       store.events.off('ticket', onTicket);
@@ -1894,6 +1939,8 @@ export function createApp(store: Store, options: AppOptions = {}) {
   // Once a minute: report tasks whose agents have gone quiet or ran past their budget, and start scheduled tasks.
   const stallSweep = setInterval(() => {
     try {
+      store.tasks.expireDue();
+      store.tasks.sweepLost();
       store.tasks.sweepStalled();
       store.schedules.runDue();
       store.reminders.fireDue();

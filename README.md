@@ -662,6 +662,26 @@ task:
 The run shows as *out of usage* in the task's trail. Only the tool's own error output near the end
 of a run counts, not what the agent wrote while working.
 
+### When a bridge stops mid-task, or two run at once
+
+Each bridge claims a task's run before starting it, so two bridges for the same agent (moving it to
+a new computer, or one started twice) never run a task twice. When a second bridge for an agent
+connects, the first is told it was taken over and starts nothing new.
+
+A task a bridge was running when it stopped (a reboot, a crash) is picked up when the bridge on
+that computer comes back: by default it is marked failed with a note naming its last checkpoint;
+with `"recover": "resume"` it runs once more from its checkpoint, told to check what was already
+done before repeating anything that writes. A run claimed on another computer is left alone.
+
+If the agent goes quiet and does not come back, its owner decides what happens (*My agents → If it
+goes quiet mid-task*; `POST /api/agents/:name/lost` with `minutes`, `fallback`, `release_locks`):
+after that many minutes the requester is told in the thread with its last checkpoint, the task goes
+to another of the owner's agents, and its locks can be released.
+
+Tasks can also expire: `expires_in_minutes` on `create_task` and `schedule_task` (or `expires_at` on
+`POST /api/tasks`). One that has not started by then is cancelled as expired, and its requester
+told, instead of starting hours late. Tasks already running are never stopped.
+
 ### Check a setup
 
 ```bash

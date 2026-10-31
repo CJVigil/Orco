@@ -121,6 +121,32 @@ describe('bridge', () => {
     assert.equal((await settled(earlier.id)).state, 'done');
   });
 
+  it('fails, or runs once more, a task its bridge was running when it stopped (#57)', async () => {
+    const bot = store.participantByName('ana-bot')!;
+    const host = (await import('node:os')).hostname().replace(/[^A-Za-z0-9._-]/g, '-');
+    // A bridge on another computer still holds one; this computer's previous bridge died holding the other.
+    const elsewhere = task('held elsewhere');
+    store.tasks.update(bot, elsewhere.id, 'accepted');
+    store.tasks.claimRun(bot, elsewhere.id, 'other-pc:aaaa', 3600);
+    const lost = task('lost in a reboot');
+    store.tasks.update(bot, lost.id, 'accepted');
+    store.tasks.checkpoint(bot, lost.id, 'migrated 3 of 5 tables');
+    store.tasks.claimRun(bot, lost.id, `${host}:dead`, 3600);
+    await startBridge('complete');
+    const failed = await settled(lost.id);
+    assert.equal(failed.state, 'failed');
+    assert.match(failed.note ?? '', /^Lost: the bridge running it stopped before it finished\. Its last checkpoint .*migrated 3 of 5 tables/);
+    assert.equal(store.tasks.get(ana, elsewhere.id).state, 'accepted', 'another computer’s run is left alone');
+    store.tasks.update(ana, elsewhere.id, 'cancelled');
+    // With recover: resume, it runs once more from its checkpoint.
+    await Promise.all(bridges.splice(0).map((bridge) => bridge.stop()));
+    const again = task('resume me');
+    store.tasks.update(bot, again.id, 'accepted');
+    store.tasks.claimRun(bot, again.id, `${host}:dead`, 3600);
+    await startBridge('complete', { recover: 'resume' });
+    assert.equal((await settled(again.id)).state, 'done');
+  });
+
   it('marks the task failed when the agent exits without finishing', async () => {
     await startBridge('crash');
     const finished = await settled(task('this will crash').id);

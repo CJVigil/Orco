@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Tasks can expire (#59): `expires_in_minutes` on `create_task` and `schedule_task`, `expires_at` on
+  the REST route. One that has not started in time is cancelled with an "Expired" note and its
+  requester told; it can no longer be accepted or get a token.
+- One bridge per task (#58): a bridge claims a run before starting it, and a newer bridge for the
+  same agent takes over (the older one hears `takeover` and stands down).
+- Agents lost mid-task (#57): a restarted bridge fails, or with `"recover": "resume"` re-runs once,
+  a task it was running when it stopped; owners set what happens when an agent goes quiet (tell the
+  requester with the last checkpoint, hand the task to another of their agents, release its locks).
+- Accepting a task that is already yours and accepted is no longer an error.
+
 - Live updates that survive a drop (#60): event frames carry ids, a reconnect with `Last-Event-ID`
   replays the missed messages and sends `resync`, and a restart sends `shutdown` first. The web
   app, the bridge and `examples/forward-events.mjs` pick up where they left off.

@@ -3691,3 +3691,4 @@ button:disabled {
 .panel-actions.inline {
   padding: 0;
 }
+.narrow { width: 5rem; }

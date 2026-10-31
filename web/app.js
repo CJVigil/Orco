@@ -933,6 +933,7 @@ async function showMyAgents() {
           }),
           'File the follow-ups it suggests as tickets without asking me',
         ),
+        lostSettings(agent, agents),
         agent.taskPolicy === 'ask'
           ? el(
               'div',
@@ -1273,6 +1274,43 @@ async function releaseLock(lock, force) {
 
 /** Room status lines by room ref, kept current by the event stream. */
 const roomStatuses = new Map();
+
+/**
+ * What happens when an agent goes quiet mid-task (its computer sleeps, its session dies): after some
+ * minutes the requester is told with its last checkpoint, and the task can go to another of your agents.
+ */
+function lostSettings(agent, agents) {
+  const lost = agent.lost;
+  const on = el('input', { type: 'checkbox', checked: Boolean(lost) });
+  const minutes = el('input', { type: 'number', min: 5, max: 1440, value: lost?.minutes ?? 30, class: 'narrow', 'aria-label': 'Minutes' });
+  const fallback = el(
+    'select',
+    { 'aria-label': 'Hand the task to' },
+    el('option', { value: '', text: 'nobody, just tell the requester' }),
+    agents.filter((a) => a.name !== agent.name).map((a) => el('option', { value: a.name, text: a.name, selected: lost?.fallback === a.name })),
+  );
+  const locks = el('input', { type: 'checkbox', checked: Boolean(lost?.releaseLocks) });
+  const save = async () => {
+    try {
+      await api(`/agents/${encodeURIComponent(agent.name)}/lost`, {
+        method: 'POST',
+        body: on.checked ? { minutes: Number(minutes.value), fallback: fallback.value || null, release_locks: locks.checked } : { off: true },
+      });
+    } catch (err) {
+      alert(err.message);
+    }
+    void showMyAgents();
+  };
+  for (const input of [on, minutes, fallback, locks]) input.addEventListener('change', () => void save());
+  return el(
+    'details',
+    { class: 'memory-details', open: Boolean(lost) },
+    el('summary', { class: 'small', text: lost ? `If it goes quiet: after ${lost.minutes} min${lost.fallback ? `, to ${lost.fallback}` : ''}` : 'If it goes quiet mid-task' }),
+    el('label', { class: 'check small' }, on, 'When it is silent on a task for ', minutes, ' minutes, tell the requester with its last checkpoint'),
+    el('label', { class: 'small' }, 'and hand the task to ', fallback),
+    el('label', { class: 'check small' }, locks, 'and release the locks it holds'),
+  );
+}
 
 async function setRoomStatus() {
   const room = state.room.ref;
