@@ -107,6 +107,15 @@ describe('cross-project blockers (#22)', () => {
     assert.ok(!JSON.stringify(forDan).includes('Secret redesign') && !JSON.stringify(forDan).includes('WEB-') && !JSON.stringify(forDan).includes('launch'), JSON.stringify(forDan));
     const digest = store.portfolios.projectDigest(store.visibleProject(ana, 'api').id);
     assert.ok(!digest.includes('WEB-'), digest);
+
+    // The ticket itself, its lists and its history show the link but not what it points to.
+    const ticket = store.tickets.get(dan, apiTicket.ref);
+    assert.ok(ticket.blocked, 'still blocked');
+    assert.deepEqual(ticket.blockedBy, ['(hidden)']);
+    assert.equal(ticket.blockers[0]!.ref, '(hidden)');
+    const seen = JSON.stringify([ticket, store.tickets.list(dan, { project: 'api' })]);
+    assert.ok(!seen.includes('Secret redesign') && !seen.includes('WEB-'), seen);
+    assert.equal(store.tickets.get(ana, apiTicket.ref).blockers[0]!.title, 'Secret redesign', 'members of both still see it');
   });
 });
 

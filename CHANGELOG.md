@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Security: a ticket's linked tickets (blocked by, blocking, and their history) in projects the
+  reader cannot see are shown as hidden, as the roadmap and digests already did.
+
 - Tasks can expire (#59): `expires_in_minutes` on `create_task` and `schedule_task`, `expires_at` on
   the REST route. One that has not started in time is cancelled with an "Expired" note and its
   requester told; it can no longer be accepted or get a token.

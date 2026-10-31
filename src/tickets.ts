@@ -18,6 +18,8 @@ const DEFAULT_STATUSES: [string, StatusCategory][] = [
 ];
 
 const REF = /^([A-Za-z][A-Za-z0-9]{0,9})-(\d{1,9})$/;
+/** How a linked ticket in a project the viewer cannot see is named. */
+export const HIDDEN_REF = '(hidden)';
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const LABEL_NAME = /^[\p{L}\p{N}][\p{L}\p{N} ._/-]{0,31}$/u;
 const MAX_TITLE = 200;
@@ -417,7 +419,7 @@ export class Tickets {
     const dispatch = options.dispatch ?? true;
     const warning = dispatch && assignee?.kind === 'agent' && assignee.id !== actor.id ? this.dispatch(actor, created) : undefined;
     this.changed(created);
-    return { ticket: this.detail(id), ...(warning ? { warning } : {}) };
+    return { ticket: this.detail(actor, id), ...(warning ? { warning } : {}) };
   }
 
   update(actor: Participant, ref: string, input: TicketInput): Written {
@@ -548,7 +550,7 @@ export class Tickets {
       if (!Number.isFinite(input.sort)) throw new OrcoError('invalid', 'Sort must be a number');
       set('sort', input.sort);
     }
-    if (sets.length === 0 && newLabels === undefined && !criteria.apply && !links.apply) return { ticket: this.detail(row.id) };
+    if (sets.length === 0 && newLabels === undefined && !criteria.apply && !links.apply) return { ticket: this.detail(actor, row.id) };
 
     const openTask = row.task_id !== null && OPEN_STATES.includes(taskState(row)!);
     // Canceling the ticket stops its agent too, when this person may cancel that task.
@@ -594,7 +596,7 @@ export class Tickets {
     }
     const warning = newAssignee?.kind === 'agent' && newAssignee.id !== actor.id ? this.dispatch(actor, updated) : undefined;
     this.changed(updated);
-    return { ticket: this.detail(row.id), ...(warning ? { warning } : {}) };
+    return { ticket: this.detail(actor, row.id), ...(warning ? { warning } : {}) };
   }
 
   /** Checks criteria edits now and returns the writes to run inside the update's transaction. */
@@ -676,7 +678,7 @@ export class Tickets {
     this.store.db.prepare(`UPDATE tickets SET updated_at = ${NOW_SQL} WHERE id = ?`).run(row.id);
     this.store.audit.record(actor, 'ticket.comment', { projectId: row.project_id, subject: `ticket:${refOf(row)}`, detail: { text } });
     this.changed(row);
-    return this.detail(row.id);
+    return this.detail(actor, row.id);
   }
 
   /**
@@ -709,7 +711,7 @@ export class Tickets {
     this.activity(row.id, actor, 'change', null, { changes, claimed: true });
     this.store.audit.record(actor, 'ticket.claim', { projectId: row.project_id, subject: `ticket:${refOf(row)}`, detail: { changes } });
     this.changed(row);
-    return this.detail(row.id);
+    return this.detail(actor, row.id);
   }
 
   startTask(actor: Participant, ref: string): Written {
@@ -722,7 +724,7 @@ export class Tickets {
     const warning = this.dispatch(actor, row);
     if (warning) throw new OrcoError('forbidden', warning);
     this.changed(row);
-    return { ticket: this.detail(row.id) };
+    return { ticket: this.detail(actor, row.id) };
   }
 
   /**
@@ -749,7 +751,7 @@ export class Tickets {
 
   /** A ticket; with `since` (an activity id), only the activity after it. */
   get(actor: Participant, ref: string, since?: number): Ticket {
-    return this.detail(this.byRef(actor, ref).id, since ?? 0);
+    return this.detail(actor, this.byRef(actor, ref).id, since ?? 0);
   }
 
   list(actor: Participant, filter: TicketFilter = {}): TicketSummary[] {
@@ -825,7 +827,7 @@ export class Tickets {
     const rows = this.store.db
       .prepare(`${TICKET_SELECT} WHERE ${where.join(' AND ')} ORDER BY s.position, t.sort, t.id DESC LIMIT ?`)
       .all(...params, limit) as unknown as TicketRow[];
-    return this.summaries(rows);
+    return this.summaries(rows, actor);
   }
 
   /* Workflow, labels, milestones and cycles */
@@ -1212,9 +1214,9 @@ export class Tickets {
     return this.store.db.prepare(`${TICKET_SELECT} WHERE t.id = ?`).get(id) as TicketRow | undefined;
   }
 
-  private detail(id: number, since = 0): Ticket {
+  private detail(actor: Participant, id: number, since = 0): Ticket {
     const row = this.row(id)!;
-    const [summary] = this.summaries([row]);
+    const [summary] = this.summaries([row], actor);
     const children = this.store.db.prepare(`${TICKET_SELECT} WHERE t.parent_id = ? ORDER BY t.number`).all(id) as unknown as TicketRow[];
     const activity = this.store.db
       .prepare(
@@ -1234,13 +1236,13 @@ export class Tickets {
     const criteriaItems = this.store.db
       .prepare('SELECT id, text, done FROM ticket_criteria WHERE ticket_id = ? ORDER BY position, id')
       .all(id) as unknown as { id: number; text: string; done: number }[];
+    // A linked ticket in a project the viewer cannot see still shows that a link exists, and nothing else.
     const link = (sql: string) =>
-      (this.store.db.prepare(sql).all(id) as unknown as TicketRow[]).map((r) => ({
-        ref: refOf(r),
-        title: r.title,
-        status: r.status_name,
-        category: r.category,
-      }));
+      (this.store.db.prepare(sql).all(id) as unknown as TicketRow[]).map((r) =>
+        this.store.canSee(actor, r.project_id)
+          ? { ref: refOf(r), title: r.title, status: r.status_name, category: r.category }
+          : { ref: HIDDEN_REF, title: 'A ticket in a project you cannot see', status: '', category: r.category },
+      );
     const last = this.store.db.prepare('SELECT max(id) AS id FROM ticket_activity WHERE ticket_id = ?').get(id) as { id: number | null };
     return {
       ...summary!,
@@ -1251,24 +1253,42 @@ export class Tickets {
       blockers: link(`${TICKET_SELECT} WHERE t.id IN (SELECT blocker_id FROM ticket_links WHERE blocked_id = ?) ORDER BY t.id`),
       blocking: link(`${TICKET_SELECT} WHERE t.id IN (SELECT blocked_id FROM ticket_links WHERE blocker_id = ?) ORDER BY t.id`),
       lastActivityId: last.id ?? 0,
-      children: this.summaries(children),
+      children: this.summaries(children, actor),
       activity: activity.map((a) => ({
         id: a.id,
         actor: a.actor,
         actorKind: a.actor_kind,
         kind: a.kind,
         body: a.body,
-        detail: a.detail === null ? null : JSON.parse(a.detail),
+        detail: a.detail === null ? null : this.redactDetail(actor, JSON.parse(a.detail)),
         createdAt: a.created_at,
       })),
     };
   }
 
-  private summaries(rows: TicketRow[]): TicketSummary[] {
+  /** History entries name linked tickets; those in projects the viewer cannot see are hidden. */
+  private redactDetail(actor: Participant, detail: unknown): unknown {
+    const changes = (detail as { changes?: { field: string; from: unknown; to: unknown }[] } | null)?.changes;
+    if (!Array.isArray(changes)) return detail;
+    const hide = (refs: unknown) => (Array.isArray(refs) ? refs.map((ref) => (this.refVisible(actor, String(ref)) ? ref : HIDDEN_REF)) : refs);
+    return {
+      ...(detail as object),
+      changes: changes.map((c) => (c.field === 'blockedBy' ? { ...c, from: hide(c.from), to: hide(c.to) } : c)),
+    };
+  }
+
+  private refVisible(actor: Participant, ref: string): boolean {
+    const match = REF.exec(ref);
+    if (!match) return true;
+    const project = this.store.db.prepare('SELECT id FROM projects WHERE ticket_key = ? COLLATE NOCASE').get(match[1]!) as { id: number } | undefined;
+    return project !== undefined && this.store.canSee(actor, project.id);
+  }
+
+  private summaries(rows: TicketRow[], actor: Participant): TicketSummary[] {
     const ids = rows.map((r) => r.id);
     const labels = this.labelsFor(ids);
     const criteria = this.criteriaCounts(ids);
-    const blockedBy = this.openBlockers(ids);
+    const blockedBy = this.openBlockers(ids, actor);
     return rows.map((row) => {
       const state = taskState(row);
       return {
@@ -1314,18 +1334,18 @@ export class Tickets {
     return map;
   }
 
-  private openBlockers(ids: number[]): Map<number, string[]> {
+  private openBlockers(ids: number[], actor: Participant): Map<number, string[]> {
     const map = new Map<number, string[]>();
     if (ids.length === 0) return map;
     const rows = this.store.db
       .prepare(
-        `SELECT tl.blocked_id, p.ticket_key, b.number FROM ticket_links tl
+        `SELECT tl.blocked_id, p.ticket_key, b.number, b.project_id FROM ticket_links tl
          JOIN tickets b ON b.id = tl.blocker_id JOIN ticket_statuses s ON s.id = b.status_id JOIN projects p ON p.id = b.project_id
          WHERE tl.blocked_id IN (${ids.map(() => '?').join(', ')}) AND s.category NOT IN ('completed', 'canceled')
          ORDER BY b.id`,
       )
-      .all(...ids) as unknown as { blocked_id: number; ticket_key: string; number: number }[];
-    for (const r of rows) map.set(r.blocked_id, [...(map.get(r.blocked_id) ?? []), refOf(r)]);
+      .all(...ids) as unknown as { blocked_id: number; ticket_key: string; number: number; project_id: number }[];
+    for (const r of rows) map.set(r.blocked_id, [...(map.get(r.blocked_id) ?? []), this.store.canSee(actor, r.project_id) ? refOf(r) : HIDDEN_REF]);
     return map;
   }
 

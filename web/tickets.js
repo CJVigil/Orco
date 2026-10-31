@@ -685,15 +685,18 @@ export function createTickets(ctx) {
         void save(ticket, { blockedByAdd: [add.value.trim().toUpperCase()] });
       }
     });
-    const row = (link, remove) =>
-      el(
+    // A linked ticket in a project you cannot see comes as "(hidden)": nothing to open or remove.
+    const row = (link, remove) => {
+      const hidden = link.ref === '(hidden)';
+      return el(
         'div',
         { class: 'child-row link-row' },
         statusIcon(link.category),
-        el('button', { class: 'ticket-ref link-ref', type: 'button', text: link.ref, onclick: () => void openTicket(link.ref) }),
+        hidden ? el('span', { class: 'ticket-ref link-ref muted', text: 'hidden' }) : el('button', { class: 'ticket-ref link-ref', type: 'button', text: link.ref, onclick: () => void openTicket(link.ref) }),
         el('span', { class: 'list-title', text: link.title }),
-        remove ? el('button', { class: 'ghost icon', type: 'button', 'aria-label': `Remove blocker ${link.ref}`, onclick: remove }, icon('x')) : null,
+        remove && !hidden ? el('button', { class: 'ghost icon', type: 'button', 'aria-label': `Remove blocker ${link.ref}`, onclick: remove }, icon('x')) : null,
       );
+    };
     const open = ticket.blockedBy.length + (ticket.blockedReason ? 1 : 0);
     const reason = el('input', {
       value: ticket.blockedReason ?? null,
