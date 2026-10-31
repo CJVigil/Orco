@@ -78,8 +78,9 @@ function readCookie(header: string | undefined, name: string): string | undefine
 
 const STALL_SWEEP_MS = 60_000;
 
-function authenticate(store: Store, presence: Presence, oauth?: OAuth, proxyIdentity?: (req: Request) => string | null) {
-  return (req: Request, res: Response, next: NextFunction) => {
+/** Who a request's credential belongs to right now (a token, a browser session or an OAuth token), or null. */
+function resolveCredential(store: Store, oauth?: OAuth, proxyIdentity?: (req: Request) => string | null) {
+  return (req: Request): { participant: Participant | null; token: string | undefined; bearer: string | undefined } => {
     const bearer = /^Bearer (\S+)$/.exec(req.headers.authorization ?? '')?.[1];
     const token = bearer ?? readCookie(req.headers.cookie, COOKIE);
     // Browser sessions from sign-in links work only as the cookie, and only for the web app's API.
@@ -101,6 +102,14 @@ function authenticate(store: Store, presence: Presence, oauth?: OAuth, proxyIden
       const owner = identity ? store.identities.userFor(identity) : null;
       if (identity && owner?.id !== participant.id) participant = null;
     }
+    return { participant, token, bearer };
+  };
+}
+
+function authenticate(store: Store, presence: Presence, oauth?: OAuth, proxyIdentity?: (req: Request) => string | null) {
+  const resolve = resolveCredential(store, oauth, proxyIdentity);
+  return (req: Request, res: Response, next: NextFunction) => {
+    const { participant, token, bearer } = resolve(req);
     if (!token || !participant) {
       const challenge = oauth
         ? `Bearer resource_metadata="${oauth.issuer}/.well-known/oauth-protected-resource/mcp", scope="${OAUTH_SCOPE}"`
@@ -373,6 +382,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
     if (pendingId) oidcPending.delete(pendingId);
   };
   const auth = authenticate(store, presence, undefined, proxyIdentity);
+  const credentialOf = resolveCredential(store, undefined, proxyIdentity);
   const mcpAuth = authenticate(store, presence, oauth);
 
   const withStatus = (viewer: Participant, people: (Participant & { owner: string | null })[]) => {
@@ -1601,13 +1611,15 @@ export function createApp(store: Store, options: AppOptions = {}) {
       Connection: 'keep-alive',
       'X-Accel-Buffering': 'no',
     });
-    const send = (event: string, data: unknown) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    // Once a stream has ended, events already on their way to it are dropped.
+    const send = (event: string, data: unknown) => !res.writableEnded && res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     const onMessage = (message: Message) => {
       if (store.canSee(me, message.projectId)) send('message', message);
     };
     const onStructure = () => send('structure', {});
     const onTask = (task: Task) => {
       if (store.canSee(me, task.projectId)) send('task', task);
+      if (me.scope?.taskId === task.id) recheck(); // a task token ends with its task
     };
     const onApproval = (approval: Approval) => {
       if (store.canSee(me, approval.projectId)) send('approval', approval);
@@ -1675,11 +1687,23 @@ export function createApp(store: Store, options: AppOptions = {}) {
     store.events.on('decision', onDecision);
     store.events.on('controls', onControls);
     presence.events.on('change', onPresence);
+    // A stream lasts as long as the credential that opened it: a new token, a sign-out, an expired
+    // session or a finished task's token ends it, at once when Orco knows and otherwise within a heartbeat.
+    const recheck = () => {
+      if (res.writableEnded) return false;
+      const now = credentialOf(req).participant;
+      if (now?.id === me.id && (now.scope?.taskId ?? null) === (me.scope?.taskId ?? null)) return true;
+      send('revoked', { reason: 'This credential no longer signs in; sign in or connect again' });
+      res.end();
+      return false;
+    };
+    store.events.on('credentials', recheck);
     const release = presence.hold(me.id, req.query.bridge === '1' && me.kind === 'agent' ? 'bridges' : 'streams');
-    const heartbeat = setInterval(() => res.write(': ping\n\n'), HEARTBEAT_MS);
+    const heartbeat = setInterval(() => recheck() && !res.writableEnded && res.write(': ping\n\n'), HEARTBEAT_MS);
     send('ready', { name: me.name });
     req.on('close', () => {
       clearInterval(heartbeat);
+      store.events.off('credentials', recheck);
       store.events.off('ticket', onTicket);
       store.events.off('notes', onNotes);
       store.events.off('flag', onFlag);

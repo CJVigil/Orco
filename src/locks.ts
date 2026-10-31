@@ -153,12 +153,14 @@ export class Locks {
     const current = this.row(projectId, name);
     if (!current || !this.isHeld(current, this.store.now())) return;
     const ownHold = current.holder_id === actor.id || current.holder_owner_id === actor.id;
-    if (!ownHold && !(force && actor.kind === 'user')) {
+    if (!ownHold && !(force && actor.kind === 'user' && !actor.scope)) {
       throw new OrcoError(
         'forbidden',
         `${name} is held by ${current.holder}. Only its holder, the holder's owner, or a human using force can release it.`,
       );
     }
+    // Taking someone else's lock is a change to the project: people with read-only access cannot.
+    if (!ownHold) this.store.assertWrite(actor, projectId);
     this.store.db
       .prepare('UPDATE locks SET holder_id = NULL, note = NULL, expires_at = NULL WHERE project_id = ? AND name = ?')
       .run(projectId, name);

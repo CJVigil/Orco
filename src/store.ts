@@ -402,6 +402,7 @@ export class Store {
     // A new token is a fresh start: browsers signed in with a link (a lost laptop, say) are signed out too.
     if (participant.kind === 'user') this.signins.endAll(participant.id);
     this.audit.record(null, 'token.rotate', { subject: `${participant.kind}:${name}` });
+    this.events.emit('credentials', { participantId: participant.id });
     return token;
   }
 

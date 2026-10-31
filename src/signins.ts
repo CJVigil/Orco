@@ -99,10 +99,13 @@ export class SignIns {
   /** Signs a person out of every browser (and spends their unused links). Returns how many sessions ended. */
   endAll(userId: number): number {
     this.store.db.prepare("UPDATE signin_links SET used_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE user_id = ? AND used_at IS NULL").run(userId);
-    return Number(this.store.db.prepare('DELETE FROM web_sessions WHERE user_id = ?').run(userId).changes);
+    const ended = Number(this.store.db.prepare('DELETE FROM web_sessions WHERE user_id = ?').run(userId).changes);
+    this.store.events.emit('credentials', { participantId: userId });
+    return ended;
   }
 
   end(token: string): void {
     this.store.db.prepare('DELETE FROM web_sessions WHERE token_hash = ?').run(hashToken(token));
+    this.store.events.emit('credentials', {});
   }
 }

@@ -73,6 +73,12 @@ describe('locks', () => {
     const [notice] = store.read(ana, 'agentic/general').slice(-1);
     assert.equal(notice?.text, 'Force-released lock b, which was held by @ana-claude.');
     assert.deepEqual(notice?.mentions, ['ana-claude']);
+
+    // Read-only access cannot take someone else's lock away, by force or otherwise.
+    store.addMember(ana, 'agentic', 'cara', 'viewer');
+    store.locks.acquire(anaClaude, 'agentic', 'c', 60);
+    assert.equal(code(() => store.locks.release(store.participantByName('cara')!, 'agentic', 'c', true)), 'forbidden');
+    assert.equal(store.locks.list(ana).length, 1);
   });
 
   it('is invisible outside the project', () => {

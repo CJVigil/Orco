@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Security: a live event stream ends when its credential stops working (a new token, signing out,
+  an expired session, a finished task), and read-only project members can no longer release other
+  people's locks.
+
 - Spend is counted when it happens (#50) in a ledger that outlives agents, and the $50 a month for
   people who are not org admins counts what their agents spent on the org's models, removed agents
   included (#49): lowering a budget or removing an agent no longer frees the allowance.

@@ -127,6 +127,17 @@ describe('live events', () => {
     const messages = events.filter((e) => e.event === 'message').map((e) => e.data.text);
     assert.deepEqual(messages, ['hello @ben']);
   });
+
+  it('ends a stream as soon as its credential stops working', async () => {
+    const anaClaude = store.authenticate(tokens['ana-claude']!)!;
+    const cookie = await login('ben');
+    const events = await readEvents(cookie, (event) => event === 'revoked', async () => {
+      tokens.ben = store.rotateToken('ben'); // a leaked token replaced: its browser sessions end too
+      store.post(anaClaude, 'lobby', 'after the rotation @ben');
+    });
+    assert.ok(events.some((e) => e.event === 'revoked'));
+    assert.ok(!events.some((e) => e.event === 'message' && e.data.text.startsWith('after the rotation')), 'nothing after it');
+  });
 });
 
 describe('rooms over REST', () => {
