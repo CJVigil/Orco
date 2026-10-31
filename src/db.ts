@@ -869,6 +869,11 @@ export const MIGRATIONS = [
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
   `,
+  // 28: a ticket closed as a duplicate of, or superseded by, another one.
+  `
+  ALTER TABLE tickets ADD COLUMN closed_reason TEXT CHECK (closed_reason IN ('duplicate', 'superseded'));
+  ALTER TABLE tickets ADD COLUMN closed_for INTEGER REFERENCES tickets(id);
+  `,
 ];
 
 export interface OpenOptions {

@@ -136,24 +136,33 @@ but approval policy is never" and the bridge marks the task failed. Codex must b
 
 ## If an agent cannot see Orco's tools
 
-An agent session connects to Orco when it starts. If the server was not running then (after a
-reboot, say), the session has no `orco` tools until it reconnects, even once the server is back:
+An agent session connects to Orco when it starts, and loses Orco's tools whenever the server goes
+away: if it was not running when the session started (after a reboot, say), or if it restarts while
+the session is open (an upgrade, a crash). Sub-agents the session starts later go without too. The
+tools stay gone, even once the server is back, until the session reconnects:
 
 - Claude Code: run `/mcp`, pick `orco`, then *Reconnect*. Or start a new session.
 - Codex: start a new session.
 - The bridge (`orco bridge`, `orco connect`) reconnects by itself; it starts a fresh session for
   each task.
 
-To have the server up before any session starts, start it when you log in.
+So after restarting or upgrading Orco, reconnect open sessions. To have the server up before any
+session starts, start it when you log in.
 
-Linux, a systemd user unit at `~/.config/systemd/user/orco.service`:
+These recipes give the full path to Node, Orco and the database, because a service starts in a
+different folder than your terminal: without `--db` it would open (or create) an empty `orco.db`
+there, and every agent token would fail. Step 1 made `orco.db` in the clone, so point at that.
+
+Linux, a systemd user unit at `~/.config/systemd/user/orco.service` (replace `/home/you/Orco` with
+your clone, and check Node's path with `which node`):
 
 ```ini
 [Unit]
 Description=Orco
 
 [Service]
-ExecStart=/usr/bin/env orco serve --host 127.0.0.1 --port 7420
+WorkingDirectory=/home/you/Orco
+ExecStart=/usr/bin/node /home/you/Orco/dist/cli.js serve --host 127.0.0.1 --port 7420 --db /home/you/Orco/orco.db
 Restart=on-failure
 
 [Install]
@@ -164,14 +173,20 @@ Then `systemctl --user enable --now orco` (and `loginctl enable-linger $USER` to
 while you are logged out).
 
 macOS: add a login item (System Settings → General → Login Items) for a script that runs
-`orco serve --host 127.0.0.1 --port 7420`.
+`/usr/local/bin/node /Users/you/Orco/dist/cli.js serve --host 127.0.0.1 --port 7420 --db /Users/you/Orco/orco.db`
+(with your own paths; `which node` shows Node's).
 
-Windows, a scheduled task that runs at logon (PowerShell):
+Windows, a scheduled task that runs at logon. Run this in PowerShell **from the clone**, so it
+picks up the right paths:
 
 ```powershell
-$action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c orco serve --host 127.0.0.1 --port 7420"
+$orco = (Get-Location).Path
+$node = (Get-Command node).Source
+$action = New-ScheduledTaskAction -Execute $node -Argument "`"$orco\dist\cli.js`" serve --host 127.0.0.1 --port 7420 --db `"$orco\orco.db`"" -WorkingDirectory $orco
 Register-ScheduledTask -TaskName "Orco" -Action $action -Trigger (New-ScheduledTaskTrigger -AtLogOn) -Settings (New-ScheduledTaskSettingsSet -ExecutionTimeLimit 0 -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1))
 ```
+
+If you keep the database elsewhere (`ORCO_DB`), use that path for `--db` instead.
 
 ## Next
 

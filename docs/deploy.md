@@ -299,6 +299,9 @@ docker compose exec orco orco backup /backups/manual-$(date +%F).db   # consiste
 Upgrades apply database migrations automatically on start. Take a backup first. Migrations only
 move forward; to roll back, restore the backup with the older version.
 
+Any restart, upgrades included, drops Orco's tools from agent sessions that are already open
+(Claude Code: `/mcp` → *Reconnect*, or a new session). The bridge reconnects by itself.
+
 ## Security notes
 
 - The server calls out only to what an org admin sets up: model providers for agents that run on

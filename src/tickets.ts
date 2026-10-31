@@ -22,12 +22,15 @@ const REF = /^([A-Za-z][A-Za-z0-9]{0,9})-(\d{1,9})$/;
 export const HIDDEN_REF = '(hidden)';
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const LABEL_NAME = /^[\p{L}\p{N}][\p{L}\p{N} ._/-]{0,31}$/u;
-const MAX_TITLE = 200;
-const MAX_DESCRIPTION = 20_000;
-const MAX_COMMENT = 10_000;
-const MAX_HANDOFF = 4_000;
-const MAX_BLOCKED_REASON = 200;
-const MAX_CRITERIA = 50;
+export const MAX_TITLE = 200;
+export const MAX_DESCRIPTION = 20_000;
+export const MAX_COMMENT = 10_000;
+export const MAX_HANDOFF = 4_000;
+export const MAX_BLOCKED_REASON = 200;
+export const MAX_CRITERIA = 50;
+export const MAX_CRITERION = 300;
+/** Tickets one update_tickets call may change. */
+export const MAX_BULK = 50;
 
 type Change = { field: string; from: unknown; to: unknown };
 const DEFAULT_CYCLE_DAYS = 14;
@@ -132,6 +135,10 @@ export interface Ticket extends TicketSummary {
   activity: TicketActivity[];
   /** The newest activity id; pass it back as `since` to read only what changed. */
   lastActivityId: number;
+  /** Closed as a duplicate of, or superseded by, another ticket. */
+  closedAs: { reason: 'duplicate' | 'superseded'; ticket: TicketLink } | null;
+  /** Tickets closed as duplicates of this one, or superseded by it. */
+  replaces: (TicketLink & { reason: 'duplicate' | 'superseded' })[];
 }
 
 export interface TicketInput {
@@ -157,6 +164,9 @@ export interface TicketInput {
   blockedByRemove?: string[];
   /** Mark the ticket blocked on something outside the project; empty clears it. */
   blockedReason?: string;
+  /** Close it (Canceled) as a duplicate of this ticket, or as superseded by it. */
+  duplicateOf?: string;
+  supersededBy?: string;
 }
 
 export interface TicketFilter {
@@ -224,6 +234,8 @@ interface TicketRow {
   handoff_by: string | null;
   handoff_at: string | null;
   blocked_reason: string;
+  closed_reason: 'duplicate' | 'superseded' | null;
+  closed_for: number | null;
   sort: number;
   created_at: string;
   updated_at: string;
@@ -239,7 +251,7 @@ const TICKET_SELECT = `
          t.cycle_id, cy.number AS cycle_number, t.task_id, tk.state AS task_state, tk.updated_at AS task_since,
          ap.state AS task_approval_state,
          (SELECT q.id FROM questions q WHERE q.task_id = t.task_id AND q.state = 'open') AS task_open_question,
-         t.handoff, hb.name AS handoff_by, t.handoff_at, t.blocked_reason,
+         t.handoff, hb.name AS handoff_by, t.handoff_at, t.blocked_reason, t.closed_reason, t.closed_for,
          t.sort, t.created_at, t.updated_at, t.started_at, t.completed_at
   FROM tickets t
   JOIN projects p ON p.id = t.project_id
@@ -374,7 +386,7 @@ export class Tickets {
     const dueDate = checkDate(input.dueDate, 'Due date');
     const criteria = (input.criteriaAdd ?? []).map((text) => text.trim()).filter(Boolean);
     if (criteria.length > MAX_CRITERIA) throw new OrcoError('invalid', `A ticket can have at most ${MAX_CRITERIA} criteria`);
-    for (const text of criteria) if (text.length > 300) throw new OrcoError('invalid', 'A criterion can be at most 300 characters');
+    for (const text of criteria) if (text.length > MAX_CRITERION) throw new OrcoError('invalid', `A criterion can be at most ${MAX_CRITERION} characters`);
     const blockers = [...new Set(input.blockedByAdd ?? [])].map((ref) => this.byRef(actor, ref));
     const handoff = (input.handoff ?? '').trim();
     const blockedReason = (input.blockedReason ?? '').trim().replace(/\s+/g, ' ');
@@ -445,16 +457,39 @@ export class Tickets {
       const description = this.description(input.description);
       if (description !== row.description) {
         set('description', description);
-        changes.push({ field: 'description', from: null, to: null });
+        // The text itself is not copied into the history (it can be long); say what happened instead.
+        changes.push({ field: 'description', from: row.description ? '(earlier text)' : null, to: description ? '(updated: see description)' : '(cleared)' });
       }
     }
     let newStatus: TicketStatus | null = null;
+    // Closing as a duplicate or superseded: Canceled, with a link to where the work went.
+    if (input.duplicateOf !== undefined && input.supersededBy !== undefined) throw new OrcoError('invalid', 'A ticket is a duplicate or superseded, not both');
+    const closeRef = input.duplicateOf ?? input.supersededBy;
+    const closeReason = input.duplicateOf !== undefined ? 'duplicate' : 'superseded';
+    let closeFor: TicketRow | null = null;
+    if (closeRef !== undefined) {
+      closeFor = this.byRef(actor, closeRef);
+      if (closeFor.id === row.id) throw new OrcoError('invalid', 'A ticket cannot replace itself');
+      set('closed_reason', closeReason);
+      set('closed_for', closeFor.id);
+      changes.push({ field: 'closedAs', from: null, to: `${closeReason === 'duplicate' ? 'duplicate of' : 'superseded by'} ${refOf(closeFor)}` });
+      if (input.status === undefined && row.category !== 'canceled') {
+        const canceled = this.statuses(row.project_id).find((s) => s.category === 'canceled');
+        if (!canceled) throw new OrcoError('conflict', `${row.project} has no canceled status to close it with`);
+        input = { ...input, status: canceled.name };
+      }
+    }
     if (input.status !== undefined) {
       const status = this.statusByName(row.project_id, input.status);
       if (status.id !== row.status_id) {
         newStatus = status;
         changes.push({ field: 'status', from: row.status_name, to: status.name });
       }
+    }
+    // Reopened: it no longer stands for another ticket.
+    if (newStatus && newStatus.category !== 'canceled' && closeFor === null && row.closed_reason) {
+      set('closed_reason', null);
+      set('closed_for', null);
     }
     if (input.priority !== undefined) {
       const priority = this.priority(input.priority);
@@ -595,8 +630,41 @@ export class Tickets {
       this.store.audit.record(actor, 'ticket.update', { projectId: row.project_id, subject: `ticket:${refOf(row)}`, detail: { changes } });
     }
     const warning = newAssignee?.kind === 'agent' && newAssignee.id !== actor.id ? this.dispatch(actor, updated) : undefined;
+    if (closeFor) {
+      this.activity(closeFor.id, actor, 'change', null, { changes: [{ field: 'replaces', from: null, to: `${refOf(row)} (${closeReason})` }] });
+      this.changed(closeFor);
+    }
+    if (newStatus && ['completed', 'canceled'].includes(newStatus.category)) this.noteUnblocked(row.id, actor);
     this.changed(updated);
     return { ticket: this.detail(actor, row.id), ...(warning ? { warning } : {}) };
+  }
+
+  /**
+   * Several ticket edits in one call, all or nothing, counted once against the rate limit: an agent
+   * assigning or closing many tickets at once should not need one call (and one rate-limit hit) each.
+   */
+  updateMany(actor: Participant, edits: { ref: string; input: TicketInput }[]): Written[] {
+    if (edits.length === 0 || edits.length > MAX_BULK) throw new OrcoError('invalid', `Change 1 to ${MAX_BULK} tickets at once`);
+    if (new Set(edits.map((e) => e.ref.toUpperCase())).size !== edits.length) throw new OrcoError('invalid', 'Each ticket at most once per call');
+    this.store.checkRate(actor, 'post');
+    this.store.begin();
+    try {
+      const results = this.store.withoutRateLimit(() =>
+        edits.map((e) => {
+          try {
+            return this.update(actor, e.ref, e.input);
+          } catch (err) {
+            if (err instanceof OrcoError) throw new OrcoError(err.code, `${e.ref}: ${err.message} (nothing was changed)`);
+            throw err;
+          }
+        }),
+      );
+      this.store.commit();
+      return results;
+    } catch (err) {
+      this.store.rollback();
+      throw err;
+    }
   }
 
   /** Checks criteria edits now and returns the writes to run inside the update's transaction. */
@@ -607,14 +675,14 @@ export class Tickets {
     const remove = input.criteriaRemove ?? [];
     if (!add.length && !done.length && !undone.length && !remove.length) return {};
     if (remove.length && actor.kind !== 'user') throw new OrcoError('forbidden', 'Only people can remove acceptance criteria');
-    for (const text of add) if (text.length > 300) throw new OrcoError('invalid', 'A criterion can be at most 300 characters');
+    for (const text of add) if (text.length > MAX_CRITERION) throw new OrcoError('invalid', `A criterion can be at most ${MAX_CRITERION} characters`);
     const items = this.store.db
       .prepare('SELECT id, text, done, position FROM ticket_criteria WHERE ticket_id = ?')
       .all(ticketId) as unknown as { id: number; text: string; done: number; position: number }[];
     if (items.length + add.length > MAX_CRITERIA) throw new OrcoError('invalid', `A ticket can have at most ${MAX_CRITERIA} criteria`);
     const byId = new Map(items.map((c) => [c.id, c]));
     for (const id of [...done, ...undone, ...remove]) {
-      if (!byId.has(id)) throw new OrcoError('not_found', `No criterion ${id} on this ticket`);
+      if (!byId.has(id)) throw new OrcoError('not_found', `No criterion ${id} on this ticket; its criterion ids are ${[...byId.keys()].join(', ') || 'none'} (from get_ticket's criteria_items)`);
     }
     const textOf = (ids: number[]) => ids.map((id) => byId.get(id)!.text);
     const next = Math.max(-1, ...items.map((c) => c.position)) + 1;
@@ -717,6 +785,11 @@ export class Tickets {
   startTask(actor: Participant, ref: string): Written {
     const row = this.byRef(actor, ref);
     this.store.assertWrite(actor, row.project_id);
+    // An agent cannot task itself; on its own ticket it gets a task from its owner instead (#66).
+    if (actor.kind === 'agent' && row.assignee_id === actor.id) {
+      this.taskFor(actor, ref);
+      return { ticket: this.detail(actor, row.id) };
+    }
     if (row.assignee_kind !== 'agent') throw new OrcoError('invalid', `Assign ${refOf(row)} to an agent first`);
     if (row.task_id !== null && OPEN_STATES.includes(taskState(row)!)) {
       throw new OrcoError('conflict', `${row.assignee} already has task #${row.task_id} for ${refOf(row)}`);
@@ -1112,6 +1185,7 @@ export class Tickets {
         subject: `ticket:${refOf(row)}`,
         detail: { changes: [{ field: 'status', from: current.name, to: target.name }], via: `task:${task.id}` },
       });
+      if (['completed', 'canceled'].includes(target.category)) this.noteUnblocked(row.id, actor);
     } else {
       this.store.db.prepare(`UPDATE tickets SET updated_at = ${NOW_SQL} WHERE id = ?`).run(row.id);
     }
@@ -1150,6 +1224,7 @@ export class Tickets {
       const changes = [{ field: 'status', from: current.name, to: target.name }];
       this.activity(row.id, actor, 'change', null, { changes });
       this.store.audit.record(actor, 'ticket.update', { projectId: row.project_id, subject: `ticket:${refOf(row)}`, detail: { changes, via: 'review' } });
+      if (['completed', 'canceled'].includes(target.category)) this.noteUnblocked(row.id, actor);
     } else {
       this.store.db.prepare(`UPDATE tickets SET updated_at = ${NOW_SQL} WHERE id = ?`).run(row.id);
     }
@@ -1253,6 +1328,15 @@ export class Tickets {
       blockers: link(`${TICKET_SELECT} WHERE t.id IN (SELECT blocker_id FROM ticket_links WHERE blocked_id = ?) ORDER BY t.id`),
       blocking: link(`${TICKET_SELECT} WHERE t.id IN (SELECT blocked_id FROM ticket_links WHERE blocker_id = ?) ORDER BY t.id`),
       lastActivityId: last.id ?? 0,
+      closedAs:
+        row.closed_reason && row.closed_for !== null
+          ? { reason: row.closed_reason, ticket: link(`${TICKET_SELECT} WHERE t.id = (SELECT closed_for FROM tickets WHERE id = ?)`)[0]! }
+          : null,
+      replaces: (this.store.db.prepare(`${TICKET_SELECT} WHERE t.closed_for = ? ORDER BY t.id`).all(id) as unknown as TicketRow[]).map((r) => ({
+        ...(this.store.canSee(actor, r.project_id) ? { ref: refOf(r), title: r.title, status: r.status_name } : { ref: HIDDEN_REF, title: 'A ticket in a project you cannot see', status: '' }),
+        category: r.category,
+        reason: r.closed_reason!,
+      })),
       children: this.summaries(children, actor),
       activity: activity.map((a) => ({
         id: a.id,
@@ -1273,7 +1357,17 @@ export class Tickets {
     const hide = (refs: unknown) => (Array.isArray(refs) ? refs.map((ref) => (this.refVisible(actor, String(ref)) ? ref : HIDDEN_REF)) : refs);
     return {
       ...(detail as object),
-      changes: changes.map((c) => (c.field === 'blockedBy' ? { ...c, from: hide(c.from), to: hide(c.to) } : c)),
+      changes: changes.map((c) => {
+        if (c.field === 'blockedBy') return { ...c, from: hide(c.from), to: hide(c.to) };
+        if (c.field === 'unblocked') return this.refVisible(actor, String(c.from)) ? c : { ...c, from: HIDDEN_REF };
+        // "duplicate of API-2", "API-1 (duplicate)": the ticket ref is the first word that looks like one.
+        if (c.field === 'closedAs' || c.field === 'replaces') {
+          const text = String(c.to);
+          const ref = /[A-Za-z][A-Za-z0-9]{0,9}-\d{1,9}/.exec(text)?.[0];
+          return ref && !this.refVisible(actor, ref) ? { ...c, to: text.replace(ref, HIDDEN_REF) } : c;
+        }
+        return c;
+      }),
     };
   }
 
@@ -1364,6 +1458,29 @@ export class Tickets {
       map.set(r.ticket_id, list);
     }
     return map;
+  }
+
+  /**
+   * A ticket just closed: each ticket it was the last open blocker of gets a history line and a fresh
+   * updated_at, so catch_up and the board show that its work is ready.
+   */
+  private noteUnblocked(blockerId: number, actor: Participant | null): void {
+    const blocker = this.row(blockerId);
+    if (!blocker) return;
+    const waiting = this.store.db
+      .prepare(
+        `SELECT tl.blocked_id FROM ticket_links tl JOIN tickets t ON t.id = tl.blocked_id JOIN ticket_statuses s ON s.id = t.status_id
+         WHERE tl.blocker_id = ? AND s.category NOT IN ('completed', 'canceled')
+           AND NOT EXISTS (SELECT 1 FROM ticket_links o JOIN tickets b ON b.id = o.blocker_id JOIN ticket_statuses bs ON bs.id = b.status_id
+                           WHERE o.blocked_id = tl.blocked_id AND bs.category NOT IN ('completed', 'canceled'))`,
+      )
+      .all(blockerId) as { blocked_id: number }[];
+    for (const { blocked_id } of waiting) {
+      this.activity(blocked_id, actor, 'change', null, { changes: [{ field: 'unblocked', from: refOf(blocker), to: blocker.status_name }] });
+      this.store.db.prepare(`UPDATE tickets SET updated_at = ${NOW_SQL} WHERE id = ?`).run(blocked_id);
+      const unblocked = this.row(blocked_id);
+      if (unblocked) this.changed(unblocked);
+    }
   }
 
   private activity(ticketId: number, actor: Participant | null, kind: TicketActivity['kind'], body: string | null, detail: unknown): void {

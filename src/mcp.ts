@@ -14,7 +14,23 @@ import { MAX_BUDGET_CENTS, MAX_BUDGET_MINUTES, type Task } from './tasks.js';
 import { waitFor } from './waits.js';
 import { myWork } from './work.js';
 import { ONYX_NOTE } from './onyx.js';
-import { LABEL_COLORS, PRIORITIES, STATUS_CATEGORIES, type Ticket, type TicketInput, type TicketSummary } from './tickets.js';
+import {
+  LABEL_COLORS,
+  MAX_BLOCKED_REASON,
+  MAX_BULK,
+  MAX_COMMENT,
+  MAX_CRITERIA,
+  MAX_CRITERION,
+  MAX_DESCRIPTION,
+  MAX_HANDOFF,
+  MAX_TITLE,
+  PRIORITIES,
+  STATUS_CATEGORIES,
+  type Ticket,
+  type TicketInput,
+  type TicketSummary,
+  type Written,
+} from './tickets.js';
 
 const MAX_WAIT_SECONDS = 300;
 
@@ -208,37 +224,70 @@ function formatTicket(t: Ticket, since?: number) {
     creator: t.creator,
     created: t.createdAt,
     updated: t.updatedAt,
+    ...(t.closedAs ? { closed_as: { reason: t.closedAs.reason, ticket: t.closedAs.ticket.ref } } : {}),
+    ...(t.replaces.length ? { replaces: t.replaces.map((r) => ({ ticket: r.ref, reason: r.reason })) } : {}),
     children: t.children.map(formatTicketSummary),
     activity: t.activity.map((a) => ({ at: a.createdAt, by: a.actor, kind: a.kind, text: a.body, detail: a.detail })),
   };
 }
 
+/**
+ * What a ticket write replies with: the summary, criterion ids and where the history is up to, not the
+ * whole ticket (its history and every sub-ticket can run to thousands of characters). Pass full for it.
+ */
+function formatWritten(result: Written, full?: boolean) {
+  const t = result.ticket;
+  return {
+    ticket: full
+      ? formatTicket(t)
+      : {
+          ...formatTicketSummary(t),
+          ...(t.criteriaItems.length ? { criteria_items: t.criteriaItems } : {}),
+          ...(t.closedAs ? { closed_as: { reason: t.closedAs.reason, ticket: t.closedAs.ticket.ref } } : {}),
+          last_activity_id: t.lastActivityId,
+          note: 'Summary only; get_ticket (with since) has the description, handoff and history.',
+        },
+    ...(result.warning ? { warning: result.warning } : {}),
+  };
+}
+
 const ticketFields = {
-  title: z.string().optional(),
-  description: z.string().optional().describe('Markdown'),
+  title: z.string().max(MAX_TITLE).optional(),
+  description: z.string().max(MAX_DESCRIPTION).optional().describe('Markdown'),
   status: z.string().optional().describe('A status name from project_plan, such as "In Progress"'),
   priority: z.enum(PRIORITIES).optional(),
   estimate: z.number().int().min(0).max(100).nullable().optional().describe('Points'),
   due_date: z.string().nullable().optional().describe('YYYY-MM-DD'),
-  assignee: z.string().nullable().optional().describe('A person or agent; assigning an agent starts a task for it'),
+  assignee: z
+    .string()
+    .nullable()
+    .optional()
+    .describe('A person or agent. Assigning another agent starts a task for it; assigning yourself does not (ask_question with ticket, or start_ticket_task, opens one from your owner)'),
   labels: z.array(z.string()).optional().describe('Replaces the label set; names from project_plan'),
   milestone: z.string().nullable().optional(),
   cycle: z.union([z.number().int(), z.literal('current')]).nullable().optional(),
   parent: z.string().nullable().optional().describe('Parent ticket, like API-3'),
   handoff: z
     .string()
+    .max(MAX_HANDOFF)
     .optional()
     .describe('Replace the handoff note: what is done, what is next, branch or PR, gotchas. Keep it current so a fresh session can resume.'),
-  criteria_add: z.array(z.string()).optional().describe('Acceptance criteria to add'),
-  criteria_done: z.array(z.number().int()).optional().describe('Criterion ids now met'),
-  criteria_undone: z.array(z.number().int()).optional().describe('Criterion ids no longer met'),
-  criteria_remove: z.array(z.number().int()).optional().describe('People only'),
+  criteria_add: z.array(z.string().max(MAX_CRITERION)).max(MAX_CRITERIA).optional().describe(`Acceptance criteria to add (at most ${MAX_CRITERIA} per ticket)`),
+  criteria_done: z
+    .array(z.number().int())
+    .optional()
+    .describe('Criterion ids now met: the id from criteria_items (get_ticket, or this tool\'s reply) or my_work\'s open_criteria, not a position'),
+  criteria_undone: z.array(z.number().int()).optional().describe('Criterion ids (from criteria_items) no longer met'),
+  criteria_remove: z.array(z.number().int()).optional().describe('Criterion ids to remove; people only'),
   blocked_by_add: z.array(z.string()).optional().describe('Tickets this one waits on, like API-4'),
   blocked_by_remove: z.array(z.string()).optional(),
   blocked_reason: z
     .string()
+    .max(MAX_BLOCKED_REASON)
     .optional()
-    .describe('Mark the ticket blocked on something outside the project ("waiting on the vendor"); empty clears it'),
+    .describe('Mark the ticket blocked on something outside the project ("waiting on the vendor"), on one line; empty clears it'),
+  duplicate_of: z.string().optional().describe('Close it (Canceled) as a duplicate of this ticket, like API-12; both show the link'),
+  superseded_by: z.string().optional().describe('Close it (Canceled) as superseded by this ticket, like API-12'),
 };
 
 type TicketArgs = { [K in keyof typeof ticketFields]?: z.infer<(typeof ticketFields)[K]> };
@@ -264,6 +313,8 @@ function ticketInput(args: TicketArgs): TicketInput {
     blockedByAdd: args.blocked_by_add,
     blockedByRemove: args.blocked_by_remove,
     blockedReason: args.blocked_reason,
+    duplicateOf: args.duplicate_of,
+    supersededBy: args.superseded_by,
   };
 }
 
@@ -1041,14 +1092,10 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
     'create_ticket',
     {
       annotations: annotate('create_ticket'),
-      description: 'File a ticket in a project. It starts in the first backlog status unless you pass one.',
-      inputSchema: z.object({ project: z.string(), ...ticketFields, title: z.string() }),
+      description: 'File a ticket in a project. It starts in the first backlog status unless you pass one. Replies with a summary; full: true for the whole ticket.',
+      inputSchema: z.object({ project: z.string(), ...ticketFields, title: z.string().max(MAX_TITLE), full: z.boolean().optional() }),
     },
-    async ({ project, ...args }) =>
-      run(() => {
-        const { ticket, warning } = store.tickets.create(me, project, { ...ticketInput(args), title: args.title });
-        return { ticket: formatTicket(ticket), ...(warning ? { warning } : {}) };
-      }),
+    async ({ project, full, ...args }) => run(() => formatWritten(store.tickets.create(me, project, { ...ticketInput(args), title: args.title }), full)),
   );
 
   server.registerTool(
@@ -1056,14 +1103,39 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
     {
       annotations: annotate('update_ticket'),
       description:
-        'Change a ticket: move its status, edit fields, reassign it. Only the fields you pass change. ' +
-        'If you are working a ticket through a task, finish the task with update_task as well.',
-      inputSchema: z.object({ ticket: z.string(), ...ticketFields }),
+        'Change a ticket: move its status, edit fields, reassign it, or close it as a duplicate. Only the fields you pass ' +
+        'change. If you are working a ticket through a task, finish the task with update_task as well. Replies with a ' +
+        'summary; full: true for the whole ticket. Changing many tickets? Use update_tickets.',
+      inputSchema: z.object({ ticket: z.string(), ...ticketFields, full: z.boolean().optional() }),
     },
-    async ({ ticket, ...args }) =>
+    async ({ ticket, full, ...args }) => run(() => formatWritten(store.tickets.update(me, ticket, ticketInput(args)), full)),
+  );
+
+  server.registerTool(
+    'update_tickets',
+    {
+      annotations: annotate('update_tickets'),
+      description:
+        `Change up to ${MAX_BULK} tickets in one call: set gives fields for all of them, and each entry can add or override its ` +
+        'own. All or nothing, and it counts as one post toward the rate limit. Replies with one line per ticket.',
+      inputSchema: z.object({
+        tickets: z.array(z.object({ ticket: z.string(), ...ticketFields })).min(1).max(MAX_BULK),
+        set: z.object(ticketFields).optional().describe('Fields applied to every ticket in the call'),
+      }),
+    },
+    async ({ tickets, set }) =>
       run(() => {
-        const result = store.tickets.update(me, ticket, ticketInput(args));
-        return { ticket: formatTicket(result.ticket), ...(result.warning ? { warning: result.warning } : {}) };
+        const shared = set ? ticketInput(set) : {};
+        const results = store.tickets.updateMany(
+          me,
+          tickets.map(({ ticket, ...args }) => {
+            const own = Object.fromEntries(Object.entries(ticketInput(args)).filter(([, v]) => v !== undefined));
+            return { ref: ticket, input: { ...shared, ...own } };
+          }),
+        );
+        return results
+          .map(({ ticket: t, warning }) => `${t.ref}: ${t.status.name}${t.assignee ? `, ${t.assignee.name}` : ''}${t.task ? `, task #${t.task.id} ${t.task.state}` : ''}${warning ? ` (${warning})` : ''}`)
+          .join('\n');
       }),
   );
 
@@ -1072,7 +1144,7 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
     {
       annotations: annotate('comment_ticket'),
       description: 'Add a comment to a ticket: progress, findings, a link to a PR.',
-      inputSchema: z.object({ ticket: z.string(), text: z.string() }),
+      inputSchema: z.object({ ticket: z.string(), text: z.string().max(MAX_COMMENT) }),
     },
     async ({ ticket, text }) =>
       run(() => {
@@ -1187,10 +1259,11 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
       annotations: annotate('claim_ticket'),
       description:
         'Take an unassigned ticket for yourself, safely: if another agent claimed it first, this fails and you pick another. ' +
-        'Moves it to the first started status unless start is false.',
-      inputSchema: z.object({ ticket: z.string(), start: z.boolean().optional() }),
+        'Moves it to the first started status unless start is false. It starts no task; start_ticket_task (or ask_question ' +
+        'with ticket) opens one from your owner when you need progress, checkpoints or questions.',
+      inputSchema: z.object({ ticket: z.string(), start: z.boolean().optional(), full: z.boolean().optional() }),
     },
-    async ({ ticket, start }) => run(() => formatTicket(store.tickets.claim(me, ticket, { start }))),
+    async ({ ticket, start, full }) => run(() => formatWritten({ ticket: store.tickets.claim(me, ticket, { start }) }, full)),
   );
 
   server.registerTool(
@@ -1313,8 +1386,8 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
           .array(
             z.object({
               key: z.string().optional().describe('A name for this ticket within the call, like "api"'),
-              title: z.string(),
-              description: z.string().optional(),
+              title: z.string().max(MAX_TITLE),
+              description: z.string().max(MAX_DESCRIPTION).optional(),
               status: z.string().optional(),
               priority: z.enum(PRIORITIES).optional(),
               estimate: z.number().int().min(0).max(100).optional(),
@@ -1325,7 +1398,7 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
               cycle: z.union([z.number().int(), z.literal('current')]).optional(),
               parent: z.string().optional().describe('A key in this call, or an existing ticket like API-3'),
               blocked_by: z.array(z.string()).optional().describe('Keys in this call or existing tickets'),
-              criteria: z.array(z.string()).optional().describe('Acceptance criteria'),
+              criteria: z.array(z.string().max(MAX_CRITERION)).max(MAX_CRITERIA).optional().describe('Acceptance criteria'),
             }),
           )
           .min(1)
@@ -1356,7 +1429,11 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         const result = importTickets(store, me, project, rows, { createLabels: create_labels, createMilestones: create_milestones, dryRun: dry_run });
         return {
           dry_run: result.dryRun,
-          tickets: result.created.map((c) => ({ key: c.key, ref: c.ref, title: c.title })),
+          // Criterion ids are what criteria_done takes later, so they come back with each ticket.
+          tickets: result.created.map((c) => {
+            const items = !result.dryRun && c.ref ? store.tickets.get(me, c.ref).criteriaItems : [];
+            return { key: c.key, ref: c.ref, title: c.title, ...(items.length ? { criteria_items: items } : {}) };
+          }),
           labels_created: result.labelsCreated,
           milestones_created: result.milestonesCreated,
         };
@@ -1367,10 +1444,12 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
     'start_ticket_task',
     {
       annotations: annotate('start_ticket_task'),
-      description: "Start (or restart) the task for a ticket's assigned agent, for example after a fix was asked for.",
-      inputSchema: z.object({ ticket: z.string() }),
+      description:
+        "Start (or restart) the task for a ticket's assigned agent, for example after a fix was asked for. On a ticket " +
+        'assigned to you, it opens an accepted task from your owner, so progress, checkpoints and questions work.',
+      inputSchema: z.object({ ticket: z.string(), full: z.boolean().optional() }),
     },
-    async ({ ticket }) => run(() => formatTicket(store.tickets.startTask(me, ticket).ticket)),
+    async ({ ticket, full }) => run(() => formatWritten(store.tickets.startTask(me, ticket), full)),
   );
 
   server.registerTool(

@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Ticket writes over MCP (`create_ticket`, `update_ticket`, `claim_ticket`, `start_ticket_task`)
+  reply with a summary, criterion ids and `last_activity_id` instead of the whole ticket; `full:
+  true` gives the old reply (#65). `claim_ticket` and `start_ticket_task` now reply as `{ ticket }`
+  like the others.
+- `update_tickets` (and `POST /api/tickets/bulk`) changes up to 50 tickets at once, all or nothing,
+  counted as one post (#71).
+- Close a ticket as a duplicate or superseded: `duplicate_of` / `superseded_by` on `update_ticket`,
+  shown on both tickets (#73).
+- When a ticket's last blocker closes, it gets a history line and is touched, so `catch_up` shows
+  it (#74). Description edits read as updated or cleared in the history, not null → null (#70).
+- `start_ticket_task` on your own ticket opens a task from your owner (#66); tool descriptions say
+  which assignments start tasks, that criterion ids come from `criteria_items` (and the error lists
+  them, and `create_tickets` returns them) (#68), and text limits are in the schemas (#69).
+- Docs: the start-at-login recipes use full paths to Node, Orco and the database (#67); any
+  restart, upgrades included, needs open agent sessions to reconnect (#72).
+
 - Security: a ticket's linked tickets (blocked by, blocking, and their history) in projects the
   reader cannot see are shown as hidden, as the roadmap and digests already did.
 

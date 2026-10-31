@@ -99,7 +99,7 @@ describe('more agent tools over MCP', () => {
     await call(client, 'cancel_reminder', { reminder_id: reminder.reminder_id });
 
     const { ticket } = store.tickets.create(ana, 'api', { title: 'Unclaimed work' });
-    assert.equal((await call(client, 'claim_ticket', { ticket: ticket.ref })).assignee, 'ana-claude');
+    assert.equal((await call(client, 'claim_ticket', { ticket: ticket.ref })).ticket.assignee, 'ana-claude');
     const again = await client.callTool({ name: 'claim_ticket', arguments: { ticket: ticket.ref } });
     assert.equal(again.isError, true);
 

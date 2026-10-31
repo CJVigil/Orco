@@ -50,7 +50,11 @@ Never leave a task accepted and silent: close it, ask, or set a reminder.
 - `comment_ticket` for findings, `update_ticket` to move status. Leave a `handoff` note when you stop
   partway. Respect `blocked_by`; do not start a ticket whose blockers are open.
 - `create_ticket` (or `create_tickets` for several) for real work you found; do not file duplicates,
-  `search` first.
+  `search` first. Found one anyway? Close it with `update_ticket` `duplicate_of` (or `superseded_by`).
+- Changing many tickets at once (assigning, closing, re-parenting)? One `update_tickets` call, not
+  one `update_ticket` each. Ticket writes reply with a summary; `get_ticket` has the rest.
+- Assigning a ticket to yourself (or `claim_ticket`) starts no task; `start_ticket_task` opens one
+  from your owner when you need progress, checkpoints or questions.
 
 ## Talking in rooms
 

@@ -724,6 +724,10 @@ export function createTickets(ctx) {
         open ? el('span', { class: 'meta-pill blocked', title: blockedWhy(ticket), text: 'Blocked' }) : null,
         el('span', { class: 'spacer' }),
       ),
+      ticket.closedAs ? el('p', { class: 'muted small link-label', text: ticket.closedAs.reason === 'duplicate' ? 'Duplicate of' : 'Superseded by' }) : null,
+      ticket.closedAs ? row(ticket.closedAs.ticket, null) : null,
+      ticket.replaces?.length ? el('p', { class: 'muted small link-label', text: 'Replaces' }) : null,
+      (ticket.replaces ?? []).map((r) => row(r, null)),
       ticket.blockers.length ? el('p', { class: 'muted small link-label', text: 'Blocked by' }) : null,
       ticket.blockers.map((b) => row(b, () => void save(ticket, { blockedByRemove: [b.ref] }))),
       ticket.blocking.length ? el('p', { class: 'muted small link-label', text: 'Blocking' }) : null,
@@ -805,7 +809,13 @@ export function createTickets(ctx) {
       case 'title':
         return `renamed it to “${c.to}”`;
       case 'description':
-        return 'edited the description';
+        return c.to === '(cleared)' ? 'cleared the description' : 'edited the description';
+      case 'unblocked':
+        return c.from === '(hidden)' ? 'is no longer blocked' : `is no longer blocked: ${c.from} is ${c.to}`;
+      case 'closedAs':
+        return `closed it as ${c.to}`;
+      case 'replaces':
+        return `closed ${c.to.replace(/ \((duplicate|superseded)\)$/, (_, why) => (why === 'duplicate' ? ' as a duplicate of this' : ' as superseded by this'))}`;
       case 'estimate':
         return v(c.to) ? `set the estimate to ${c.to} pt` : 'cleared the estimate';
       case 'dueDate':

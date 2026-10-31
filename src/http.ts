@@ -205,6 +205,8 @@ function ticketInput(body: Record<string, unknown> | undefined): TicketInput {
     blockedByAdd: list(b.blockedByAdd, 'blockedByAdd', 'string'),
     blockedByRemove: list(b.blockedByRemove, 'blockedByRemove', 'string'),
     blockedReason: str(b.blockedReason, 'blockedReason'),
+    duplicateOf: str(b.duplicateOf, 'duplicateOf'),
+    supersededBy: str(b.supersededBy, 'supersededBy'),
   };
 }
 
@@ -1216,6 +1218,17 @@ export function createApp(store: Store, options: AppOptions = {}) {
   });
   api.get('/tickets/:ref', (req, res) => {
     res.json(store.tickets.get(req.participant!, String(req.params.ref), optionalInt(req.query.since)));
+  });
+  // Several tickets at once, all or nothing: { tickets: [{ ticket, ...fields }], set: { ...fields } }.
+  api.post('/tickets/bulk', (req, res) => {
+    const list = Array.isArray(req.body?.tickets) ? (req.body.tickets as Record<string, unknown>[]) : null;
+    if (!list) throw new OrcoError('invalid', 'Expected tickets: [{ ticket, ...fields }]');
+    const shared = req.body?.set ? ticketInput(req.body.set) : {};
+    const edits = list.map((entry) => {
+      const own = Object.fromEntries(Object.entries(ticketInput(entry)).filter(([, v]) => v !== undefined));
+      return { ref: String(entry?.ticket ?? ''), input: { ...shared, ...own } };
+    });
+    res.json(store.tickets.updateMany(req.participant!, edits));
   });
   api.post('/tickets/:ref', (req, res) => {
     res.json(store.tickets.update(req.participant!, String(req.params.ref), ticketInput(req.body)));
