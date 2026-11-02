@@ -907,7 +907,8 @@ export function createApp(store: Store, options: AppOptions = {}) {
   api.post('/questions/:id/answer', (req, res) => {
     const id = optionalInt(req.params.id);
     if (id === undefined) throw new OrcoError('invalid', 'Expected a question id');
-    res.json(store.questions.answer(req.participant!, id, str(req.body?.answer, 'answer') ?? ''));
+    const choices = Array.isArray(req.body?.choices) ? (req.body.choices as unknown[]).map(String) : [];
+    res.json(store.questions.answer(req.participant!, id, str(req.body?.answer, 'answer') ?? '', choices));
   });
   api.post('/questions/:id/resume', (req, res) => {
     const id = optionalInt(req.params.id);
@@ -1420,6 +1421,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
         project: typeof q.project === 'string' && q.project ? q.project : undefined,
         query: typeof q.q === 'string' ? q.q : undefined,
         tag: typeof q.tag === 'string' && q.tag ? q.tag : undefined,
+        ticket: typeof q.ticket === 'string' && q.ticket ? q.ticket : undefined,
         all: q.all === '1',
         limit: optionalInt(q.limit),
       }),
@@ -1587,12 +1589,15 @@ export function createApp(store: Store, options: AppOptions = {}) {
     );
   });
   api.post('/approvals', (req, res) => {
-    const { room, summary, details, ttl_seconds, approver } = req.body ?? {};
+    const { room, summary, details, ttl_seconds, approver, ticket, scope, valid_for_hours } = req.body ?? {};
     res.status(201).json(
       store.approvals.request(req.participant!, {
-        room: String(room ?? ''),
+        room: typeof room === 'string' ? room : undefined,
+        ticket: typeof ticket === 'string' ? ticket : undefined,
         summary: String(summary ?? ''),
         details: typeof details === 'string' ? details : undefined,
+        scope: typeof scope === 'string' || Array.isArray(scope) ? scope : undefined,
+        validForHours: optionalInt(valid_for_hours),
         approver: approver === 'owner' || approver === 'members' ? approver : undefined,
         ttlSeconds: optionalInt(ttl_seconds),
       }),

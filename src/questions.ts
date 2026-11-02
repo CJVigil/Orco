@@ -9,6 +9,23 @@ export type QuestionAudience = 'one' | 'project';
 export type QuestionKind = 'question' | 'plan';
 export type PlanVerdict = 'approved' | 'rejected';
 
+/** One choice in a multiple-choice question. */
+export interface QuestionOption {
+  label: string;
+  description?: string;
+}
+
+/** Choices that make a question one tap to answer; free text ("Other") stays possible. */
+export interface QuestionChoices {
+  options?: QuestionOption[];
+  recommended?: string;
+  multiSelect?: boolean;
+}
+
+const MAX_OPTIONS = 10;
+const MAX_LABEL = 80;
+const MAX_OPTION_DESCRIPTION = 300;
+
 export interface Question {
   id: number;
   taskId: number;
@@ -23,6 +40,10 @@ export interface Question {
   kind: QuestionKind;
   verdict: PlanVerdict | null;
   question: string;
+  /** Choices to pick from, if it is multiple choice; free text is always allowed too. */
+  options: QuestionOption[];
+  recommended: string | null;
+  multiSelect: boolean;
   answer: string | null;
   answeredBy: string | null;
   state: QuestionState;
@@ -42,6 +63,9 @@ export interface QuestionSummary {
   kind: QuestionKind;
   verdict: PlanVerdict | null;
   question: string;
+  options: QuestionOption[];
+  recommended: string | null;
+  multiSelect: boolean;
   answer: string | null;
   answeredBy: string | null;
   seenAt: string | null;
@@ -66,6 +90,9 @@ interface QuestionRow {
   kind: QuestionKind;
   verdict: PlanVerdict | null;
   question: string;
+  options: string | null;
+  recommended: string | null;
+  multi_select: number;
   answer: string | null;
   answered_by: string | null;
   state: QuestionState;
@@ -77,7 +104,7 @@ interface QuestionRow {
 const QUESTION_SELECT = `
   SELECT q.id, q.task_id, t.room_id, r.project_id, p.name AS project, r.name AS room, q.message_id, t.message_id AS thread_id,
          q.asker_id, ak.name AS asker, q.target_id, tg.name AS target, tg.owner_id AS target_owner_id,
-         ak.owner_id AS assignee_owner_id, q.audience, q.kind, q.verdict, q.question, q.answer, ab.name AS answered_by, q.state,
+         ak.owner_id AS assignee_owner_id, q.audience, q.kind, q.verdict, q.question, q.options, q.recommended, q.multi_select, q.answer, ab.name AS answered_by, q.state,
          q.seen_at, q.created_at, q.answered_at
   FROM questions q
   JOIN tasks t ON t.id = q.task_id
@@ -90,6 +117,20 @@ const QUESTION_SELECT = `
 
 const MAX_QUESTION = 2_000;
 const MAX_ANSWER = 4_000;
+
+function checkOptions(choices: QuestionChoices): QuestionOption[] {
+  const options = (choices.options ?? []).map((o) => ({ label: String(o?.label ?? '').trim(), ...(o?.description?.trim() ? { description: o.description.trim() } : {}) }));
+  if (!options.length) {
+    if (choices.recommended || choices.multiSelect) throw new OrcoError('invalid', 'recommended and multi_select go with options');
+    return [];
+  }
+  if (options.length < 2 || options.length > MAX_OPTIONS) throw new OrcoError('invalid', `Give 2 to ${MAX_OPTIONS} options`);
+  if (options.some((o) => !o.label || o.label.length > MAX_LABEL)) throw new OrcoError('invalid', `Each option needs a label of at most ${MAX_LABEL} characters`);
+  if (options.some((o) => (o.description?.length ?? 0) > MAX_OPTION_DESCRIPTION)) throw new OrcoError('invalid', `Option descriptions are at most ${MAX_OPTION_DESCRIPTION} characters`);
+  if (new Set(options.map((o) => o.label)).size !== options.length) throw new OrcoError('invalid', 'Option labels must differ');
+  if (choices.recommended !== undefined && !options.some((o) => o.label === choices.recommended)) throw new OrcoError('invalid', 'recommended is one of the option labels');
+  return options;
+}
 
 function toQuestion(row: QuestionRow): Question {
   return {
@@ -105,6 +146,9 @@ function toQuestion(row: QuestionRow): Question {
     kind: row.kind,
     verdict: row.verdict,
     question: row.question,
+    options: row.options ? (JSON.parse(row.options) as QuestionOption[]) : [],
+    recommended: row.recommended,
+    multiSelect: row.multi_select === 1,
     answer: row.answer,
     answeredBy: row.answered_by,
     state: row.state,
@@ -125,6 +169,9 @@ function toSummary(q: Question): QuestionSummary {
     kind: q.kind,
     verdict: q.verdict,
     question: q.question,
+    options: q.options,
+    recommended: q.recommended,
+    multiSelect: q.multiSelect,
     answer: q.answer,
     answeredBy: q.answeredBy,
     seenAt: q.seenAt,
@@ -143,7 +190,9 @@ export class Questions {
     return this.ask(actor, taskId, plan, to, 'plan');
   }
 
-  ask(actor: Participant, taskId: number, text: string, to: QuestionTarget = 'requester', kind: QuestionKind = 'question'): Question {
+  ask(actor: Participant, taskId: number, text: string, to: QuestionTarget = 'requester', kind: QuestionKind = 'question', choices: QuestionChoices = {}): Question {
+    const options = checkOptions(choices);
+    if (options.length && kind === 'plan') throw new OrcoError('invalid', 'Plans are approved or rejected, not multiple choice');
     const task = this.store.tasks.get(actor, taskId);
     const assignee = this.store.participantByName(task.assignee)!;
     if (assignee.id !== actor.id) throw new OrcoError('forbidden', `Only ${task.assignee} can ask questions on task ${taskId}`);
@@ -167,12 +216,15 @@ export class Questions {
     const addressee = audience === 'project' ? `@${MENTION_ALL}` : `@${target.name}`;
     let id = 0;
     const heading = kind === 'plan' ? `Plan for task #${taskId}, waiting for approval:\n` : `Question on task #${taskId}: `;
-    this.store.post(actor, task.room, `${addressee} ${heading}${question}`, task.messageId, {
+    const listed = options.length
+      ? `\n${choices.multiSelect ? 'Pick any of' : 'Pick one'}:\n${options.map((o, i) => `${i + 1}. ${o.label}${o.label === choices.recommended ? ' (recommended)' : ''}${o.description ? ` — ${o.description}` : ''}`).join('\n')}`
+      : '';
+    this.store.post(actor, task.room, `${addressee} ${heading}${question}${listed}`, task.messageId, {
       skipRateLimit: true,
       onInsert: (messageId) => {
         const { lastInsertRowid } = this.store.db
-          .prepare('INSERT INTO questions (task_id, message_id, asker_id, target_id, audience, kind, question) VALUES (?, ?, ?, ?, ?, ?, ?)')
-          .run(taskId, messageId, actor.id, target.id, audience, kind, question);
+          .prepare('INSERT INTO questions (task_id, message_id, asker_id, target_id, audience, kind, question, options, recommended, multi_select) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+          .run(taskId, messageId, actor.id, target.id, audience, kind, question, options.length ? JSON.stringify(options) : null, options.length ? (choices.recommended ?? null) : null, choices.multiSelect && options.length ? 1 : 0);
         id = Number(lastInsertRowid);
       },
     });
@@ -186,10 +238,21 @@ export class Questions {
     return asked;
   }
 
-  answer(actor: Participant, id: number, text: string): Question {
+  /**
+   * Answers a question: free text, or for a multiple-choice one the picked labels (any of them when it
+   * allows several), with free text alongside as "Other".
+   */
+  answer(actor: Participant, id: number, text: string, picked: string[] = []): Question {
     const row = this.openRow(actor, id);
     if (row.kind === 'plan') throw new OrcoError('invalid', `Question ${id} is a plan; approve or reject it`);
-    const answer = text.trim();
+    const options = row.options ? (JSON.parse(row.options) as QuestionOption[]) : [];
+    const chosen = [...new Set(picked.map((p) => String(p).trim()).filter(Boolean))];
+    if (chosen.length && !options.length) throw new OrcoError('invalid', `Question ${id} has no options; answer in words`);
+    const unknown = chosen.filter((c) => !options.some((o) => o.label === c));
+    if (unknown.length) throw new OrcoError('invalid', `Not an option: ${unknown.join(', ')}. The options are ${options.map((o) => o.label).join(', ')}`);
+    if (chosen.length > 1 && row.multi_select !== 1) throw new OrcoError('invalid', `Question ${id} takes one choice`);
+    const other = text.trim();
+    const answer = chosen.length ? `${chosen.join(', ')}${other ? `. Other: ${other}` : ''}` : other;
     if (!answer) throw new OrcoError('invalid', 'The answer is empty');
     if (answer.length > MAX_ANSWER) throw new OrcoError('invalid', `Answers can be at most ${MAX_ANSWER} characters`);
     return this.resolve(actor, row, answer, null, `Answer to your question on task #${row.task_id}: ${answer}`, 'question.answer');
@@ -248,6 +311,16 @@ export class Questions {
       subject: `question:${id}`,
       detail: { taskId: row.task_id, answer, verdict },
     });
+    // The answer lands where the work is tracked: on the task's ticket, and (from a person) as a decision
+    // other agents can look up instead of asking again.
+    if (row.kind === 'question') {
+      const ticketId = this.store.tickets.ticketIdForTask(row.task_id);
+      if (ticketId !== null) this.store.tickets.note(ticketId, actor, 'comment', `Question from ${row.asker}: ${row.question}\n\nAnswer: ${answer}`);
+      if (row.project_id !== null) {
+        const options = row.options ? (JSON.parse(row.options) as QuestionOption[]).map((o) => o.label) : [];
+        this.store.decisions.fromAnswer(actor, { projectId: row.project_id, ticketId, questionId: id, question: row.question, answer, options, context: `${row.asker} asked on task #${row.task_id}.` });
+      }
+    }
     this.changed(answered);
     return answered;
   }

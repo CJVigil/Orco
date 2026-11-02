@@ -14,6 +14,9 @@ export interface Decision {
   at: string;
   /** The decision that replaced this one, if any. */
   supersededBy: number | null;
+  /** The ticket it settles, and the question it answered, when it came from one. */
+  ticket: string | null;
+  questionId: number | null;
 }
 
 export interface DecisionInput {
@@ -37,10 +40,14 @@ interface Row {
   decided_by: string;
   created_at: string;
   superseded_by: number | null;
+  ticket: string | null;
+  question_id: number | null;
 }
 
 const SELECT = `SELECT d.id, d.project_id, p.name AS project, d.title, d.context, d.options, d.decision, d.tags, u.name AS decided_by,
-  d.created_at, d.superseded_by FROM decisions d LEFT JOIN projects p ON p.id = d.project_id JOIN participants u ON u.id = d.decided_by`;
+  d.created_at, d.superseded_by, tp.ticket_key || '-' || tk.number AS ticket, d.question_id
+  FROM decisions d LEFT JOIN projects p ON p.id = d.project_id JOIN participants u ON u.id = d.decided_by
+  LEFT JOIN tickets tk ON tk.id = d.ticket_id LEFT JOIN projects tp ON tp.id = tk.project_id`;
 
 const toDecision = (row: Row): Decision => ({
   id: row.id,
@@ -53,6 +60,8 @@ const toDecision = (row: Row): Decision => ({
   decidedBy: row.decided_by,
   at: row.created_at,
   supersededBy: row.superseded_by,
+  ticket: row.ticket,
+  questionId: row.question_id,
 });
 
 function text(value: unknown, field: string, max: number, required = false): string {
@@ -105,6 +114,37 @@ export class Decisions {
     return this.get(actor, id);
   }
 
+  /**
+   * A person's answer to an agent's question, kept as a decision: what was asked, what was chosen, who
+   * decided and when, tied to the ticket the work is tracked on. Other agents look it up instead of
+   * asking again, or guessing what a relayed "1. yes" meant.
+   */
+  fromAnswer(actor: Participant, input: { projectId: number; ticketId: number | null; questionId: number | null; question: string; answer: string; options: string[]; context: string }): void {
+    if (actor.kind !== 'user') return;
+    const title = input.question.replace(/\s+/g, ' ').trim();
+    const { lastInsertRowid } = this.store.db
+      .prepare('INSERT INTO decisions (project_id, title, context, options, decision, tags, decided_by, created_at, ticket_id, question_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(
+        input.projectId,
+        title.length > 200 ? `${title.slice(0, 199)}…` : title,
+        input.context.slice(0, 8000),
+        JSON.stringify(input.options.slice(0, 10)),
+        input.answer.slice(0, 4000),
+        JSON.stringify(['answer']),
+        actor.id,
+        new Date(this.store.now()).toISOString(),
+        input.ticketId,
+        input.questionId,
+      );
+    this.store.audit.record(actor, 'decision.record', { projectId: input.projectId, subject: `decision:${Number(lastInsertRowid)}`, detail: { title, decision: input.answer, questionId: input.questionId } });
+    this.store.events.emit('decision', { projectId: input.projectId });
+  }
+
+  /** Decisions about one ticket, newest first (it must be visible to the actor). */
+  forTicket(ticketId: number): Decision[] {
+    return (this.store.db.prepare(`${SELECT} WHERE d.ticket_id = ? AND d.superseded_by IS NULL ORDER BY d.id DESC LIMIT 20`).all(ticketId) as unknown as Row[]).map(toDecision);
+  }
+
   get(actor: Participant, id: number): Decision {
     const row = this.store.db.prepare(`${SELECT} WHERE d.id = ?`).get(id) as Row | undefined;
     if (!row || !this.store.canSee(actor, row.project_id)) throw new OrcoError('not_found', `No decision ${id}`);
@@ -112,9 +152,13 @@ export class Decisions {
   }
 
   /** Decisions the actor can see, newest first: in one project (plus org-wide ones), matching words or a tag. */
-  list(actor: Participant, filter: { project?: string; query?: string; tag?: string; all?: boolean; limit?: number } = {}): Decision[] {
+  list(actor: Participant, filter: { project?: string; query?: string; tag?: string; ticket?: string; all?: boolean; limit?: number } = {}): Decision[] {
     const where: string[] = [];
     const params: (string | number)[] = [];
+    if (filter.ticket) {
+      where.push('d.ticket_id = ?');
+      params.push(this.store.tickets.get(actor, filter.ticket).id);
+    }
     if (filter.project) {
       where.push('(d.project_id = ? OR d.project_id IS NULL)');
       params.push(this.store.visibleProject(actor, filter.project).id);

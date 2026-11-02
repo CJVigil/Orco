@@ -113,8 +113,8 @@ Run the install again after upgrading Orco to pick up changes.
 | `wait_for_mentions` | Block until someone mentions you, then get the work. At most `limit` at a time; pass `after_id` to acknowledge, so a lost reply is never a lost mention |
 | `create_task`, `update_task`, `list_tasks`, `get_task` | Hand work to an agent and track it: requested → accepted → done / failed (or declined, cancelled). Set a time or cost budget; finish with links and suggested follow-ups |
 | `acquire_lock`, `renew_lock`, `release_lock`, `list_locks` | Lease a shared resource (`deploy:prod`, `account:agentic`) so only one holder works on it |
-| `request_approval`, `get_approval` | Ask a human before a risky step and wait for Approve or Deny |
-| `ask_question`, `answer_question` | Ask the requester or your owner something you need to finish a task, instead of guessing or failing |
+| `request_approval`, `get_approval` | Ask a human before a risky step and wait for Approve or Deny. For a batch of steps, attach it to a ticket with a `scope` and `valid_for_hours`: once approved it stays in force that long, on the ticket and in `get_approval` (`in_force`) |
+| `ask_question`, `answer_question` | Ask the requester or your owner something you need to finish a task, instead of guessing or failing. Give `options` (with a `recommended` one, or `multi_select`) for one-tap answers, ask several at once with `questions`, and pass `ticket` when there is no task. The answer goes on the ticket and, from a person, into `decisions` |
 | `propose_plan` | Before a big or risky job, send your plan to your owner, who edits it and approves or rejects it |
 | `report_progress` | Update the progress line on your task card in place (no messages); also a sign of life |
 | `wait_for` | Wait until a ticket is done or unblocked, a task closes, a lock is free, a mention arrives, or a message is posted in rooms you follow (`rooms: ["ops/*", "*/alerts"]`) |
@@ -124,7 +124,7 @@ Run the install again after upgrading Orco to pick up changes.
 | `my_notes`, `remember`, `forget` | An agent's private notes between sessions, seen only by it and its owner |
 | `catch_up` | What changed since you last looked: new messages per room, thread digests, changed tickets |
 | `checkpoint` | Save where you are on a task; it comes back when you resume or whoever takes over |
-| `remind_me`, `cancel_reminder` | Be woken again on an open task later ("check CI in 10 minutes") |
+| `remind_me`, `cancel_reminder` | Be woken again on an open task (or a ticket of yours) later ("check CI in 10 minutes") |
 | `claim_ticket` | Take an unassigned ticket for yourself; only one agent can win |
 | `my_feedback` | What people said about your finished tasks |
 | `project_files`, `read_project_file`, `write_project_file` | A project's versioned text files (design docs, runbooks, reports) |

@@ -10,6 +10,8 @@ export interface WaitConditions {
   tasks?: number[];
   /** Wake when a lock is free. */
   locks?: { project: string; name: string }[];
+  /** Wake when an approval is decided (approved, denied or expired). */
+  approvals?: number[];
   /** Also wake on an unseen mention (it stays unseen). */
   mentions?: boolean;
   /** Wake on a new message in rooms matching these patterns (ops/*, or a * project with an alerts room), after a message id (default: now). */
@@ -34,13 +36,14 @@ export async function waitFor(store: Store, actor: Participant, conditions: Wait
   const tickets = conditions.tickets ?? [];
   const tasks = conditions.tasks ?? [];
   const locks = conditions.locks ?? [];
+  const approvals = conditions.approvals ?? [];
   const rooms = conditions.rooms ? roomMatcher(conditions.rooms.patterns) : null;
   const roomsAfter = conditions.rooms?.afterId ?? store.latestMessageId();
-  if (tickets.length + tasks.length + locks.length === 0 && !conditions.mentions && !rooms) {
-    throw new OrcoError('invalid', 'Give at least one ticket, task, lock, room or mentions to wait for');
+  if (tickets.length + tasks.length + locks.length + approvals.length === 0 && !conditions.mentions && !rooms) {
+    throw new OrcoError('invalid', 'Give at least one ticket, task, lock, approval, room or mentions to wait for');
   }
   let newMessages: number[] = [];
-  if (tickets.length + tasks.length + locks.length > MAX_CONDITIONS) throw new OrcoError('invalid', `Wait for at most ${MAX_CONDITIONS} things at once`);
+  if (tickets.length + tasks.length + locks.length + approvals.length > MAX_CONDITIONS) throw new OrcoError('invalid', `Wait for at most ${MAX_CONDITIONS} things at once`);
   // Check everything once up front, so a bad ref fails now instead of after the wait.
   for (const t of tickets) {
     store.tickets.get(actor, t.ref);
@@ -48,6 +51,7 @@ export async function waitFor(store: Store, actor: Participant, conditions: Wait
   }
   for (const id of tasks) store.tasks.get(actor, id);
   for (const l of locks) store.visibleProject(actor, l.project);
+  for (const id of approvals) store.approvals.get(actor, id);
 
   const check = (): string[] => {
     const fired: string[] = [];
@@ -63,6 +67,10 @@ export async function waitFor(store: Store, actor: Participant, conditions: Wait
     }
     for (const l of locks) {
       if (!store.locks.list(actor, l.project).some((held) => held.name === l.name)) fired.push(`Lock ${l.name} in ${l.project} is free`);
+    }
+    for (const id of approvals) {
+      const approval = store.approvals.get(actor, id);
+      if (approval.state !== 'pending') fired.push(`Approval #${id} is ${approval.state}${approval.validUntil && approval.inForce ? ` until ${approval.validUntil}` : ''}`);
     }
     if (conditions.mentions && store.unseenMentions(actor).length > 0) fired.push('You have unseen mentions; read them with wait_for_mentions');
     if (rooms) {
@@ -80,7 +88,7 @@ export async function waitFor(store: Store, actor: Participant, conditions: Wait
   const now = check();
   if (now.length > 0 || timeoutMs <= 0) return result(now, now.length === 0);
   return new Promise<WaitResult>((resolve) => {
-    const events = ['ticket', 'task', 'lock', `mention:${actor.id}`, ...(rooms ? ['message'] : [])];
+    const events = ['ticket', 'task', 'lock', 'approval', `mention:${actor.id}`, ...(rooms ? ['message'] : [])];
     let pending: ReturnType<typeof setTimeout> | null = null;
     const finish = (result: WaitResult) => {
       clearTimeout(timer);

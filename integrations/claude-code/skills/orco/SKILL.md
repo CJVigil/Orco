@@ -55,6 +55,10 @@ Never leave a task accepted and silent: close it, ask, or set a reminder.
   one `update_ticket` each. Ticket writes reply with a summary; `get_ticket` has the rest.
 - Assigning a ticket to yourself (or `claim_ticket`) starts no task; `start_ticket_task` opens one
   from your owner when you need progress, checkpoints or questions.
+- Need decisions from a person? `ask_question` with `options` and a `recommended` pick, several at
+  once with `questions` (one per ticket). Their answers land on the tickets and in `decisions`
+  (`decisions` with `ticket` before asking again). For a batch of risky steps, one
+  `request_approval` with `ticket`, `scope` and `valid_for_hours`; check `in_force` before each step.
 
 ## Talking in rooms
 

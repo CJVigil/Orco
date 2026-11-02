@@ -638,12 +638,18 @@ function approvalCard(message) {
 
 const QUESTION_LABEL = { open: 'Waiting for an answer', answered: 'Answered', resumed: 'Answered', cancelled: 'Closed' };
 
-function answerBox(questionId, onDone) {
-  const input = el('input', { class: 'answer-input', placeholder: 'Your answer', 'aria-label': 'Answer', maxlength: '4000' });
+/**
+ * Answering a question: one tap per option when it is multiple choice (several, then Send, when it
+ * allows more than one), and always a free-text answer ("Other").
+ */
+function answerBox(question, onDone) {
+  const options = question.options ?? [];
+  const picked = new Set();
+  const input = el('input', { class: 'answer-input', placeholder: options.length ? 'Other (optional)' : 'Your answer', 'aria-label': options.length ? 'Other answer' : 'Answer', maxlength: '4000' });
   const send = async () => {
-    if (!input.value.trim()) return;
+    if (!input.value.trim() && picked.size === 0) return;
     try {
-      await api(`/questions/${questionId}/answer`, { method: 'POST', body: { answer: input.value } });
+      await api(`/questions/${question.id}/answer`, { method: 'POST', body: { answer: input.value, choices: [...picked] } });
       onDone?.();
     } catch (err) {
       alert(err.message);
@@ -655,7 +661,44 @@ function answerBox(questionId, onDone) {
       void send();
     }
   });
-  return el('div', { class: 'answer-box' }, input, el('button', { class: 'primary small', type: 'button', text: 'Answer', onclick: () => void send() }));
+  const choices = options.length
+    ? el(
+        'div',
+        { class: 'answer-options', role: 'group', 'aria-label': question.multiSelect ? 'Pick any' : 'Pick one' },
+        options.map((option) => {
+          const button = el(
+            'button',
+            {
+              class: `answer-option${option.label === question.recommended ? ' recommended' : ''}`,
+              type: 'button',
+              'aria-pressed': 'false',
+              title: option.description || option.label,
+              onclick: () => {
+                if (!question.multiSelect) {
+                  picked.clear();
+                  picked.add(option.label);
+                  void send();
+                  return;
+                }
+                if (picked.has(option.label)) picked.delete(option.label);
+                else picked.add(option.label);
+                button.setAttribute('aria-pressed', String(picked.has(option.label)));
+              },
+            },
+            el('strong', { text: option.label }),
+            option.label === question.recommended ? el('span', { class: 'chip', text: 'Recommended' }) : null,
+            option.description ? el('span', { class: 'small muted', text: option.description }) : null,
+          );
+          return button;
+        }),
+      )
+    : null;
+  return el(
+    'div',
+    { class: 'answer-wrap' },
+    choices,
+    el('div', { class: 'answer-box' }, input, el('button', { class: 'primary small', type: 'button', text: options.length && question.multiSelect ? 'Send' : 'Answer', onclick: () => void send() })),
+  );
 }
 
 function progressMeter(percent) {
@@ -733,7 +776,7 @@ function questionCard(message) {
       q.state === 'open' ? el('span', { class: 'muted small seen' }, q.seenAt ? liveElapsed('Seen ', q.seenAt) : 'Not seen yet') : null,
     ),
     q.answer ? el('div', { class: 'question-answer', text: q.answer }) : null,
-    canAnswer ? answerBox(q.id) : null,
+    canAnswer ? answerBox(q) : null,
   );
 }
 
@@ -2301,7 +2344,7 @@ function renderInbox(inbox) {
             ),
             q.kind === 'plan' ? el('span', { class: 'inbox-text', text: 'Proposed a plan; edit it if needed, then approve or reject.' }) : el('span', { class: 'inbox-text', text: q.question }),
           ),
-          el('div', { class: 'inbox-answer' }, q.kind === 'plan' ? planBox(q.id, q.question, scheduleInbox) : answerBox(q.id, scheduleInbox)),
+          el('div', { class: 'inbox-answer' }, q.kind === 'plan' ? planBox(q.id, q.question, scheduleInbox) : answerBox(q, scheduleInbox)),
         ),
       ),
     );

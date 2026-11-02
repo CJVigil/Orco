@@ -3696,3 +3696,30 @@ button:disabled {
   width: 4.5rem;
   margin: 0 0.3rem;
 }
+
+.answer-options {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0.4rem 0;
+}
+
+.answer-option {
+  display: grid;
+  gap: 0.1rem;
+  justify-items: start;
+  text-align: left;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: inherit;
+}
+
+.answer-option.recommended {
+  border-color: var(--accent);
+}
+
+.answer-option[aria-pressed='true'] {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+}

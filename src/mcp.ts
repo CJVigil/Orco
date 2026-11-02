@@ -1,7 +1,7 @@
 import { McpServer, type ToolAnnotations } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import type { Presence } from './presence.js';
-import { MAX_APPROVAL_TTL_SECONDS } from './approvals.js';
+import { MAX_APPROVAL_TTL_SECONDS, MAX_VALID_HOURS } from './approvals.js';
 import { MAX_ATTACHMENTS_PER_MESSAGE } from './attachments.js';
 import { advanceCursor, catchUp } from './catchup.js';
 import { type ImportRow, importTickets, MAX_AGENT_IMPORT } from './import.js';
@@ -33,6 +33,7 @@ import {
 } from './tickets.js';
 
 const MAX_WAIT_SECONDS = 300;
+const QUESTION_OPTION = z.object({ label: z.string().max(80), description: z.string().max(300).optional() });
 /**
  * How long a wait really lasts at most. A waiting tool sends nothing until it ends, and Node's fetch
  * (and many proxies) cut a response that is silent for 300 seconds, so a wait at the maximum would
@@ -233,6 +234,8 @@ function formatTicket(t: Ticket, since?: number) {
     updated: t.updatedAt,
     ...(t.closedAs ? { closed_as: { reason: t.closedAs.reason, ticket: t.closedAs.ticket.ref } } : {}),
     ...(t.replaces.length ? { replaces: t.replaces.map((r) => ({ ticket: r.ref, reason: r.reason })) } : {}),
+    ...(t.decisions.length ? { decisions: t.decisions } : {}),
+    ...(t.approvals.length ? { approvals: t.approvals.map((a) => ({ id: a.id, summary: a.summary, scope: a.scope, state: a.state, decided_by: a.decidedBy, valid_until: a.validUntil, in_force: a.inForce })) } : {}),
     children: t.children.map(formatTicketSummary),
     activity: t.activity.map((a) => ({ at: a.createdAt, by: a.actor, kind: a.kind, text: a.body, detail: a.detail })),
   };
@@ -807,23 +810,53 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
       annotations: annotate('ask_question'),
       description:
         'Ask a person a question you need answered to finish an accepted task, instead of guessing or failing it. ' +
-        'The task waits in needs_input; the answer arrives as a mention in the task thread (and the bridge wakes you with it). ' +
-        'Ask the requester (default), your own owner, or "project": every person in the project gets an @all ping and the ' +
-        'first answer wins. Use project only when the requester or your owner may not know. Working a ticket with no task ' +
-        '(one filed with create_tickets)? Pass ticket instead of task_id: a task is started for it, from your owner.',
+        'The task waits in needs_input; the answer arrives as a mention in the task thread (and the bridge wakes you with it), ' +
+        'is posted on the ticket, and (from a person) is kept as a decision others can look up. Ask the requester (default), ' +
+        'your own owner, or "project": every person in the project gets an @all ping and the first answer wins. Give options ' +
+        '(with a recommended one) to make it one tap; free text stays possible. Working a ticket with no task (one filed with ' +
+        'create_tickets)? Pass ticket instead of task_id: a task is started for it, from your owner. Several decisions for ' +
+        'different tickets? Pass questions, one per ticket or task, answered in one sitting.',
       inputSchema: z.object({
         task_id: z.number().int().optional(),
         ticket: z.string().optional().describe('A ticket assigned to you, like API-12, instead of task_id'),
-        question: z.string().describe('One clear question, with the options if there are any'),
+        question: z.string().optional().describe('One clear question'),
+        options: z.array(QUESTION_OPTION).min(2).max(10).optional().describe('Choices to pick from'),
+        recommended: z.string().optional().describe('The label of the option you recommend'),
+        multi_select: z.boolean().optional().describe('More than one option may be picked'),
         to: z.enum(['requester', 'owner', 'project']).optional(),
+        questions: z
+          .array(
+            z.object({
+              task_id: z.number().int().optional(),
+              ticket: z.string().optional(),
+              question: z.string(),
+              options: z.array(QUESTION_OPTION).min(2).max(10).optional(),
+              recommended: z.string().optional(),
+              multi_select: z.boolean().optional(),
+              to: z.enum(['requester', 'owner', 'project']).optional(),
+            }),
+          )
+          .max(20)
+          .optional()
+          .describe('Several questions at once, each on its own ticket or task'),
       }),
     },
-    async ({ task_id, ticket, question, to }) =>
+    async ({ task_id, ticket, question, options, recommended, multi_select, to, questions }) =>
       run(() => {
-        if ((task_id === undefined) === (ticket === undefined)) throw new OrcoError('invalid', 'Pass task_id or ticket, one of them');
-        const id = task_id ?? store.tickets.taskFor(me, ticket!).id;
-        const q = store.questions.ask(me, id, question, to);
-        return { question_id: q.id, asked: q.audience === 'project' ? 'everyone in the project' : q.target, task_id: id, state: 'needs_input' };
+        const single = question !== undefined ? [{ task_id, ticket, question, options, recommended, multi_select, to }] : [];
+        const all = [...single, ...(questions ?? [])];
+        if (all.length === 0) throw new OrcoError('invalid', 'Ask a question, or pass questions');
+        // Each question needs its own task (a task waits on one question at a time); check them all first.
+        const resolved = all.map((q) => {
+          if ((q.task_id === undefined) === (q.ticket === undefined)) throw new OrcoError('invalid', `Pass task_id or ticket for "${q.question.slice(0, 60)}"`);
+          return { ...q, id: q.task_id ?? store.tickets.taskFor(me, q.ticket!).id };
+        });
+        if (new Set(resolved.map((q) => q.id)).size !== resolved.length) throw new OrcoError('invalid', 'One question per task or ticket at a time');
+        const asked = resolved.map((q) => {
+          const made = store.questions.ask(me, q.id, q.question, q.to, 'question', { options: q.options, recommended: q.recommended, multiSelect: q.multi_select });
+          return { question_id: made.id, asked: made.audience === 'project' ? 'everyone in the project' : made.target, task_id: q.id, ...(q.ticket ? { ticket: q.ticket } : {}), state: 'needs_input' };
+        });
+        return asked.length === 1 && questions === undefined ? asked[0] : { asked };
       }),
   );
 
@@ -831,12 +864,12 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
     'answer_question',
     {
       annotations: annotate('answer_question'),
-      description: 'Answer a question another agent asked you about a task you requested.',
-      inputSchema: z.object({ question_id: z.number().int(), answer: z.string() }),
+      description: 'Answer a question another agent asked you about a task you requested. For a multiple-choice one, pick the option labels (answer adds free text).',
+      inputSchema: z.object({ question_id: z.number().int(), answer: z.string().optional(), choices: z.array(z.string()).optional() }),
     },
-    async ({ question_id, answer }) =>
+    async ({ question_id, answer, choices }) =>
       run(() => {
-        const q = store.questions.answer(me, question_id, answer);
+        const q = store.questions.answer(me, question_id, answer ?? '', choices);
         return `Answered question ${q.id}; ${q.asker} has been told.`;
       }),
   );
@@ -927,12 +960,13 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         project: z.string().optional(),
         query: z.string().optional().describe('Words to look for'),
         tag: z.string().optional(),
+        ticket: z.string().optional().describe("Only decisions about this ticket (people's answers and approvals on it)"),
         include_superseded: z.boolean().optional(),
         limit: z.number().int().min(1).max(100).optional(),
       }),
     },
-    async ({ project, query, tag, include_superseded, limit }) =>
-      run(() => ({ decisions: store.decisions.list(me, { project, query, tag, all: include_superseded, limit: limit ?? 20 }) })),
+    async ({ project, query, tag, ticket, include_superseded, limit }) =>
+      run(() => ({ decisions: store.decisions.list(me, { project, query, tag, ticket, all: include_superseded, limit: limit ?? 20 }) })),
   );
 
   server.registerTool(
@@ -942,18 +976,24 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
       description:
         'Ask a human before a risky or irreversible step (a deploy, a merge, spending money, deleting data). ' +
         'Posts the request in the room with Approve and Deny buttons for your owner. ' +
-        'Set wait_seconds to wait for the decision; otherwise check later with get_approval. Do not proceed unless the state is "approved".',
+        'Set wait_seconds to wait for the decision; otherwise check later with get_approval. Do not proceed unless the state is "approved". ' +
+        'For a batch of steps ("these 9 prod pushes this weekend"), pass the ticket, the scope (the steps) and valid_for_hours: ' +
+        'once approved it stays in force that long, shows on the ticket and in get_approval (in_force), so you and other agents ' +
+        'can check it before each step instead of asking again.',
       inputSchema: z.object({
-        room: z.string(),
+        room: z.string().optional().describe("Default: the ticket's project room"),
+        ticket: z.string().optional().describe('The ticket it is about, like API-12'),
         summary: z.string().describe('One line: what you want to do'),
         details: z.string().optional().describe('Why, what could go wrong, how to undo it'),
-        ttl_seconds: z.number().int().min(60).max(MAX_APPROVAL_TTL_SECONDS).optional().describe('How long the request stays open; default 3600'),
+        scope: z.union([z.string(), z.array(z.string())]).optional().describe('Exactly what is approved: a sentence, or the steps'),
+        valid_for_hours: z.number().int().min(1).max(MAX_VALID_HOURS).optional().describe('Once approved, how long it stays in force'),
+        ttl_seconds: z.number().int().min(60).max(MAX_APPROVAL_TTL_SECONDS).optional().describe('How long the request stays open for a decision; default 3600'),
         wait_seconds: z.number().int().min(0).max(MAX_WAIT_SECONDS).optional(),
       }),
     },
-    async ({ room, summary, details, ttl_seconds, wait_seconds }, ctx) =>
+    async ({ room, ticket, summary, details, scope, valid_for_hours, ttl_seconds, wait_seconds }, ctx) =>
       run(async () => {
-        const approval = store.approvals.request(me, { room, summary, details, ttlSeconds: ttl_seconds });
+        const approval = store.approvals.request(me, { room, ticket, summary, details, scope, validForHours: valid_for_hours, ttlSeconds: ttl_seconds });
         return store.approvals.wait(me, approval.id, waitMs(wait_seconds, 0), ctx.mcpReq.signal);
       }),
   );
@@ -962,7 +1002,7 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
     'get_approval',
     {
       annotations: annotate('get_approval'),
-      description: 'Check an approval request, optionally waiting for a decision. Only "approved" means go ahead.',
+      description: 'Check an approval request, optionally waiting for a decision. Only "approved" means go ahead, and with a time limit only while in_force is true; stay within its scope.',
       inputSchema: z.object({
         approval_id: z.number().int(),
         wait_seconds: z.number().int().min(0).max(MAX_WAIT_SECONDS).optional(),
@@ -1239,15 +1279,17 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         'Be woken again on one of your open tasks later ("check CI in 10 minutes", "look again tomorrow at 9"). The bridge ' +
         'starts you with your note when it is due; a reminder on a task that has closed is dropped. 1 minute to 7 days ahead.',
       inputSchema: z.object({
-        task_id: z.number().int(),
+        task_id: z.number().int().optional(),
+        ticket: z.string().optional().describe('A ticket assigned to you, instead of task_id: a task is started for it, from your owner'),
         in_minutes: z.number().int().min(1).max(7 * 24 * 60).optional(),
         at: z.string().optional().describe('ISO time, like 2026-11-03T09:00:00Z, instead of in_minutes'),
         note: z.string().describe('What to do then'),
       }),
     },
-    async ({ task_id, in_minutes, at, note }) =>
+    async ({ task_id, ticket, in_minutes, at, note }) =>
       run(() => {
-        const r = store.reminders.create(me, task_id, { inMinutes: in_minutes, at }, note);
+        if ((task_id === undefined) === (ticket === undefined)) throw new OrcoError('invalid', 'Pass task_id or ticket, one of them');
+        const r = store.reminders.create(me, task_id ?? store.tickets.taskFor(me, ticket!).id, { inMinutes: in_minutes, at }, note);
         return { reminder_id: r.id, task_id: r.taskId, due: r.dueAt };
       }),
   );
@@ -1612,14 +1654,15 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         tasks: z.array(z.number().int()).optional().describe('Task ids to wait on until they close'),
         locks: z.array(z.object({ project: z.string(), name: z.string() })).optional(),
         mentions: z.boolean().optional().describe('Also wake on an unseen mention'),
+        approvals: z.array(z.number().int()).max(20).optional().describe('Approval ids to wait on until they are decided'),
         rooms: z.array(z.string()).max(20).optional().describe('Wake on a new message in these rooms or patterns'),
         after_id: z.number().int().min(0).optional().describe('With rooms: wake on messages after this id (default: from now)'),
         timeout_seconds: z.number().int().min(0).max(MAX_WAIT_SECONDS).optional().describe(`Default 120; waits at most ${SAFE_WAIT_SECONDS}`),
       }),
     },
-    async ({ tickets, tasks, locks, mentions, rooms, after_id, timeout_seconds }, ctx) => {
+    async ({ tickets, tasks, locks, mentions, approvals, rooms, after_id, timeout_seconds }, ctx) => {
       try {
-        const conditions = { tickets, tasks, locks, mentions, ...(rooms ? { rooms: { patterns: rooms, afterId: after_id } } : {}) };
+        const conditions = { tickets, tasks, locks, mentions, approvals, ...(rooms ? { rooms: { patterns: rooms, afterId: after_id } } : {}) };
         const result = await waitFor(store, me, conditions, waitMs(timeout_seconds, 120), ctx?.mcpReq?.signal);
         return ok(
           result.timedOut

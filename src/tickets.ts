@@ -139,6 +139,10 @@ export interface Ticket extends TicketSummary {
   closedAs: { reason: 'duplicate' | 'superseded'; ticket: TicketLink } | null;
   /** Tickets closed as duplicates of this one, or superseded by it. */
   replaces: (TicketLink & { reason: 'duplicate' | 'superseded' })[];
+  /** What people decided about it (answers to questions, approvals given), newest first. */
+  decisions: { id: number; title: string; decision: string; decidedBy: string; at: string }[];
+  /** Approvals asked for on it, with their scope and how long they stay in force. */
+  approvals: { id: number; summary: string; scope: string | null; state: string; decidedBy: string | null; validUntil: string | null; inForce: boolean }[];
 }
 
 export interface TicketInput {
@@ -1340,6 +1344,8 @@ export class Tickets {
         category: r.category,
         reason: r.closed_reason!,
       })),
+      decisions: this.store.decisions.forTicket(id).map((d) => ({ id: d.id, title: d.title, decision: d.decision, decidedBy: d.decidedBy, at: d.at })),
+      approvals: this.store.approvals.forTicket(id).map((a) => ({ id: a.id, summary: a.summary, scope: a.scope, state: a.state, decidedBy: a.decidedBy, validUntil: a.validUntil, inForce: a.inForce })),
       children: this.summaries(children, actor),
       activity: activity.map((a) => ({
         id: a.id,
@@ -1461,6 +1467,25 @@ export class Tickets {
       map.set(r.ticket_id, list);
     }
     return map;
+  }
+
+  /** The ticket a task works, if any. */
+  ticketIdForTask(taskId: number): number | null {
+    return (this.store.db.prepare('SELECT id FROM tickets WHERE task_id = ?').get(taskId) as { id: number } | undefined)?.id ?? null;
+  }
+
+  /** Writes a line into a ticket's history (a question answered, an approval asked or given). */
+  note(ticketId: number, actor: Participant | null, kind: 'comment' | 'change', body: string | null, detail: unknown = null): void {
+    const row = this.row(ticketId);
+    if (!row) return;
+    this.activity(ticketId, actor, kind, body, detail);
+    this.store.db.prepare(`UPDATE tickets SET updated_at = ${NOW_SQL} WHERE id = ?`).run(ticketId);
+    this.changed(row);
+  }
+
+  /** A ticket's id from its ref, for a person or agent who can see it. */
+  idOf(actor: Participant, ref: string): number {
+    return this.byRef(actor, ref).id;
   }
 
   /**

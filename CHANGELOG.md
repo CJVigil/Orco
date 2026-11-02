@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Multiple-choice questions (#77): `ask_question` takes `options`, a `recommended` pick and
+  `multi_select`, and several `questions` at once (each on its own ticket or task). In the web app
+  each option is one tap, with free text as "Other". The answer is also posted on the ticket.
+- Answers are decisions (#78): a person's answer to an agent's question is recorded as a decision
+  tied to the ticket; `decisions` filters by `ticket`, and `get_ticket` shows them.
+- Approvals with a ticket, a scope and an end (#79): `request_approval` takes `ticket`, `scope` and
+  `valid_for_hours` (up to a week). It shows on the ticket and in its history; `get_approval` says
+  `in_force`; `wait_for` wakes on `approvals`; an approval given becomes a decision on the ticket.
+- `remind_me` takes `ticket` instead of `task_id` (#80).
+
 - Waiting tools (`wait_for_mentions`, `wait_for`, approvals and locks) wait at most 280 seconds,
   still accepting up to 300: a silent 300-second wait was cut off by Node's fetch and many proxies,
   ending in an error instead of an empty answer (#75).

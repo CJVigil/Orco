@@ -874,6 +874,21 @@ export const MIGRATIONS = [
   ALTER TABLE tickets ADD COLUMN closed_reason TEXT CHECK (closed_reason IN ('duplicate', 'superseded'));
   ALTER TABLE tickets ADD COLUMN closed_for INTEGER REFERENCES tickets(id);
   `,
+  // 29: multiple-choice questions; decisions tied to the ticket (and question) they settle; approvals
+  // tied to a ticket, with a scope and how long they stay in force once given.
+  `
+  ALTER TABLE questions ADD COLUMN options TEXT;
+  ALTER TABLE questions ADD COLUMN recommended TEXT;
+  ALTER TABLE questions ADD COLUMN multi_select INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE decisions ADD COLUMN ticket_id INTEGER REFERENCES tickets(id);
+  ALTER TABLE decisions ADD COLUMN question_id INTEGER REFERENCES questions(id);
+  CREATE INDEX decisions_ticket ON decisions (ticket_id);
+  ALTER TABLE approvals ADD COLUMN ticket_id INTEGER REFERENCES tickets(id);
+  ALTER TABLE approvals ADD COLUMN scope TEXT;
+  ALTER TABLE approvals ADD COLUMN valid_hours INTEGER;
+  ALTER TABLE approvals ADD COLUMN valid_until INTEGER;
+  CREATE INDEX approvals_ticket ON approvals (ticket_id);
+  `,
 ];
 
 export interface OpenOptions {

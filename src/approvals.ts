@@ -21,6 +21,14 @@ export interface Approval {
   createdAt: string;
   expiresAt: string;
   decidedAt: string | null;
+  /** The ticket it is about, if any. */
+  ticket: string | null;
+  /** What exactly is approved: the steps or limits, in words. */
+  scope: string | null;
+  /** Once approved, until when it stays in force (null: no end given). */
+  validUntil: string | null;
+  /** Approved and not past validUntil. */
+  inForce: boolean;
 }
 
 export interface ApprovalSummary {
@@ -52,14 +60,22 @@ interface ApprovalRow {
   created_at: number;
   expires_at: number;
   decided_at: number | null;
+  ticket_id: number | null;
+  ticket: string | null;
+  scope: string | null;
+  valid_hours: number | null;
+  valid_until: number | null;
 }
 
 const APPROVAL_SELECT = `
   SELECT ap.id, ap.kind, ap.room_id, r.project_id, p.name AS project, r.name AS room, ap.message_id,
          ap.requester_id, rq.name AS requester, rq.owner_id AS requester_owner_id, rqo.name AS requester_owner,
          ap.approver_id, av.name AS approver, ap.summary, ap.details, ap.state, d.name AS decided_by, ap.note,
-         ap.created_at, ap.expires_at, ap.decided_at
+         ap.created_at, ap.expires_at, ap.decided_at, ap.ticket_id, tp.ticket_key || '-' || tk.number AS ticket, ap.scope,
+         ap.valid_hours, ap.valid_until
   FROM approvals ap
+  LEFT JOIN tickets tk ON tk.id = ap.ticket_id
+  LEFT JOIN projects tp ON tp.id = tk.project_id
   JOIN rooms r ON r.id = ap.room_id
   LEFT JOIN projects p ON p.id = r.project_id
   JOIN participants rq ON rq.id = ap.requester_id
@@ -73,12 +89,15 @@ export const MAX_APPROVAL_TTL_SECONDS = 7 * 24 * 3600;
 const TASK_APPROVAL_TTL_MS = 100 * 365 * 24 * 3600 * 1000;
 const MAX_SUMMARY = 300;
 const MAX_DETAILS = 4_000;
+const MAX_SCOPE = 2_000;
+/** The longest an approval stays in force once given ("these prod pushes, until Sunday"). */
+export const MAX_VALID_HOURS = 7 * 24;
 
 function iso(ms: number | null): string | null {
   return ms === null ? null : new Date(ms).toISOString();
 }
 
-function toApproval(row: ApprovalRow): Approval {
+function toApproval(row: ApprovalRow, now: number = Date.now()): Approval {
   return {
     id: row.id,
     kind: row.kind,
@@ -96,6 +115,10 @@ function toApproval(row: ApprovalRow): Approval {
     createdAt: iso(row.created_at)!,
     expiresAt: iso(row.expires_at)!,
     decidedAt: iso(row.decided_at),
+    ticket: row.ticket,
+    scope: row.scope,
+    validUntil: iso(row.valid_until),
+    inForce: row.state === 'approved' && (row.valid_until === null || row.valid_until > now),
   };
 }
 
@@ -104,7 +127,19 @@ export class Approvals {
 
   request(
     actor: Participant,
-    input: { room: string; summary: string; details?: string; approver?: 'owner' | 'members'; ttlSeconds?: number },
+    input: {
+      room?: string;
+      summary: string;
+      details?: string;
+      approver?: 'owner' | 'members';
+      ttlSeconds?: number;
+      /** The ticket it is about: it shows there, and its room is the default. */
+      ticket?: string;
+      /** What exactly is approved: a sentence, or the steps one per line. */
+      scope?: string | string[];
+      /** Once approved, how long it stays in force, in hours (at most a week). */
+      validForHours?: number;
+    },
   ): Approval {
     const summary = input.summary.trim();
     if (!summary) throw new OrcoError('invalid', 'Say what needs approval');
@@ -120,22 +155,37 @@ export class Approvals {
     if (actor.kind === 'agent' && input.approver === 'members') throw new OrcoError('forbidden', "An agent's approvals go to its owner");
     const mode = input.approver ?? (actor.kind === 'agent' ? 'owner' : 'members');
     if (mode === 'owner' && actor.ownerId === null) throw new OrcoError('invalid', 'People have no owner; use approver "members"');
-    const room = this.store.room(actor, input.room);
+    const ticket = input.ticket ? this.store.tickets.get(actor, input.ticket) : null;
+    if (!input.room && !ticket) throw new OrcoError('invalid', 'Give a room or a ticket');
+    const room = this.store.room(actor, input.room || this.store.tickets.workRoom(ticket!.projectId));
+    const scope = (Array.isArray(input.scope) ? input.scope.map((s) => `- ${String(s).trim()}`).join('\n') : String(input.scope ?? '')).trim() || null;
+    if (scope && scope.length > MAX_SCOPE) throw new OrcoError('invalid', `The scope is over ${MAX_SCOPE} characters`);
+    const validHours = input.validForHours ?? null;
+    if (validHours !== null && !(Number.isInteger(validHours) && validHours >= 1 && validHours <= MAX_VALID_HOURS)) {
+      throw new OrcoError('invalid', `valid_for_hours is 1 to ${MAX_VALID_HOURS}`);
+    }
 
     const approver = mode === 'owner' ? this.store.participantById(actor.ownerId!) : null;
     const notify = approver ? [approver.name] : this.deciders(actor, room).map((p) => p.name);
     const ping = notify.length ? `${notify.map((n) => `@${n}`).join(' ')} ` : '';
-    const text = `${ping}Approval needed: ${summary}${details ? `\n${details}` : ''}`;
+    const lines = [
+      `${ping}Approval needed${ticket ? ` on ${ticket.ref}` : ''}: ${summary}`,
+      ...(scope ? [`Scope:\n${scope}`] : []),
+      ...(validHours ? [`In force for ${validHours} hours once approved.`] : []),
+      ...(details ? [details] : []),
+    ];
     let id = 0;
-    this.store.post(actor, room.ref, text, undefined, {
+    this.store.post(actor, room.ref, lines.join('\n'), undefined, {
       onInsert: (messageId) => {
         id = this.insert('action', room, messageId, actor, approver?.id ?? null, summary, details, ttl * 1000);
+        this.store.db.prepare('UPDATE approvals SET ticket_id = ?, scope = ?, valid_hours = ? WHERE id = ?').run(ticket?.id ?? null, scope, validHours, id);
       },
     });
+    if (ticket) this.store.tickets.note(ticket.id, actor, 'change', null, { changes: [{ field: 'approval', from: null, to: `requested #${id}: ${summary}` }] });
     this.store.audit.record(actor, 'approval.request', {
       projectId: room.projectId,
       subject: `approval:${id}`,
-      detail: { room: room.ref, summary, approver: approver?.name ?? 'members', expiresInSeconds: ttl },
+      detail: { room: room.ref, summary, approver: approver?.name ?? 'members', expiresInSeconds: ttl, ticket: ticket?.ref ?? null, scope, validForHours: validHours },
     });
     return this.changed(id);
   }
@@ -175,9 +225,26 @@ export class Approvals {
       throw new OrcoError('forbidden', row.approver ? `Only ${row.approver} can decide this` : 'You cannot decide your own request');
     }
     const trimmedNote = note?.trim().slice(0, MAX_DETAILS) || null;
+    const validUntil = decision === 'approved' && row.valid_hours ? this.store.now() + row.valid_hours * 3600_000 : null;
     this.store.db
-      .prepare('UPDATE approvals SET state = ?, decided_by = ?, note = ?, decided_at = ? WHERE id = ?')
-      .run(decision, actor.id, trimmedNote, this.store.now(), id);
+      .prepare('UPDATE approvals SET state = ?, decided_by = ?, note = ?, decided_at = ?, valid_until = ? WHERE id = ?')
+      .run(decision, actor.id, trimmedNote, this.store.now(), validUntil, id);
+    // On its ticket: the decision in the history, and (approved) a decision record agents can look up.
+    if (row.ticket_id !== null) {
+      const until = validUntil ? ` until ${new Date(validUntil).toISOString().slice(0, 16).replace('T', ' ')} UTC` : '';
+      this.store.tickets.note(row.ticket_id, actor, 'change', null, { changes: [{ field: 'approval', from: `#${id}`, to: `${decision} by ${actor.name}${until}` }] });
+      if (decision === 'approved' && row.project_id !== null) {
+        this.store.decisions.fromAnswer(actor, {
+          projectId: row.project_id,
+          ticketId: row.ticket_id,
+          questionId: null,
+          question: `Approve: ${row.summary}`,
+          answer: `Approved${until}${row.scope ? `. Scope:\n${row.scope}` : ''}${trimmedNote ? `\n${trimmedNote}` : ''}`,
+          options: [],
+          context: `${row.requester} asked for approval #${id}.`,
+        });
+      }
+    }
     this.store.audit.record(actor, 'approval.decide', {
       projectId: row.project_id,
       subject: `approval:${id}`,
@@ -216,7 +283,7 @@ export class Approvals {
     this.expireDue();
     const row = this.row(id);
     if (!row || !this.store.canSeeRoomId(actor, row.room_id)) throw new OrcoError('not_found', `No approval ${id}`);
-    return toApproval(row);
+    return toApproval(row, this.store.now());
   }
 
   async wait(actor: Participant, id: number, timeoutMs: number, signal?: AbortSignal): Promise<Approval> {
@@ -352,8 +419,14 @@ export class Approvals {
   }
 
   private changed(id: number): Approval {
-    const approval = toApproval(this.row(id)!);
+    const approval = toApproval(this.row(id)!, this.store.now());
     this.store.events.emit('approval', approval);
     return approval;
+  }
+
+  /** Approvals asked for on a ticket, newest first. */
+  forTicket(ticketId: number): Approval[] {
+    this.expireDue();
+    return (this.store.db.prepare(`${APPROVAL_SELECT} WHERE ap.ticket_id = ? ORDER BY ap.id DESC LIMIT 20`).all(ticketId) as unknown as ApprovalRow[]).map((r) => toApproval(r, this.store.now()));
   }
 }
