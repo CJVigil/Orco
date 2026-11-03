@@ -31,6 +31,8 @@ export const MAX_CRITERIA = 50;
 export const MAX_CRITERION = 300;
 /** Tickets one update_tickets call may change. */
 export const MAX_BULK = 50;
+/** A next step and a waiting-on ask are one line each, to read at a glance. */
+export const MAX_LINE = 140;
 
 type Change = { field: string; from: unknown; to: unknown };
 const DEFAULT_CYCLE_DAYS = 14;
@@ -99,6 +101,10 @@ export interface TicketSummary {
   /** Waiting on an unfinished ticket or on something outside. */
   blocked: boolean;
   criteria: { done: number; total: number };
+  /** The one next thing to do, and who it is for. */
+  nextStep: { text: string; for: string | null } | null;
+  /** The person it waits on, the ask, since when, and until when it is snoozed. */
+  waitingOn: { person: string; ask: string; since: string; snoozedUntil: string | null } | null;
   sort: number;
   createdAt: string;
   updatedAt: string;
@@ -168,6 +174,13 @@ export interface TicketInput {
   blockedByRemove?: string[];
   /** Mark the ticket blocked on something outside the project; empty clears it. */
   blockedReason?: string;
+  /** The one next thing to do, at most 140 characters; empty clears it. */
+  nextStep?: string;
+  /** Who the next step is for (a person or agent), or null. */
+  nextStepFor?: string | null;
+  /** One person this ticket waits on, with a one-line ask; null clears it. */
+  waitingOn?: string | null;
+  waitingAsk?: string;
   /** Close it (Canceled) as a duplicate of this ticket, or as superseded by it. */
   duplicateOf?: string;
   supersededBy?: string;
@@ -239,6 +252,13 @@ interface TicketRow {
   handoff_at: string | null;
   blocked_reason: string;
   closed_reason: 'duplicate' | 'superseded' | null;
+  next_step: string | null;
+  next_step_for: string | null;
+  waiting_on_id: number | null;
+  waiting_on: string | null;
+  waiting_ask: string | null;
+  waiting_since: string | null;
+  waiting_snoozed_until: string | null;
   closed_for: number | null;
   sort: number;
   created_at: string;
@@ -256,6 +276,7 @@ const TICKET_SELECT = `
          ap.state AS task_approval_state,
          (SELECT q.id FROM questions q WHERE q.task_id = t.task_id AND q.state = 'open') AS task_open_question,
          t.handoff, hb.name AS handoff_by, t.handoff_at, t.blocked_reason, t.closed_reason, t.closed_for,
+         t.next_step, nsf.name AS next_step_for, t.waiting_on AS waiting_on_id, wo.name AS waiting_on, t.waiting_ask, t.waiting_since, t.waiting_snoozed_until,
          t.sort, t.created_at, t.updated_at, t.started_at, t.completed_at
   FROM tickets t
   JOIN projects p ON p.id = t.project_id
@@ -268,7 +289,16 @@ const TICKET_SELECT = `
   LEFT JOIN tasks tk ON tk.id = t.task_id
   LEFT JOIN approvals ap ON ap.id = tk.approval_id
   LEFT JOIN participants hb ON hb.id = t.handoff_by
+  LEFT JOIN participants nsf ON nsf.id = t.next_step_for
+  LEFT JOIN participants wo ON wo.id = t.waiting_on
 `;
+
+/** One line of at most MAX_LINE characters (newlines become spaces). */
+function oneLine(value: string, what: string): string {
+  const line = String(value ?? '').replace(/\s+/g, ' ').trim();
+  if (line.length > MAX_LINE) throw new OrcoError('invalid', `${what} is one line of at most ${MAX_LINE} characters`);
+  return line;
+}
 
 function keyBase(name: string): string {
   const parts = name.split('-').filter(Boolean);
@@ -377,6 +407,13 @@ export class Tickets {
   create(actor: Participant, project: string, input: TicketInput & { title: string }, options: { dispatch?: boolean } = {}): Written {
     const proj = this.writable(actor, project);
     this.store.checkRate(actor, 'post');
+    // Checked before anything is written, so a bad one leaves no half-made ticket.
+    if (input.nextStep !== undefined) oneLine(input.nextStep, 'The next step');
+    if (input.waitingOn) {
+      const person = this.store.participantByName(input.waitingOn.replace(/^@/, ''));
+      if (!person || person.kind !== 'user' || !this.store.canSee(person, proj.id)) throw new OrcoError('invalid', `waiting_on is a person who can see ${proj.name}`);
+      if (!oneLine(input.waitingAsk ?? '', 'The ask')) throw new OrcoError('invalid', 'Say in one line what you need from them (waiting_ask)');
+    }
     const title = this.title(input.title);
     const description = this.description(input.description ?? '');
     const status = input.status ? this.statusByName(proj.id, input.status) : this.statuses(proj.id).find((s) => s.category === 'backlog' || s.category === 'unstarted')!;
@@ -432,10 +469,68 @@ export class Tickets {
     }
     const created = this.row(id)!;
     this.store.audit.record(actor, 'ticket.create', { projectId: proj.id, subject: `ticket:${refOf(created)}`, detail: { title } });
+    if (input.nextStep || input.waitingOn) {
+      this.store.withoutRateLimit(() => this.update(actor, refOf(created), { nextStep: input.nextStep, nextStepFor: input.nextStepFor, waitingOn: input.waitingOn, waitingAsk: input.waitingAsk }));
+    }
     const dispatch = options.dispatch ?? true;
     const warning = dispatch && assignee?.kind === 'agent' && assignee.id !== actor.id ? this.dispatch(actor, created) : undefined;
     this.changed(created);
     return { ticket: this.detail(actor, id), ...(warning ? { warning } : {}) };
+  }
+
+  /**
+   * The person a ticket waits on answers in one tap: "done" clears the ask, "not_yet" snoozes it a
+   * day, anything else is a one-line reply that clears it. Each posts a comment and wakes the agent
+   * the ticket is assigned to, so the work goes on without anyone relaying the answer.
+   */
+  replyWaiting(actor: Participant, ref: string, reply: string): Ticket {
+    const row = this.byRef(actor, ref);
+    if (!row.waiting_on) throw new OrcoError('conflict', `${refOf(row)} is not waiting on anyone`);
+    if (actor.id !== row.waiting_on_id) throw new OrcoError('forbidden', `${refOf(row)} waits on ${row.waiting_on}, not you`);
+    const text = String(reply ?? '').trim();
+    if (!text) throw new OrcoError('invalid', 'Reply "done", "not_yet" or a line of text');
+    const snooze = text === 'not_yet';
+    const line = text === 'done' ? 'Done' : snooze ? 'Not yet (asked again tomorrow)' : oneLine(text, 'A reply');
+    this.store.begin();
+    try {
+      this.activity(row.id, actor, 'comment', `${actor.name} on "${row.waiting_ask}": ${line}`, null);
+      if (snooze) {
+        this.store.db.prepare(`UPDATE tickets SET waiting_snoozed_until = ?, updated_at = ${NOW_SQL} WHERE id = ?`).run(new Date(this.store.now() + 24 * 3600_000).toISOString(), row.id);
+      } else {
+        this.store.db.prepare(`UPDATE tickets SET waiting_on = NULL, waiting_ask = NULL, waiting_since = NULL, waiting_snoozed_until = NULL, updated_at = ${NOW_SQL} WHERE id = ?`).run(row.id);
+        this.activity(row.id, actor, 'change', null, { changes: [{ field: 'waitingOn', from: row.waiting_on, to: null }] });
+      }
+      this.store.commit();
+    } catch (err) {
+      this.store.rollback();
+      throw err;
+    }
+    this.store.audit.record(actor, 'ticket.waiting_reply', { projectId: row.project_id, subject: `ticket:${refOf(row)}`, detail: { ask: row.waiting_ask, reply: line } });
+    this.wakeAssignee(row, `${actor.name} answered "${row.waiting_ask}" on ${refOf(row)}: ${line}`);
+    this.changed(row);
+    return this.detail(actor, row.id);
+  }
+
+  /** Tells the agent a ticket is assigned to that something it waited for happened. */
+  private wakeAssignee(row: TicketRow, note: string): void {
+    if (row.assignee_kind !== 'agent' || row.assignee_id === null) return;
+    const agent = this.store.participantById(row.assignee_id)!;
+    const task = row.task_id !== null && OPEN_STATES.includes(taskState(row)!) ? this.store.tasks.find(row.task_id) : null;
+    const system = this.store.system();
+    if (!system) return;
+    // A mention reaches an agent waiting on wait_for_mentions; the wake reaches its bridge.
+    const room = task ? task.room : this.workRoom(row.project_id);
+    this.store.post(system, room, `@${agent.name} ${note.replace(/@/g, '＠')}`, task?.messageId, { skipRateLimit: true });
+    if (task) this.store.events.emit('wake', { reminderId: 0, taskId: task.id, agentId: agent.id, agent: agent.name, note });
+  }
+
+  /** Open tickets waiting on this person (snoozed ones only once their snooze ends). */
+  waitingFor(actor: Participant): TicketSummary[] {
+    const now = new Date(this.store.now()).toISOString();
+    const rows = this.store.db
+      .prepare(`${TICKET_SELECT} WHERE t.waiting_on = ? AND (t.waiting_snoozed_until IS NULL OR t.waiting_snoozed_until <= ?) AND s.category NOT IN ('completed', 'canceled') ORDER BY t.waiting_since`)
+      .all(actor.id, now) as unknown as TicketRow[];
+    return this.summaries(rows.filter((r) => this.store.canSee(actor, r.project_id)), actor);
   }
 
   update(actor: Participant, ref: string, input: TicketInput): Written {
@@ -573,6 +668,53 @@ export class Tickets {
       if (reason !== row.blocked_reason) {
         set('blocked_reason', reason);
         changes.push({ field: 'blockedReason', from: row.blocked_reason || null, to: reason || null });
+      }
+    }
+    if (input.nextStep !== undefined || input.nextStepFor !== undefined) {
+      const text = input.nextStep === undefined ? (row.next_step ?? '') : oneLine(input.nextStep, 'The next step');
+      let forId: number | null = input.nextStepFor === undefined ? (row.next_step_for ? this.store.participantByName(row.next_step_for)?.id ?? null : null) : null;
+      if (input.nextStepFor) {
+        const who = this.store.participantByName(input.nextStepFor.replace(/^@/, ''));
+        if (!who || !this.store.canSee(who, row.project_id)) throw new OrcoError('invalid', `${input.nextStepFor} cannot see ${row.project}`);
+        forId = who.id;
+      }
+      if (!text) forId = null;
+      const forName = forId === null ? null : this.store.participantById(forId)!.name;
+      if (text !== (row.next_step ?? '') || forName !== row.next_step_for) {
+        set('next_step', text || null);
+        set('next_step_for', forId);
+        changes.push({ field: 'nextStep', from: row.next_step, to: text ? `${text}${forName ? ` (for ${forName})` : ''}` : null });
+      }
+    }
+    if (input.waitingOn !== undefined) {
+      if (input.waitingOn === null || input.waitingOn === '') {
+        if (row.waiting_on) {
+          set('waiting_on', null);
+          set('waiting_ask', null);
+          set('waiting_since', null);
+          set('waiting_snoozed_until', null);
+          changes.push({ field: 'waitingOn', from: row.waiting_on, to: null });
+        }
+      } else {
+        const person = this.store.participantByName(input.waitingOn.replace(/^@/, ''));
+        if (!person || person.kind !== 'user' || this.store.isSystem(person) || !this.store.canSee(person, row.project_id)) {
+          throw new OrcoError('invalid', `waiting_on is a person who can see ${row.project}`);
+        }
+        const ask = oneLine(input.waitingAsk ?? row.waiting_ask ?? '', 'The ask');
+        if (!ask) throw new OrcoError('invalid', 'Say in one line what you need from them (waiting_ask)');
+        if (person.name !== row.waiting_on || ask !== row.waiting_ask) {
+          set('waiting_on', person.id);
+          set('waiting_ask', ask);
+          set('waiting_since', new Date(this.store.now()).toISOString());
+          set('waiting_snoozed_until', null);
+          changes.push({ field: 'waitingOn', from: row.waiting_on, to: `${person.name}: ${ask}` });
+        }
+      }
+    } else if (input.waitingAsk !== undefined && row.waiting_on) {
+      const ask = oneLine(input.waitingAsk, 'The ask');
+      if (ask && ask !== row.waiting_ask) {
+        set('waiting_ask', ask);
+        changes.push({ field: 'waitingOn', from: row.waiting_on, to: `${row.waiting_on}: ${ask}` });
       }
     }
     const criteria = this.criteriaOps(actor, row.id, input);
@@ -1413,6 +1555,8 @@ export class Tickets {
         task: row.task_id === null || state === null ? null : { id: row.task_id, state, since: row.task_since! },
         blockedBy: blockedBy.get(row.id) ?? [],
         blockedReason: row.blocked_reason || null,
+        nextStep: row.next_step ? { text: row.next_step, for: row.next_step_for } : null,
+        waitingOn: row.waiting_on ? { person: row.waiting_on, ask: row.waiting_ask ?? '', since: row.waiting_since ?? row.updated_at, snoozedUntil: row.waiting_snoozed_until } : null,
         blocked: (blockedBy.get(row.id)?.length ?? 0) > 0 || row.blocked_reason !== '',
         criteria: criteria.get(row.id) ?? { done: 0, total: 0 },
         sort: row.sort,

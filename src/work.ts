@@ -16,6 +16,8 @@ export interface WorkTicket extends TicketSummary {
 export interface MyWork {
   next: string[];
   questionsForYou: Question[];
+  /** Tickets waiting on you for something only you can do (their waiting_on ask). */
+  waitingOnYou: TicketSummary[];
   /** Tasks you (or your agents) asked for whose agents have gone quiet. */
   stalled: Task[];
   tasks: Task[];
@@ -36,6 +38,7 @@ export interface MyWork {
  */
 export function myWork(store: Store, me: Participant): MyWork {
   const questionsForYou = store.questions.waitingOn(me);
+  const waitingOnYou = me.kind === 'user' ? store.tickets.waitingFor(me) : [];
   const stalled = store.tasks.stalledFor(me).filter((t) => t.assignee !== me.name);
   const tasks = store.tasks.list(me, { assignedToMe: true, open: true, limit: 50 }).reverse();
   const tickets = store.tickets
@@ -61,6 +64,7 @@ export function myWork(store: Store, me: Participant): MyWork {
   for (const q of questionsForYou) {
     next.push(q.kind === 'plan' ? `Approve or reject ${q.asker}'s plan for task #${q.taskId} (question ${q.id}).` : `Answer question ${q.id} from ${q.asker} on task #${q.taskId}.`);
   }
+  for (const t of waitingOnYou) next.push(`${t.ref} waits on you: ${t.waitingOn!.ask}${t.assignee ? ` (for ${t.assignee.name})` : ''}.`);
   for (const t of stalled) next.push(`Task #${t.id} for ${t.assignee} has stalled; check on it or cancel it.`);
   for (const t of tasks.filter((t) => t.state === 'accepted' && t.question?.state === 'answered')) {
     const q = t.question!;
@@ -72,7 +76,7 @@ export function myWork(store: Store, me: Participant): MyWork {
   for (const t of tasks.filter((t) => t.state === 'requested')) next.push(`Accept or decline task #${t.id} from ${t.chain.join(' → ')}.`);
   for (const t of tasks.filter((t) => t.state === 'accepted' && t.question?.state !== 'answered')) next.push(`Finish task #${t.id}.`);
   const ready = tickets.filter((t) => !t.blocked && !t.task);
-  for (const t of ready.slice(0, 3)) next.push(`${t.status.category === 'started' ? 'Continue' : 'Start'} ${t.ref} (${t.priority}): ${t.title}.`);
+  for (const t of ready.slice(0, 3)) next.push(`${t.status.category === 'started' ? 'Continue' : 'Start'} ${t.ref} (${t.priority}): ${t.title}.${t.nextStep ? ` Next: ${t.nextStep.text}` : ''}`);
   const waiting = tasks.filter((t) => t.state === 'needs_input').length;
   if (waiting) next.push(`${waiting} of your tasks ${waiting === 1 ? 'is' : 'are'} waiting on an answer; nothing to do there until it comes.`);
   if (next.length === 0 && mentions.length === 0) next.push('Nothing is waiting on you. Use wait_for_mentions to wait for work.');
@@ -81,5 +85,5 @@ export function myWork(store: Store, me: Participant): MyWork {
     store.tasks.markSeen(me, tasks.map((t) => t.id));
     store.questions.markSeen(me, questionsForYou.map((q) => q.id));
   }
-  return { next: next.slice(0, 8), questionsForYou, stalled, tasks, tickets, mentions, reviews, memory, cancelled };
+  return { next: next.slice(0, 8), questionsForYou, waitingOnYou, stalled, tasks, tickets, mentions, reviews, memory, cancelled };
 }

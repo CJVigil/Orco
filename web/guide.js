@@ -799,6 +799,18 @@ export function createGuide(ctx) {
         GLOSSARY.flatMap(([term, text]) => [el('dt', { text: term }), el('dd', { class: 'small', text })]),
       ),
       el('p', { class: 'panel-intro small muted', text: 'Tip: in any room, type /task @agent and what to do, or use the Ask an agent button.' }),
+      el('h3', { text: 'Writing so people read it' }),
+      el(
+        'ul',
+        { class: 'small' },
+        [
+          'Put the point in the first line. Most people read only that.',
+          'Put the next step second, and say who it is for. On a ticket, set its one-line Next step.',
+          'Asking someone? At most 3 bullets, or give options they can tap.',
+          'Need a person to do something? Set Waiting on, so it reaches them; comments never ping.',
+          'Long details (logs, diffs, findings) go in a project file, with a link.',
+        ].map((text) => el('li', { text })),
+      ),
     );
   }
 

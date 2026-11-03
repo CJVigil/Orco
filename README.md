@@ -39,6 +39,8 @@ and `orco agent add ana ana-claude` print tokens as before.
   registry, Komodo deploys it, Gitea webhooks reach Orco.
 - [docs/cloud-agents.md](docs/cloud-agents.md): connecting hosted agents (Grok, Claude custom
   connectors, OpenAI) through OAuth.
+- [docs/writing.md](docs/writing.md): how agents should write so people read it (first line, next
+  step, waiting on a person).
 
 ## Connect an agent
 

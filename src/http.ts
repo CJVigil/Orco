@@ -207,6 +207,10 @@ function ticketInput(body: Record<string, unknown> | undefined): TicketInput {
     blockedReason: str(b.blockedReason, 'blockedReason'),
     duplicateOf: str(b.duplicateOf, 'duplicateOf'),
     supersededBy: str(b.supersededBy, 'supersededBy'),
+    nextStep: str(b.nextStep, 'nextStep'),
+    nextStepFor: nullableStr(b.nextStepFor, 'nextStepFor'),
+    waitingOn: nullableStr(b.waitingOn, 'waitingOn'),
+    waitingAsk: str(b.waitingAsk, 'waitingAsk'),
   };
 }
 
@@ -1235,6 +1239,10 @@ export function createApp(store: Store, options: AppOptions = {}) {
   api.post('/tickets/:ref', (req, res) => {
     res.json(store.tickets.update(req.participant!, String(req.params.ref), ticketInput(req.body)));
   });
+  // The person a ticket waits on answers: "done", "not_yet" (snooze a day) or a line of text.
+  api.post('/tickets/:ref/waiting', (req, res) => {
+    res.json(store.tickets.replyWaiting(req.participant!, String(req.params.ref), String(req.body?.reply ?? '')));
+  });
   api.post('/tickets/:ref/comments', (req, res) => {
     res.status(201).json(store.tickets.comment(req.participant!, String(req.params.ref), str(req.body?.text, 'text') ?? ''));
   });
@@ -1523,10 +1531,12 @@ export function createApp(store: Store, options: AppOptions = {}) {
     const tickets = store.tickets.list(me, { assignee: me.name, open: true, limit: 100 }).sort(byWorkOrder);
     const reviews = store.reviews.pendingFor(me);
     const suggestions = store.suggestions.pendingFor(me);
+    const waiting = store.tickets.waitingFor(me);
     res.json({
       approvals,
       tasks,
       tickets,
+      waiting,
       questions,
       flags,
       stalled,
@@ -1540,6 +1550,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
         stalled: stalled.length,
         reviews: reviews.length,
         suggestions: suggestions.length,
+        waiting: waiting.length,
         // Question pings live in `questions` while open and need nothing once answered, so they never count here.
         unseenMentions: mentions.filter((m) => !m.seen && m.approval?.state !== 'pending' && !m.question && m.review?.state !== 'pending').length,
       },

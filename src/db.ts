@@ -902,6 +902,16 @@ export const MIGRATIONS = [
   );
   CREATE INDEX held_mentions_approval ON held_mentions (approval_id);
   `,
+  // 31: a one-line next step on a ticket, and an ask waiting on one person.
+  `
+  ALTER TABLE tickets ADD COLUMN next_step TEXT;
+  ALTER TABLE tickets ADD COLUMN next_step_for INTEGER REFERENCES participants(id);
+  ALTER TABLE tickets ADD COLUMN waiting_on INTEGER REFERENCES participants(id);
+  ALTER TABLE tickets ADD COLUMN waiting_ask TEXT;
+  ALTER TABLE tickets ADD COLUMN waiting_since TEXT;
+  ALTER TABLE tickets ADD COLUMN waiting_snoozed_until TEXT;
+  CREATE INDEX tickets_waiting ON tickets (waiting_on);
+  `,
 ];
 
 export interface OpenOptions {
