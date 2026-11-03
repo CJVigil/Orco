@@ -3,6 +3,7 @@ import { icon } from './icons.js';
 import { renderMarkdown } from './markdown.js';
 import * as notify from './notify.js';
 import { createGuide } from './guide.js';
+import { createNeeds } from './needs.js';
 import { createPortfolio } from './portfolio.js';
 import { createTickets } from './tickets.js';
 
@@ -103,6 +104,24 @@ function codeBlock(code, lang) {
   return el('div', { class: 'code-block' }, el('div', { class: 'code-head' }, el('span', { text: lang || 'text' }), copy), el('pre', {}, el('code', { text: code })));
 }
 
+/** A message over about 8 lines shows its first lines, with "Show more" (#84). */
+function foldedBody(text) {
+  const body = el('div', { class: 'msg-body md' }, richText(text));
+  const lines = text.split('\n').length;
+  if (lines <= 8 && text.length <= 960) return body;
+  body.classList.add('clamped');
+  const more = el('button', {
+    class: 'link-button small',
+    type: 'button',
+    text: `Show more (${lines} line${lines === 1 ? '' : 's'})`,
+    onclick: () => {
+      const open = body.classList.toggle('clamped') === false;
+      more.textContent = open ? 'Show less' : `Show more (${lines} line${lines === 1 ? '' : 's'})`;
+    },
+  });
+  return el('div', { class: 'foldable' }, body, more);
+}
+
 function richText(text) {
   return renderMarkdown(text, {
     h: (tag, props, children) => el(tag, props, children),
@@ -179,7 +198,7 @@ function renderMessage(message, previous, { inThread = false } = {}) {
       message.owner ? el('span', { class: 'owner', text: `owned by ${message.owner}` }) : null,
       el('time', { class: 'time', datetime: message.createdAt, title: new Date(message.createdAt).toLocaleString(), text: formatTime(message.createdAt) }),
     ),
-    message.text ? el('div', { class: 'msg-body md' }, richText(message.text)) : null,
+    message.text ? foldedBody(message.text) : null,
     message.external ? externalBlock(message.external) : null,
     images.length
       ? el(
@@ -1161,10 +1180,11 @@ function roomFromHash() {
 function renderRoomTitle() {
   const title = $('room-title');
   title.replaceChildren();
-  if (state.view === 'portfolio') {
-    title.append('Portfolio');
+  if (state.view === 'portfolio' || state.view === 'needs') {
+    const name = state.view === 'needs' ? 'Needs you' : 'Portfolio';
+    title.append(name);
     for (const id of ['add-member', 'show-locks', 'audit-log', 'show-members', 'more']) $(id).hidden = true;
-    document.title = 'Portfolio · Orco';
+    document.title = `${name} · Orco`;
     return;
   }
   $('show-members').hidden = false;
@@ -1217,6 +1237,8 @@ function setView(view) {
   $('tickets-view').hidden = view !== 'tickets';
   $('portfolio-view').hidden = view !== 'portfolio';
   $('portfolio').classList.toggle('active', view === 'portfolio');
+  $('needs-view').hidden = view !== 'needs';
+  $('needs').classList.toggle('active', view === 'needs');
 }
 
 function portfolioRoute() {
@@ -1238,6 +1260,14 @@ function overlayRoute() {
 async function selectRoom() {
   if (overlayRoute()) return;
   state.viewHash = location.hash || undefined;
+  if (location.hash === '#!needs') {
+    setView('needs');
+    renderNav();
+    renderRoomTitle();
+    if (state.panel === 'thread' || state.panel === 'locks' || state.panel === 'members') closePanel();
+    await needs.show();
+    return;
+  }
   const across = portfolioRoute();
   if (across) {
     setView('portfolio');
@@ -1889,6 +1919,7 @@ function connect() {
     scheduleInbox();
   });
   for (const name of ['controls', 'decision', 'pause', 'task', 'approval']) events.addEventListener(name, () => portfolio.onEvent());
+  for (const name of ['task', 'approval', 'question', 'review', 'ticket', 'flag']) events.addEventListener(name, () => needs.onEvent());
   events.addEventListener('ticket', (event) => {
     portfolio.onEvent();
     tickets.onEvent(JSON.parse(event.data));
@@ -2290,6 +2321,10 @@ async function refreshInbox() {
   badge.hidden = count === 0;
   badge.textContent = String(count);
   $('inbox').classList.toggle('has-items', count > 0);
+  // Needs you counts only what waits on you to act.
+  const needsCount = c.approvals + c.questions + (c.waiting ?? 0) + (c.reviews ?? 0);
+  $('needs-count').hidden = needsCount === 0;
+  $('needs-count').textContent = String(needsCount);
   if (state.panel === 'inbox') renderInbox(inbox);
 }
 
@@ -2625,6 +2660,10 @@ function flash(selector) {
   setTimeout(() => node.classList.remove('flash'), 2000);
 }
 
+$('needs').addEventListener('click', () => {
+  $('sidebar').classList.remove('open');
+  location.hash = '#!needs';
+});
 $('portfolio').addEventListener('click', () => {
   $('sidebar').classList.remove('open');
   location.hash = '#!portfolio';
@@ -2656,6 +2695,8 @@ async function start() {
   $('me-name').textContent = state.me.name;
   $('me-avatar').replaceWith(Object.assign(avatar(state.me.name, state.me.kind), { id: 'me-avatar' }));
   await loadStructure();
+  // People land on what needs them, unless a link says where to go.
+  if (!location.hash && state.me.kind === 'user' && state.projects.length > 0) history.replaceState(null, '', '#!needs');
   await selectRoom();
   if (state.me.kind === 'user' && state.projects.length === 0 && !guide.stepsDismissed()) void guide.showSteps();
   clearSignedOut();
@@ -2836,6 +2877,16 @@ document.addEventListener('visibilitychange', () => {
     state.mentioned.delete(state.room.ref);
     renderNav();
   }
+});
+
+const needs = createNeeds({
+  api,
+  el,
+  $,
+  answerBox,
+  decideApproval,
+  jumpTo,
+  openTicket: (ref) => tickets.openTicket(ref),
 });
 
 const portfolio = createPortfolio({

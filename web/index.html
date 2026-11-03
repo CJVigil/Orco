@@ -38,6 +38,7 @@
           <span class="search-icon" data-icon="search"></span>
           <input id="search-input" type="search" placeholder="Search" aria-label="Search messages, tickets, notes and tasks" autocomplete="off" />
         </form>
+        <button id="needs" class="inbox-link" type="button" data-icon="task"><span class="label">Needs you</span><span id="needs-count" class="badge" hidden></span></button>
         <button id="inbox" class="inbox-link" type="button" data-icon="inbox">
           <span>Inbox</span>
           <span id="inbox-badge" class="badge" hidden></span>
@@ -95,6 +96,7 @@
         </div>
         <section id="tickets-view" class="tickets-view" aria-label="Tickets" hidden></section>
         <section id="portfolio-view" class="tickets-view" aria-label="Portfolio" hidden></section>
+        <section id="needs-view" class="tickets-view" aria-label="Needs you" hidden></section>
         <div id="composer-pending" class="pending" aria-label="Images to send"></div>
         <form id="composer" class="composer">
           <button type="button" class="ghost icon attach" title="Attach images or text files" aria-label="Attach images or text files" data-icon="paperclip"></button>

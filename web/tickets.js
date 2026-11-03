@@ -115,6 +115,55 @@ export function createTickets(ctx) {
         )
       : null;
 
+  /**
+   * The one state a ticket is in, readable without hovering (and in a screenshot): waiting on you (or
+   * on someone), blocked by what, stale (no status change in 7 days), or being worked on.
+   */
+  const STALE_DAYS = 7;
+  function cardState(ticket) {
+    const open = !['completed', 'canceled'].includes(ticket.status.category);
+    if (!open) return null;
+    const waiting = ticket.waitingOn && !(ticket.waitingOn.snoozedUntil && ticket.waitingOn.snoozedUntil > new Date().toISOString()) ? ticket.waitingOn : null;
+    if (waiting && waiting.person === me()?.name) return { kind: 'waiting-you', icon: 'bell', text: `Waiting on you: ${waiting.ask}` };
+    if (ticket.blocked) {
+      const by = ticket.blockedBy.length ? `Blocked by ${ticket.blockedBy.slice(0, 2).join(', ')}${ticket.blockedBy.length > 2 ? ` +${ticket.blockedBy.length - 2}` : ''}` : `Blocked: ${ticket.blockedReason}`;
+      return { kind: 'blocked', icon: 'lock', text: ticket.blockedBy.length && ticket.blockedReason ? `${by}; ${ticket.blockedReason}` : by };
+    }
+    if (waiting) return { kind: 'waiting', icon: 'clock', text: `Waiting on ${waiting.person}` };
+    if (ticket.task && ['accepted', 'needs_input'].includes(ticket.task.state)) return { kind: 'working', icon: 'bot', text: ticket.task.state === 'needs_input' ? 'Agent asked a question' : 'Working' };
+    const days = Math.floor((Date.now() - Date.parse(ticket.statusChangedAt ?? ticket.updatedAt)) / 86_400_000);
+    if (ticket.status.category !== 'backlog' && days >= STALE_DAYS) return { kind: 'stale', icon: 'clock', text: `Stale: ${ticket.status.name} for ${days} days` };
+    return null;
+  }
+  const stateLine = (ticket) => {
+    const state = cardState(ticket);
+    return state ? el('div', { class: `card-state state-${state.kind}` }, icon(state.icon), el('span', { text: state.text })) : null;
+  };
+  const nextStepLine = (ticket) => {
+    if (['completed', 'canceled'].includes(ticket.status.category)) return null;
+    return ticket.nextStep
+      ? el('div', { class: 'ticket-next', text: `Next: ${ticket.nextStep.text}${ticket.nextStep.for ? ` (${ticket.nextStep.for})` : ''}` })
+      : el('div', { class: 'ticket-next none', text: 'No next step' });
+  };
+  // The board shows what matters by default: recent Done only, Backlog folded to a count.
+  const FOCUS_KEY = 'orco.boardFocus';
+  const focusOn = () => {
+    try {
+      return localStorage.getItem(FOCUS_KEY) !== '0';
+    } catch {
+      return true;
+    }
+  };
+  const setFocus = (on) => {
+    try {
+      localStorage.setItem(FOCUS_KEY, on ? '1' : '0');
+    } catch {
+      // Private windows: the toggle still works for this page.
+    }
+    t.focus = on;
+    renderTab();
+  };
+
   // Plans by project: the board shows one project while the panel may show a ticket from another.
   const plans = new Map();
   const people = () => t.plan?.members ?? [];
@@ -289,7 +338,7 @@ export function createTickets(ctx) {
     const node = el(
       'article',
       {
-        class: 'ticket-card',
+        class: `ticket-card${cardState(ticket) ? ` has-state state-edge-${cardState(ticket).kind}` : ''}`,
         tabindex: '0',
         draggable: 'true',
         'data-ref': ticket.ref,
@@ -310,13 +359,14 @@ export function createTickets(ctx) {
           for (const line of root.querySelectorAll('.drop-line')) line.remove();
         },
       },
+      stateLine(ticket),
       el('div', { class: 'ticket-card-top' }, el('span', { class: 'ticket-ref', text: ticket.ref }), ticket.assignee ? avatar(ticket.assignee.name, ticket.assignee.kind) : null),
       el('div', { class: 'ticket-title', text: ticket.title }),
+      nextStepLine(ticket),
       el(
         'div',
         { class: 'ticket-meta' },
         ticket.priority !== 'none' ? priorityIcon(ticket.priority) : null,
-        ticket.blocked ? el('span', { class: 'meta-pill blocked', title: blockedWhy(ticket), text: 'Blocked' }) : null,
         taskBadge(ticket.task),
         ticket.criteria.total
           ? el('span', { class: `meta-pill${ticket.criteria.done === ticket.criteria.total ? ' met' : ''}`, title: 'Acceptance criteria met', text: `${ticket.criteria.done}/${ticket.criteria.total}` })
@@ -330,9 +380,31 @@ export function createTickets(ctx) {
   }
 
   function renderBoard() {
+    if (t.focus === undefined) t.focus = focusOn();
     const columns = t.plan.statuses.filter((s) => s.category !== 'canceled');
     const byStatus = new Map(columns.map((s) => [s.id, []]));
     for (const ticket of t.tickets) byStatus.get(ticket.status.id)?.push(ticket);
+    const weekAgo = new Date(Date.now() - 7 * 86_400_000).toISOString();
+    const hidden = new Map();
+    if (t.focus) {
+      for (const status of columns) {
+        const all = byStatus.get(status.id);
+        if (status.category === 'completed') {
+          const recent = all.filter((x) => (x.completedAt ?? x.updatedAt) >= weekAgo);
+          hidden.set(status.id, all.length - recent.length);
+          byStatus.set(status.id, recent);
+        } else if (status.category === 'backlog' && !t.showBacklog) {
+          hidden.set(status.id, all.length);
+          byStatus.set(status.id, []);
+        }
+      }
+    }
+    const toggle = el(
+      'label',
+      { class: 'check small board-focus', title: 'Show Done from the last 7 days only, and fold Backlog to a count' },
+      el('input', { type: 'checkbox', checked: t.focus, onchange: (event) => setFocus(event.target.checked) }),
+      'Focus',
+    );
     const canceled = t.tickets.filter((x) => x.status.category === 'canceled').length;
     const board = el(
       'div',
@@ -377,15 +449,23 @@ export function createTickets(ctx) {
             { class: 'column-head' },
             statusIcon(status.category),
             el('span', { class: 'column-name', text: status.name }),
-            el('span', { class: 'muted small', text: String(tickets.length) }),
+            el('span', { class: 'muted small', text: String(tickets.length + (hidden.get(status.id) ?? 0)) }),
             el('span', { class: 'spacer' }),
             el('button', { class: 'ghost icon', type: 'button', title: `New ticket in ${status.name}`, 'aria-label': `New ticket in ${status.name}`, onclick: () => openNewTicket({ status: status.name }) }, icon('plus')),
           ),
           list,
+          hidden.get(status.id)
+            ? el('button', {
+                class: 'ghost small column-more',
+                type: 'button',
+                text: status.category === 'backlog' ? `${hidden.get(status.id)} in ${status.name}` : `+${hidden.get(status.id)} older`,
+                onclick: () => (status.category === 'backlog' ? ((t.showBacklog = true), renderTab()) : setFocus(false)),
+              })
+            : null,
         );
       }),
     );
-    return [board, canceled ? el('p', { class: 'muted small board-note', text: `${canceled} canceled ${canceled === 1 ? 'ticket is' : 'tickets are'} in the List view.` }) : null];
+    return [toggle, board, canceled ? el('p', { class: 'muted small board-note', text: `${canceled} canceled ${canceled === 1 ? 'ticket is' : 'tickets are'} in the List view.` }) : null];
   }
 
   /* List */
@@ -405,8 +485,8 @@ export function createTickets(ctx) {
             { class: 'list-row', type: 'button', onclick: () => void openTicket(ticket.ref) },
             priorityIcon(ticket.priority),
             el('span', { class: 'ticket-ref', text: ticket.ref }),
-            el('span', { class: 'list-title', text: ticket.title }),
-            el('span', { class: 'list-meta' }, ticket.blocked ? el('span', { class: 'meta-pill blocked', title: blockedWhy(ticket), text: 'Blocked' }) : null, taskBadge(ticket.task), ticket.labels.map(labelChip), ticket.estimate !== null ? el('span', { class: 'meta-pill', text: `${ticket.estimate} pt` }) : null, ticket.dueDate ? el('span', { class: 'meta-pill', text: shortDate(ticket.dueDate) }) : null),
+            el('span', { class: 'list-title' }, el('span', { text: ticket.title }), stateLine(ticket), ticket.nextStep && !['completed', 'canceled'].includes(ticket.status.category) ? el('span', { class: 'ticket-next', text: `Next: ${ticket.nextStep.text}` }) : null),
+            el('span', { class: 'list-meta' }, taskBadge(ticket.task), ticket.labels.map(labelChip), ticket.estimate !== null ? el('span', { class: 'meta-pill', text: `${ticket.estimate} pt` }) : null, ticket.dueDate ? el('span', { class: 'meta-pill', text: shortDate(ticket.dueDate) }) : null),
             ticket.assignee ? avatar(ticket.assignee.name, ticket.assignee.kind) : el('span', { class: 'avatar-blank', title: 'Unassigned' }),
           ),
         ),
@@ -576,6 +656,7 @@ export function createTickets(ctx) {
         warning ? el('p', { class: 'notice', role: 'status', text: warning }) : null,
         ticket.parent ? el('button', { class: 'link-button small', type: 'button', text: `Sub-ticket of ${ticket.parent}`, onclick: () => void openTicket(ticket.parent) }) : null,
         title,
+        nowBlock(ticket),
         props,
         agentRow,
         handoffBlock(ticket),
@@ -587,6 +668,108 @@ export function createTickets(ctx) {
       ),
     );
     autosize(title);
+  }
+
+  /**
+   * The first lines of a ticket: its state, its one next step, and who it waits on (with one-tap
+   * replies for that person), so nobody has to scroll to know what happens now.
+   */
+  function nowBlock(ticket) {
+    const open = !['completed', 'canceled'].includes(ticket.status.category);
+    const people = (plans.get(ticket.project)?.members ?? []);
+    const wrap = el('section', { class: 'detail-now' });
+    const view = () => {
+      const w = ticket.waitingOn;
+      const mine = w && w.person === me()?.name;
+      const reply = (text) =>
+        void api(`/tickets/${ticket.ref}/waiting`, { method: 'POST', body: { reply: text } })
+          .then((updated) => renderDetail(updated))
+          .catch((err) => notify(err.message));
+      const line = el('input', { class: 'answer-input', placeholder: 'Or reply in a line', 'aria-label': 'Reply', maxlength: '140' });
+      line.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' && line.value.trim()) reply(line.value.trim());
+      });
+      wrap.replaceChildren(
+        ...[
+        stateLine(ticket),
+        open
+          ? el(
+              'div',
+              { class: 'now-row' },
+              el('strong', { text: 'Next:' }),
+              el('span', { class: ticket.nextStep ? '' : 'muted', text: ticket.nextStep ? `${ticket.nextStep.text}${ticket.nextStep.for ? ` (${ticket.nextStep.for})` : ''}` : 'No next step' }),
+              el('button', { class: 'ghost small', type: 'button', text: ticket.nextStep ? 'Edit' : 'Add', onclick: editNext }),
+            )
+          : null,
+        w
+          ? el(
+              'div',
+              { class: 'now-row' },
+              el('strong', { text: `Waiting on ${mine ? 'you' : w.person}:` }),
+              el('span', { text: w.ask }),
+              mine
+                ? el(
+                    'span',
+                    { class: 'now-actions' },
+                    el('button', { class: 'primary small', type: 'button', text: 'Done', onclick: () => reply('done') }),
+                    el('button', { class: 'ghost small', type: 'button', text: 'Not yet', onclick: () => reply('not_yet') }),
+                    line,
+                  )
+                : el('button', { class: 'ghost small', type: 'button', text: 'Clear', onclick: () => void save(ticket, { waitingOn: null }) }),
+            )
+          : open
+            ? el('button', { class: 'link-button small', type: 'button', text: 'Need someone to do something? Ask them', onclick: editWaiting })
+            : null,
+        ].filter(Boolean),
+      );
+    };
+    const editNext = () => {
+      const text = el('input', { maxlength: '140', 'aria-label': 'Next step', placeholder: 'The one next thing to do', value: ticket.nextStep?.text ?? '' });
+      const who = select(ticket.nextStep?.for ?? '', [['', 'Anyone'], ...people.map((p) => [p.name, p.name])], () => {}, { 'aria-label': 'For' });
+      wrap.replaceChildren(
+        el('div', { class: 'now-row' }, el('strong', { text: 'Next:' }), text, who),
+        el('div', { class: 'row-end' }, el('button', { class: 'ghost small', type: 'button', text: 'Cancel', onclick: view }), el('button', { class: 'primary small', type: 'button', text: 'Save', onclick: () => void save(ticket, { nextStep: text.value, nextStepFor: who.value || null }) })),
+      );
+      text.focus();
+    };
+    const editWaiting = () => {
+      const who = select('', [['', 'Who?'], ...people.filter((p) => p.kind === 'user').map((p) => [p.name, p.name])], () => {}, { 'aria-label': 'Waiting on' });
+      const ask = el('input', { maxlength: '140', 'aria-label': 'What you need', placeholder: 'What you need from them, in a line' });
+      wrap.replaceChildren(
+        el('div', { class: 'now-row' }, el('strong', { text: 'Waiting on' }), who, ask),
+        el('div', { class: 'row-end' }, el('button', { class: 'ghost small', type: 'button', text: 'Cancel', onclick: view }), el('button', { class: 'primary small', type: 'button', text: 'Ask', onclick: () => who.value && void save(ticket, { waitingOn: who.value, waitingAsk: ask.value }) })),
+      );
+    };
+    view();
+    return wrap;
+  }
+
+  /** Long text folds to its first lines with "Show more"; short text shows as it is. */
+  function folded(text, { lines = 8, firstLineOnly = false } = {}) {
+    const count = String(text ?? '').split('\n').length;
+    const long = firstLineOnly ? count > 1 || text.length > 160 : count > lines || text.length > lines * 120;
+    const body = el('div', { class: 'md ticket-text' }, richText(text));
+    if (!long) return body;
+    const preview = firstLineOnly
+      ? el('div', { class: 'ticket-text first-line', text: text.trim().split('\n')[0].slice(0, 200) })
+      : null;
+    if (!firstLineOnly) body.classList.add('clamped');
+    else body.hidden = true;
+    const more = el('button', {
+      class: 'link-button small',
+      type: 'button',
+      text: `Show more (${count} line${count === 1 ? '' : 's'})`,
+      onclick: () => {
+        const open = more.dataset.open !== '1';
+        more.dataset.open = open ? '1' : '0';
+        if (firstLineOnly) {
+          body.hidden = !open;
+          if (preview) preview.hidden = open;
+        } else body.classList.toggle('clamped', !open);
+        more.textContent = open ? 'Show less' : `Show more (${count} line${count === 1 ? '' : 's'})`;
+      },
+    });
+    return el('div', { class: 'foldable' }, preview, body, more);
   }
 
   function autosize(textarea) {
@@ -612,7 +795,7 @@ export function createTickets(ctx) {
           el('span', { class: 'spacer' }),
           el('button', { class: 'ghost small', type: 'button', text: h ? 'Edit' : 'Add', onclick: edit }),
         ),
-        h ? el('div', { class: 'md ticket-text handoff' }, richText(h.text)) : el('p', { class: 'muted small', text: 'Where the work stands, for whoever picks it up next. Agents keep this current.' }),
+        h ? folded(h.text) : el('p', { class: 'muted small', text: 'Where the work stands, for whoever picks it up next. Agents keep this current.' }),
       );
     };
     const edit = () => {
@@ -743,7 +926,7 @@ export function createTickets(ctx) {
       t.editing = false;
       wrap.replaceChildren(
         el('div', { class: 'section-head' }, el('h3', { text: 'Description' }), el('button', { class: 'ghost small', type: 'button', text: 'Edit', onclick: edit })),
-        ticket.description ? el('div', { class: 'md ticket-text' }, richText(ticket.description)) : el('p', { class: 'muted small', text: 'No description.' }),
+        ticket.description ? folded(ticket.description) : el('p', { class: 'muted small', text: 'No description.' }),
       );
     };
     const edit = () => {
@@ -810,6 +993,10 @@ export function createTickets(ctx) {
         return `renamed it to “${c.to}”`;
       case 'description':
         return c.to === '(cleared)' ? 'cleared the description' : 'edited the description';
+      case 'nextStep':
+        return c.to ? `set the next step: ${c.to}` : 'cleared the next step';
+      case 'waitingOn':
+        return c.to ? `asked ${c.to}` : `stopped waiting on ${c.from}`;
       case 'unblocked':
         return c.from === '(hidden)' ? 'is no longer blocked' : `is no longer blocked: ${c.from} is ${c.to}`;
       case 'closedAs':
@@ -852,18 +1039,22 @@ export function createTickets(ctx) {
   }
 
   function activityBlock(ticket, draft) {
-    const items = ticket.activity.map((a) => {
+    // People's words stand out and show in full; agents' fold to their first line (#84).
+    const peopleOnly = peopleOnlyOn();
+    const entries = peopleOnly ? ticket.activity.filter((a) => a.kind === 'comment' && a.actorKind === 'user') : ticket.activity;
+    const items = entries.map((a) => {
       const who = a.actor ?? 'Orco';
       if (a.kind === 'comment') {
+        const person = a.actorKind === 'user';
         return el(
           'li',
-          { class: 'activity-comment' },
+          { class: `activity-comment ${person ? 'by-person' : 'by-agent'}` },
           avatar(who, a.actorKind),
           el(
             'div',
             { class: 'comment-main' },
-            el('div', { class: 'comment-head' }, el('strong', { text: who }), el('span', { class: 'muted small', text: ago(a.createdAt) })),
-            el('div', { class: 'md ticket-text' }, richText(a.body)),
+            el('div', { class: 'comment-head' }, el('strong', { text: who }), el('span', { class: `who-chip ${person ? 'person' : 'agent'}`, text: person ? 'Person' : a.actorKind === 'agent' ? 'Agent' : 'Orco' }), el('span', { class: 'muted small', text: ago(a.createdAt) })),
+            person ? el('div', { class: 'md ticket-text' }, richText(a.body)) : folded(a.body, { firstLineOnly: true }),
           ),
         );
       }
@@ -899,11 +1090,54 @@ export function createTickets(ctx) {
     return el(
       'section',
       { class: 'detail-section' },
-      el('div', { class: 'section-head' }, el('h3', { text: 'Activity' })),
-      el('ol', { class: 'activity' }, items),
+      el(
+        'div',
+        { class: 'section-head' },
+        el('h3', { text: 'Activity' }),
+        el('span', { class: 'spacer' }),
+        el('label', { class: 'check small' }, el('input', { type: 'checkbox', checked: peopleOnly, onchange: (event) => (setPeopleOnly(event.target.checked), renderDetail(ticket)) }), 'People only'),
+      ),
+      el('ol', { class: 'activity' }, foldRuns(items, entries)),
       el('div', { class: 'comment-box' }, box, el('div', { class: 'row-end' }, el('button', { class: 'primary small', type: 'button', text: 'Comment', onclick: () => void send() }))),
       el('p', { class: 'muted small detail-foot', text: `Opened by ${ticket.creator} ${ago(ticket.createdAt)} · updated ${ago(ticket.updatedAt)}` }),
     );
+  }
+
+  const PEOPLE_KEY = 'orco.activityPeopleOnly';
+  function peopleOnlyOn() {
+    try {
+      return localStorage.getItem(PEOPLE_KEY) === '1';
+    } catch {
+      return false;
+    }
+  }
+  function setPeopleOnly(on) {
+    try {
+      localStorage.setItem(PEOPLE_KEY, on ? '1' : '0');
+    } catch {
+      // Private windows: it applies to this view only.
+    }
+  }
+
+  /** Three or more field changes in a row fold into one "N changes" line. */
+  function foldRuns(items, entries) {
+    const out = [];
+    for (let i = 0; i < items.length; ) {
+      let j = i;
+      while (j < items.length && entries[j].kind !== 'comment') j++;
+      if (j - i >= 3) {
+        const run = items.slice(i, j);
+        out.push(el('li', { class: 'activity-event' }, el('details', { class: 'activity-run' }, el('summary', { class: 'small', text: `${run.length} changes` }), el('ol', { class: 'activity' }, run))));
+        i = j;
+      } else if (j > i) {
+        out.push(...items.slice(i, j));
+        i = j;
+      } else {
+        out.push(items[i]);
+        i++;
+      }
+    }
+    return out;
   }
 
   async function viewTask(id) {
@@ -1740,6 +1974,8 @@ export function createTickets(ctx) {
         el('span', { class: 'list-title', text: ticket.title }),
         ticket.priority !== 'none' ? priorityIcon(ticket.priority) : null,
       ),
+      stateLine(ticket),
+      ticket.nextStep ? el('span', { class: 'ticket-next', text: `Next: ${ticket.nextStep.text}` }) : null,
       el(
         'span',
         { class: 'inbox-meta muted' },

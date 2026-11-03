@@ -105,6 +105,8 @@ export interface TicketSummary {
   nextStep: { text: string; for: string | null } | null;
   /** The person it waits on, the ask, since when, and until when it is snoozed. */
   waitingOn: { person: string; ask: string; since: string; snoozedUntil: string | null } | null;
+  /** When it last moved to another status (or was filed). */
+  statusChangedAt: string;
   sort: number;
   createdAt: string;
   updatedAt: string;
@@ -259,6 +261,7 @@ interface TicketRow {
   waiting_ask: string | null;
   waiting_since: string | null;
   waiting_snoozed_until: string | null;
+  status_changed_at: string | null;
   closed_for: number | null;
   sort: number;
   created_at: string;
@@ -276,7 +279,7 @@ const TICKET_SELECT = `
          ap.state AS task_approval_state,
          (SELECT q.id FROM questions q WHERE q.task_id = t.task_id AND q.state = 'open') AS task_open_question,
          t.handoff, hb.name AS handoff_by, t.handoff_at, t.blocked_reason, t.closed_reason, t.closed_for,
-         t.next_step, nsf.name AS next_step_for, t.waiting_on AS waiting_on_id, wo.name AS waiting_on, t.waiting_ask, t.waiting_since, t.waiting_snoozed_until,
+         t.next_step, nsf.name AS next_step_for, t.waiting_on AS waiting_on_id, wo.name AS waiting_on, t.waiting_ask, t.waiting_since, t.waiting_snoozed_until, t.status_changed_at,
          t.sort, t.created_at, t.updated_at, t.started_at, t.completed_at
   FROM tickets t
   JOIN projects p ON p.id = t.project_id
@@ -723,6 +726,7 @@ export class Tickets {
     if (links.change) changes.push(links.change);
     if (newStatus) {
       set('status_id', newStatus.id);
+      sets.push(`status_changed_at = ${NOW_SQL}`);
       if (newStatus.category === 'started') sets.push(`started_at = coalesce(started_at, ${NOW_SQL})`);
       sets.push(`completed_at = ${['completed', 'canceled'].includes(newStatus.category) ? NOW_SQL : 'NULL'}`);
       if (input.sort === undefined) set('sort', this.topSort(newStatus.id));
@@ -1322,7 +1326,7 @@ export class Tickets {
     if (target && target.id !== current.id) {
       this.store.db
         .prepare(
-          `UPDATE tickets SET status_id = ?, sort = ?, updated_at = ${NOW_SQL},
+          `UPDATE tickets SET status_id = ?, sort = ?, updated_at = ${NOW_SQL}, status_changed_at = ${NOW_SQL},
              started_at = CASE WHEN ? = 'started' THEN coalesce(started_at, ${NOW_SQL}) ELSE started_at END,
              completed_at = CASE WHEN ? IN ('completed', 'canceled') THEN ${NOW_SQL} ELSE NULL END
            WHERE id = ?`,
@@ -1364,7 +1368,7 @@ export class Tickets {
     if (target && target.id !== current.id) {
       this.store.db
         .prepare(
-          `UPDATE tickets SET status_id = ?, sort = ?, updated_at = ${NOW_SQL},
+          `UPDATE tickets SET status_id = ?, sort = ?, updated_at = ${NOW_SQL}, status_changed_at = ${NOW_SQL},
              started_at = CASE WHEN ? = 'started' THEN coalesce(started_at, ${NOW_SQL}) ELSE started_at END,
              completed_at = CASE WHEN ? IN ('completed', 'canceled') THEN ${NOW_SQL} ELSE NULL END
            WHERE id = ?`,
@@ -1556,6 +1560,7 @@ export class Tickets {
         blockedBy: blockedBy.get(row.id) ?? [],
         blockedReason: row.blocked_reason || null,
         nextStep: row.next_step ? { text: row.next_step, for: row.next_step_for } : null,
+        statusChangedAt: row.status_changed_at ?? row.created_at,
         waitingOn: row.waiting_on ? { person: row.waiting_on, ask: row.waiting_ask ?? '', since: row.waiting_since ?? row.updated_at, snoozedUntil: row.waiting_snoozed_until } : null,
         blocked: (blockedBy.get(row.id)?.length ?? 0) > 0 || row.blocked_reason !== '',
         criteria: criteria.get(row.id) ?? { done: 0, total: 0 },

@@ -912,6 +912,14 @@ export const MIGRATIONS = [
   ALTER TABLE tickets ADD COLUMN waiting_snoozed_until TEXT;
   CREATE INDEX tickets_waiting ON tickets (waiting_on);
   `,
+  // 32: when a ticket last changed status, so "stale" means the work stopped moving, not that a bulk
+  // edit touched it.
+  `
+  ALTER TABLE tickets ADD COLUMN status_changed_at TEXT;
+  UPDATE tickets SET status_changed_at = coalesce(
+    (SELECT max(a.created_at) FROM ticket_activity a WHERE a.ticket_id = tickets.id AND (a.kind = 'created' OR a.detail LIKE '%"field":"status"%')),
+    created_at);
+  `,
 ];
 
 export interface OpenOptions {

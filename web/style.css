@@ -1928,7 +1928,9 @@ select:focus-visible {
 }
 
 .board-column {
-  flex: 0 0 284px;
+  flex: 1 1 0;
+  min-width: 200px;
+  max-width: 320px;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -3722,4 +3724,134 @@ button:disabled {
 .answer-option[aria-pressed='true'] {
   background: var(--bg-hover);
   border-color: var(--accent);
+}
+
+/* Skimming (#82-#86): one state per card, a next step, folded long text, and Needs you. */
+.card-state {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.card-state svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+.state-waiting-you { color: var(--accent-strong, var(--accent)); }
+.state-blocked { color: #e5484d; }
+.state-stale { color: #d38b1a; }
+.state-waiting { color: var(--muted); }
+.state-working { color: #2f9e6b; }
+
+.ticket-card.has-state { border-left: 4px solid var(--border); }
+.ticket-card.state-edge-waiting-you { border-left-color: var(--accent); }
+.ticket-card.state-edge-blocked { border-left-color: #e5484d; }
+.ticket-card.state-edge-stale { border-left-color: #d38b1a; }
+.ticket-card.state-edge-working { border-left-color: #2f9e6b; }
+.ticket-card.state-edge-waiting { border-left-color: var(--muted); }
+
+.ticket-next {
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.ticket-next.none,
+.list-title .ticket-next {
+  color: var(--muted);
+}
+
+.list-title {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.board-focus { margin: 0.5rem 1rem 0; }
+.column-more { margin-top: 0.4rem; width: 100%; }
+
+.detail-now {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: 8px;
+  background: var(--bg-hover);
+}
+
+.now-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+}
+
+.now-row input { flex: 1; min-width: 10rem; }
+.now-actions { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; }
+
+.clamped {
+  max-height: 10.5em;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent);
+  mask-image: linear-gradient(to bottom, #000 70%, transparent);
+}
+
+.first-line { color: inherit; }
+
+.activity-comment.by-person .comment-main {
+  background: var(--bg-hover);
+  border-radius: 8px;
+  padding: 0.4rem 0.55rem;
+}
+
+.who-chip {
+  font-size: 0.7rem;
+  padding: 0 0.4rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  margin: 0 0.35rem;
+}
+
+.who-chip.person { border-color: var(--accent); }
+.activity-run summary { cursor: pointer; color: var(--muted); }
+
+.needs {
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: 1.25rem 1rem;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.needs-title { margin: 0; font-size: 1.2rem; }
+
+.needs-item {
+  display: grid;
+  grid-template-columns: 6.5rem 1fr;
+  gap: 0.4rem 0.75rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.needs-kind {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  padding-top: 0.15rem;
+}
+
+.needs-line { display: block; line-height: 1.35; }
+.needs-actions { grid-column: 2; display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+.needs-actions .answer-wrap { width: 100%; }
+.needs-fyi summary { cursor: pointer; color: var(--muted); }
+
+@media (max-width: 600px) {
+  .needs-item { grid-template-columns: 1fr; }
+  .needs-actions { grid-column: 1; }
 }

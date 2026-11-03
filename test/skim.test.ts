@@ -60,6 +60,18 @@ describe('a next step on every ticket (#83)', () => {
   });
 });
 
+describe('stale means the status stopped moving (#86)', () => {
+  it('keeps when the status last changed, not when a bulk edit touched it', async () => {
+    const { ticket } = store.tickets.create(carlos, 'web', { title: 'Old work', status: 'In Progress' });
+    const moved = ticket.statusChangedAt;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    store.tickets.update(carlos, ticket.ref, { priority: 'high' });
+    assert.equal(store.tickets.get(carlos, ticket.ref).statusChangedAt, moved, 'an edit is not a move');
+    store.tickets.update(carlos, ticket.ref, { status: 'Done' });
+    assert.ok(store.tickets.get(carlos, ticket.ref).statusChangedAt > moved);
+  });
+});
+
 describe('waiting on a person (#85)', () => {
   it("reaches the person's Needs you, and one tap clears it and wakes the agent", async () => {
     const { ticket } = store.tickets.create(bot, 'web', { title: 'Open the port', assignee: 'carlos-bot' }, { dispatch: false });

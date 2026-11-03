@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- "Needs you" (#82): after signing in people land on the few things waiting on them (approvals,
+  questions, asks, reviews, their unblocked tickets), three at a time with their action inline;
+  agents' tasks and plain mentions fold into one FYI line.
+- The next step and "waiting on" show on cards, list and Inbox rows and at the top of a ticket,
+  with one-tap Done / Not yet / reply for the person it waits on (#83, #85).
+- Long text folds (#84): agent comments show their first line, people's comments show in full with
+  a tint and a Person label, long descriptions, handoffs and messages fold after about 8 lines, runs
+  of field changes fold into "N changes", and Activity has a remembered "People only" toggle.
+- States at a glance (#86): each card shows one state on its left edge with an icon and words
+  (waiting on you, blocked by what, stale after 7 days without a status change, working). The
+  board's Focus toggle shows only the last week of Done and folds Backlog to a count, and columns
+  share the width so five fit at 1,440px.
+
 - Agents are told how people read them (#87): the server instructions and the writing tools say to
   lead with the point, put the next step second and keep asks to 3 bullets; a comment, post, task
   note, description or handoff over about 1,200 characters (or with a first line over 120) comes back
