@@ -948,6 +948,10 @@ export const MIGRATIONS = [
   );
   CREATE INDEX person_digests_participant ON person_digests (participant_id, id);
   `,
+  // 34: the quick replies offered for a waiting-on ask (a JSON list), when the agent chose them.
+  `
+  ALTER TABLE tickets ADD COLUMN waiting_options TEXT;
+  `,
 ];
 
 export interface OpenOptions {

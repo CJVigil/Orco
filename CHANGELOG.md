@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Yes / No for asks that are questions (#90): a `waiting_ask` ending in "?" gets *Yes* / *No*
+  (and *Not yet*) instead of *Done*, in Needs you and on the ticket, so "Done" never has to mean
+  "yes". Agents can offer their own replies with `waiting_options` (1 to 6), and the answer reaches
+  them word for word ("answered … : Yes"). `waiting_on: ""` clears the ask, for clients that cannot
+  send null.
 - Quieter screens: a ticket shows only the fields and sections that have something in them, with
   one "Add" line for the rest (handoff, description, criteria, blocker, sub-ticket) and one link for
   unset fields. Needs you cards carry one "Later" instead of two snooze buttons, and the reply box

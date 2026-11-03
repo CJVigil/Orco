@@ -667,7 +667,9 @@ of a run counts, not what the agent wrote while working.
 ### Needs you, notifications and the daily digest
 
 People land on *Needs you*: approvals, questions, asks waiting on them and their unblocked tickets,
-three at a time with the action inline. The bell in the sidebar opens the notification settings
+three at a time with the action inline. An ask answers in one tap: *Done*, *Yes* / *No* when it is
+a question, or the replies the agent offered (`waiting_options`), and the agent hears the choice
+word for word. The bell in the sidebar opens the notification settings
 (also `POST /api/me/settings`): notifications ("Only what needs me" by default, with agent updates batched every 10 minutes; "All
 mentions"; "Off"), quiet hours, and a weekday digest at a chosen time: at most three bullets of what
 waits on them and one line on what agents finished, sent only when something waits. `GET

@@ -33,6 +33,42 @@ export const MAX_CRITERION = 300;
 export const MAX_BULK = 50;
 /** A next step and a waiting-on ask are one line each, to read at a glance. */
 export const MAX_LINE = 140;
+/** Quick replies an agent may offer for a waiting-on ask, and how long each may be. */
+export const MAX_WAITING_OPTIONS = 6;
+export const MAX_WAITING_OPTION = 40;
+
+/**
+ * The quick replies for a waiting-on ask: the agent's own when it chose them, else Yes / No for an
+ * ask that is a question (so "Done" never has to mean "yes"), else Done. Not yet and a one-line reply
+ * are always offered besides these.
+ */
+export function waitingChoices(ask: string, stored: string | null): string[] {
+  if (stored) {
+    try {
+      const list = JSON.parse(stored) as unknown;
+      if (Array.isArray(list) && list.length && list.every((o) => typeof o === 'string')) return list as string[];
+    } catch {
+      // Fall through to the defaults.
+    }
+  }
+  return ask.trim().endsWith('?') ? ['Yes', 'No'] : ['Done'];
+}
+
+function checkWaitingOptions(options: string[]): string[] {
+  if (!Array.isArray(options) || options.length === 0 || options.length > MAX_WAITING_OPTIONS) {
+    throw new OrcoError('invalid', `waiting_options is a list of 1 to ${MAX_WAITING_OPTIONS} replies`);
+  }
+  const seen = new Set<string>();
+  return options.map((option) => {
+    const label = String(option ?? '').replace(/\s+/g, ' ').trim();
+    if (!label || label.length > MAX_WAITING_OPTION) throw new OrcoError('invalid', `Each of waiting_options is 1 to ${MAX_WAITING_OPTION} characters`);
+    const key = label.toLowerCase();
+    if (key === 'not yet' || key === 'not_yet') throw new OrcoError('invalid', 'Not yet is always offered; leave it out of waiting_options');
+    if (seen.has(key)) throw new OrcoError('invalid', `waiting_options lists "${label}" twice`);
+    seen.add(key);
+    return label;
+  });
+}
 
 type Change = { field: string; from: unknown; to: unknown };
 const DEFAULT_CYCLE_DAYS = 14;
@@ -103,8 +139,11 @@ export interface TicketSummary {
   criteria: { done: number; total: number };
   /** The one next thing to do, and who it is for. */
   nextStep: { text: string; for: string | null } | null;
-  /** The person it waits on, the ask, since when, and until when it is snoozed. */
-  waitingOn: { person: string; ask: string; since: string; snoozedUntil: string | null } | null;
+  /**
+   * The person it waits on, the ask, since when, until when it is snoozed, and the quick replies they
+   * get (besides Not yet and a one-line reply).
+   */
+  waitingOn: { person: string; ask: string; since: string; snoozedUntil: string | null; options: string[] } | null;
   /** When it last moved to another status (or was filed). */
   statusChangedAt: string;
   sort: number;
@@ -180,9 +219,11 @@ export interface TicketInput {
   nextStep?: string;
   /** Who the next step is for (a person or agent), or null. */
   nextStepFor?: string | null;
-  /** One person this ticket waits on, with a one-line ask; null clears it. */
+  /** One person this ticket waits on, with a one-line ask; null or empty clears it. */
   waitingOn?: string | null;
   waitingAsk?: string;
+  /** The quick replies for the ask (default Yes / No for a question, else Done); null resets them. */
+  waitingOptions?: string[] | null;
   /** Close it (Canceled) as a duplicate of this ticket, or as superseded by it. */
   duplicateOf?: string;
   supersededBy?: string;
@@ -261,6 +302,7 @@ interface TicketRow {
   waiting_ask: string | null;
   waiting_since: string | null;
   waiting_snoozed_until: string | null;
+  waiting_options: string | null;
   status_changed_at: string | null;
   closed_for: number | null;
   sort: number;
@@ -279,7 +321,7 @@ const TICKET_SELECT = `
          ap.state AS task_approval_state,
          (SELECT q.id FROM questions q WHERE q.task_id = t.task_id AND q.state = 'open') AS task_open_question,
          t.handoff, hb.name AS handoff_by, t.handoff_at, t.blocked_reason, t.closed_reason, t.closed_for,
-         t.next_step, nsf.name AS next_step_for, t.waiting_on AS waiting_on_id, wo.name AS waiting_on, t.waiting_ask, t.waiting_since, t.waiting_snoozed_until, t.status_changed_at,
+         t.next_step, nsf.name AS next_step_for, t.waiting_on AS waiting_on_id, wo.name AS waiting_on, t.waiting_ask, t.waiting_since, t.waiting_snoozed_until, t.waiting_options, t.status_changed_at,
          t.sort, t.created_at, t.updated_at, t.started_at, t.completed_at
   FROM tickets t
   JOIN projects p ON p.id = t.project_id
@@ -416,6 +458,7 @@ export class Tickets {
       const person = this.store.participantByName(input.waitingOn.replace(/^@/, ''));
       if (!person || person.kind !== 'user' || !this.store.canSee(person, proj.id)) throw new OrcoError('invalid', `waiting_on is a person who can see ${proj.name}`);
       if (!oneLine(input.waitingAsk ?? '', 'The ask')) throw new OrcoError('invalid', 'Say in one line what you need from them (waiting_ask)');
+      if (input.waitingOptions) checkWaitingOptions(input.waitingOptions);
     }
     const title = this.title(input.title);
     const description = this.description(input.description ?? '');
@@ -473,7 +516,9 @@ export class Tickets {
     const created = this.row(id)!;
     this.store.audit.record(actor, 'ticket.create', { projectId: proj.id, subject: `ticket:${refOf(created)}`, detail: { title } });
     if (input.nextStep || input.waitingOn) {
-      this.store.withoutRateLimit(() => this.update(actor, refOf(created), { nextStep: input.nextStep, nextStepFor: input.nextStepFor, waitingOn: input.waitingOn, waitingAsk: input.waitingAsk }));
+      this.store.withoutRateLimit(() =>
+        this.update(actor, refOf(created), { nextStep: input.nextStep, nextStepFor: input.nextStepFor, waitingOn: input.waitingOn, waitingAsk: input.waitingAsk, waitingOptions: input.waitingOptions }),
+      );
     }
     const dispatch = options.dispatch ?? true;
     const warning = dispatch && assignee?.kind === 'agent' && assignee.id !== actor.id ? this.dispatch(actor, created) : undefined;
@@ -482,8 +527,9 @@ export class Tickets {
   }
 
   /**
-   * The person a ticket waits on answers in one tap: "done" clears the ask, "not_yet" snoozes it a
-   * day, anything else is a one-line reply that clears it. Each posts a comment and wakes the agent
+   * The person a ticket waits on answers in one tap: one of the ask's quick replies (Yes / No for a
+   * question, Done otherwise, or the agent's own) clears it, "not_yet" snoozes it a day, anything else
+   * is a one-line reply that clears it. Each posts a comment and wakes the agent
    * the ticket is assigned to, so the work goes on without anyone relaying the answer.
    */
   replyWaiting(actor: Participant, ref: string, reply: string): Ticket {
@@ -491,16 +537,21 @@ export class Tickets {
     if (!row.waiting_on) throw new OrcoError('conflict', `${refOf(row)} is not waiting on anyone`);
     if (actor.id !== row.waiting_on_id) throw new OrcoError('forbidden', `${refOf(row)} waits on ${row.waiting_on}, not you`);
     const text = String(reply ?? '').trim();
-    if (!text) throw new OrcoError('invalid', 'Reply "done", "not_yet" or a line of text');
+    const choices = waitingChoices(row.waiting_ask ?? '', row.waiting_options);
+    if (!text) throw new OrcoError('invalid', `Reply ${[...choices, 'not_yet'].map((c) => `"${c}"`).join(', ')} or a line of text`);
     const snooze = text === 'not_yet';
-    const line = text === 'done' ? 'Done' : snooze ? 'Not yet (asked again tomorrow)' : oneLine(text, 'A reply');
+    // A quick reply reaches the agent as the literal choice, so "Yes" never has to be read from "Done".
+    const choice = choices.find((c) => c.toLowerCase() === text.toLowerCase()) ?? (text === 'done' ? 'Done' : null);
+    const line = snooze ? 'Not yet (asked again tomorrow)' : choice ?? oneLine(text, 'A reply');
     this.store.begin();
     try {
       this.activity(row.id, actor, 'comment', `${actor.name} on "${row.waiting_ask}": ${line}`, null);
       if (snooze) {
         this.store.db.prepare(`UPDATE tickets SET waiting_snoozed_until = ?, updated_at = ${NOW_SQL} WHERE id = ?`).run(new Date(this.store.now() + 24 * 3600_000).toISOString(), row.id);
       } else {
-        this.store.db.prepare(`UPDATE tickets SET waiting_on = NULL, waiting_ask = NULL, waiting_since = NULL, waiting_snoozed_until = NULL, updated_at = ${NOW_SQL} WHERE id = ?`).run(row.id);
+        this.store.db
+          .prepare(`UPDATE tickets SET waiting_on = NULL, waiting_ask = NULL, waiting_since = NULL, waiting_snoozed_until = NULL, waiting_options = NULL, updated_at = ${NOW_SQL} WHERE id = ?`)
+          .run(row.id);
         this.activity(row.id, actor, 'change', null, { changes: [{ field: 'waitingOn', from: row.waiting_on, to: null }] });
       }
       this.store.commit();
@@ -689,36 +740,48 @@ export class Tickets {
         changes.push({ field: 'nextStep', from: row.next_step, to: text ? `${text}${forName ? ` (for ${forName})` : ''}` : null });
       }
     }
-    if (input.waitingOn !== undefined) {
-      if (input.waitingOn === null || input.waitingOn === '') {
-        if (row.waiting_on) {
-          set('waiting_on', null);
-          set('waiting_ask', null);
-          set('waiting_since', null);
-          set('waiting_snoozed_until', null);
-          changes.push({ field: 'waitingOn', from: row.waiting_on, to: null });
-        }
-      } else {
-        const person = this.store.participantByName(input.waitingOn.replace(/^@/, ''));
-        if (!person || person.kind !== 'user' || this.store.isSystem(person) || !this.store.canSee(person, row.project_id)) {
-          throw new OrcoError('invalid', `waiting_on is a person who can see ${row.project}`);
-        }
-        const ask = oneLine(input.waitingAsk ?? row.waiting_ask ?? '', 'The ask');
-        if (!ask) throw new OrcoError('invalid', 'Say in one line what you need from them (waiting_ask)');
-        if (person.name !== row.waiting_on || ask !== row.waiting_ask) {
-          set('waiting_on', person.id);
-          set('waiting_ask', ask);
+    // The quick replies belong to one ask: a new person or ask drops them unless new ones come along.
+    const options = input.waitingOptions === undefined || input.waitingOptions === null ? input.waitingOptions : JSON.stringify(checkWaitingOptions(input.waitingOptions));
+    const describe = (person: string, ask: string, stored: string | null) =>
+      `${person}: ${ask}${stored ? ` (replies: ${waitingChoices(ask, stored).join(' / ')})` : ''}`;
+    if (input.waitingOn !== undefined && (input.waitingOn === null || input.waitingOn.trim() === '')) {
+      if (row.waiting_on) {
+        set('waiting_on', null);
+        set('waiting_ask', null);
+        set('waiting_since', null);
+        set('waiting_snoozed_until', null);
+        set('waiting_options', null);
+        changes.push({ field: 'waitingOn', from: row.waiting_on, to: null });
+      }
+    } else if (input.waitingOn !== undefined) {
+      const person = this.store.participantByName(input.waitingOn.trim().replace(/^@/, ''));
+      if (!person || person.kind !== 'user' || this.store.isSystem(person) || !this.store.canSee(person, row.project_id)) {
+        throw new OrcoError('invalid', `waiting_on is a person who can see ${row.project}`);
+      }
+      const ask = oneLine(input.waitingAsk ?? row.waiting_ask ?? '', 'The ask');
+      if (!ask) throw new OrcoError('invalid', 'Say in one line what you need from them (waiting_ask)');
+      const fresh = person.name !== row.waiting_on || ask !== row.waiting_ask;
+      const nextOptions = options !== undefined ? options : fresh ? null : row.waiting_options;
+      if (fresh || nextOptions !== row.waiting_options) {
+        set('waiting_on', person.id);
+        set('waiting_ask', ask);
+        set('waiting_options', nextOptions);
+        if (fresh) {
           set('waiting_since', new Date(this.store.now()).toISOString());
           set('waiting_snoozed_until', null);
-          changes.push({ field: 'waitingOn', from: row.waiting_on, to: `${person.name}: ${ask}` });
         }
+        changes.push({ field: 'waitingOn', from: row.waiting_on, to: describe(person.name, ask, nextOptions) });
       }
-    } else if (input.waitingAsk !== undefined && row.waiting_on) {
-      const ask = oneLine(input.waitingAsk, 'The ask');
-      if (ask && ask !== row.waiting_ask) {
+    } else if ((input.waitingAsk !== undefined || options !== undefined) && row.waiting_on) {
+      const ask = (input.waitingAsk !== undefined ? oneLine(input.waitingAsk, 'The ask') : '') || (row.waiting_ask ?? '');
+      const nextOptions = options !== undefined ? options : ask !== row.waiting_ask ? null : row.waiting_options;
+      if (ask !== row.waiting_ask || nextOptions !== row.waiting_options) {
         set('waiting_ask', ask);
-        changes.push({ field: 'waitingOn', from: row.waiting_on, to: `${row.waiting_on}: ${ask}` });
+        set('waiting_options', nextOptions);
+        changes.push({ field: 'waitingOn', from: row.waiting_on, to: describe(row.waiting_on, ask, nextOptions) });
       }
+    } else if (options) {
+      throw new OrcoError('invalid', `${refOf(row)} waits on no one; set waiting_on along with waiting_options`);
     }
     const criteria = this.criteriaOps(actor, row.id, input);
     if (criteria.change) changes.push(criteria.change);
@@ -1561,7 +1624,15 @@ export class Tickets {
         blockedReason: row.blocked_reason || null,
         nextStep: row.next_step ? { text: row.next_step, for: row.next_step_for } : null,
         statusChangedAt: row.status_changed_at ?? row.created_at,
-        waitingOn: row.waiting_on ? { person: row.waiting_on, ask: row.waiting_ask ?? '', since: row.waiting_since ?? row.updated_at, snoozedUntil: row.waiting_snoozed_until } : null,
+        waitingOn: row.waiting_on
+          ? {
+              person: row.waiting_on,
+              ask: row.waiting_ask ?? '',
+              since: row.waiting_since ?? row.updated_at,
+              snoozedUntil: row.waiting_snoozed_until,
+              options: waitingChoices(row.waiting_ask ?? '', row.waiting_options),
+            }
+          : null,
         blocked: (blockedBy.get(row.id)?.length ?? 0) > 0 || row.blocked_reason !== '',
         criteria: criteria.get(row.id) ?? { done: 0, total: 0 },
         sort: row.sort,

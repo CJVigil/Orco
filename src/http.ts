@@ -211,6 +211,7 @@ function ticketInput(body: Record<string, unknown> | undefined): TicketInput {
     nextStepFor: nullableStr(b.nextStepFor, 'nextStepFor'),
     waitingOn: nullableStr(b.waitingOn, 'waitingOn'),
     waitingAsk: str(b.waitingAsk, 'waitingAsk'),
+    waitingOptions: b.waitingOptions === null ? null : list(b.waitingOptions, 'waitingOptions', 'string'),
   };
 }
 

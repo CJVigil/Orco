@@ -48,7 +48,7 @@ export function createNeeds(ctx) {
       });
       out.push({
         key: `waiting-${t.ref}`,
-        kind: 'Do',
+        kind: (t.waitingOn.options ?? ['Done']).join() === 'Done' ? 'Do' : 'Answer',
         title: t.waitingOn.ask,
         detail: `${t.ref} · ${t.title}${t.assignee ? ` · for ${t.assignee.name}` : ''}`,
         actions: () => {
@@ -62,8 +62,10 @@ export function createNeeds(ctx) {
               reply.focus();
             },
           });
+          // The ask's own replies: Yes / No for a question, Done otherwise, or what the agent offered.
+          const options = t.waitingOn.options?.length ? t.waitingOn.options : ['Done'];
           return [
-            el('button', { class: 'primary small', type: 'button', text: 'Done', onclick: () => void send('done') }),
+            ...options.map((option) => el('button', { class: options.length === 1 ? 'primary small' : 'small', type: 'button', text: option, onclick: () => void send(option) })),
             el('button', { class: 'ghost small', type: 'button', text: 'Not yet', title: 'Ask me again tomorrow', onclick: () => void send('not_yet') }),
             replyButton,
             el('button', { class: 'ghost small', type: 'button', text: 'Open', onclick: () => void openTicket(t.ref) }),

@@ -96,6 +96,50 @@ describe('waiting on a person (#85)', () => {
   });
 });
 
+describe('quick replies to an ask (#90)', () => {
+  it('offers Yes / No for a question, passes the literal choice to the agent, and takes the agent\'s own replies', () => {
+    const { ticket } = store.tickets.create(bot, 'web', { title: 'Push the pins', assignee: 'carlos-bot' }, { dispatch: false });
+    store.tickets.taskFor(bot, ticket.ref);
+    store.tickets.update(bot, ticket.ref, { waitingOn: 'ana', waitingAsk: "OK to push the pins after today's shift?" });
+    assert.deepEqual(store.tickets.get(ana, ticket.ref).waitingOn?.options, ['Yes', 'No']);
+    const answered = store.tickets.replyWaiting(ana, ticket.ref, 'yes');
+    assert.equal(answered.waitingOn, null);
+    assert.ok(answered.activity.some((a) => a.kind === 'comment' && a.body === `ana on "OK to push the pins after today's shift?": Yes`));
+    assert.ok(store.unseenMentions(bot).some((m) => /answered "OK to push the pins after today's shift\?" on WEB-\d+: Yes$/.test(m.text)), 'the agent reads "Yes", not "Done"');
+
+    store.tickets.update(bot, ticket.ref, { waitingOn: 'ana', waitingAsk: 'Open port 443' });
+    assert.deepEqual(store.tickets.get(ana, ticket.ref).waitingOn?.options, ['Done'], 'not a question');
+    store.tickets.update(bot, ticket.ref, { waitingOn: 'ana', waitingAsk: 'Which night works?', waitingOptions: ['Tonight', 'Monday night'] });
+    assert.deepEqual(store.tickets.get(ana, ticket.ref).waitingOn?.options, ['Tonight', 'Monday night']);
+    store.tickets.update(bot, ticket.ref, { waitingAsk: 'Ready to ship?' });
+    assert.deepEqual(store.tickets.get(ana, ticket.ref).waitingOn?.options, ['Yes', 'No'], 'a new ask drops replies made for the old one');
+    store.tickets.update(bot, ticket.ref, { waitingOptions: ['Ship it', 'Hold'] });
+    assert.equal(store.tickets.replyWaiting(ana, ticket.ref, 'ship it').activity.at(-2)?.body, 'ana on "Ready to ship?": Ship it');
+
+    store.tickets.update(bot, ticket.ref, { waitingOn: 'ana', waitingAsk: 'Pick one?' });
+    assert.equal(code(() => store.tickets.update(bot, ticket.ref, { waitingOptions: ['Not yet'] })), 'invalid', 'Not yet is always there');
+    assert.equal(code(() => store.tickets.update(bot, ticket.ref, { waitingOptions: ['A', 'a'] })), 'invalid', 'no duplicates');
+    assert.equal(code(() => store.tickets.update(bot, ticket.ref, { waitingOptions: ['1', '2', '3', '4', '5', '6', '7'] })), 'invalid', 'at most six');
+    store.tickets.update(bot, ticket.ref, { waitingOn: '' });
+    assert.equal(store.tickets.get(ana, ticket.ref).waitingOn, null, 'an empty waiting_on clears it');
+    assert.equal(code(() => store.tickets.update(bot, ticket.ref, { waitingOptions: ['Yes', 'No'] })), 'invalid', 'replies need someone to wait on');
+  });
+
+  it('clears with waiting_on "" and shows the replies over MCP', async () => {
+    const client = new Client({ name: 'test', version: '0.0.0' }, { versionNegotiation: { mode: 'legacy' } });
+    await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${botToken}` } } }));
+    const { ticket } = store.tickets.create(carlos, 'web', { title: 'Release call' });
+    const set = await client.callTool({ name: 'update_ticket', arguments: { ticket: ticket.ref, waiting_on: 'ana', waiting_ask: 'Release on Friday?', waiting_options: ['Friday', 'Next week'] } });
+    assert.equal(set.isError ?? false, false, (set.content as { text: string }[])[0]!.text);
+    const got = await client.callTool({ name: 'get_ticket', arguments: { ticket: ticket.ref } });
+    assert.deepEqual(JSON.parse((got.content as { text: string }[])[0]!.text).ticket.waiting_on.replies, ['Friday', 'Next week']);
+    const cleared = await client.callTool({ name: 'update_ticket', arguments: { ticket: ticket.ref, waiting_on: '' } });
+    assert.equal(cleared.isError ?? false, false, (cleared.content as { text: string }[])[0]!.text);
+    assert.equal(store.tickets.get(carlos, ticket.ref).waitingOn, null);
+    await client.close();
+  });
+});
+
 describe('telling agents how people read them (#87)', () => {
   it('puts the rules in the server instructions and warns on a long comment', async () => {
     const client = new Client({ name: 'test', version: '0.0.0' }, { versionNegotiation: { mode: 'legacy' } });

@@ -812,7 +812,9 @@ export function createTickets(ctx) {
                 ? el(
                     'span',
                     { class: 'now-actions' },
-                    el('button', { class: 'primary small', type: 'button', text: 'Done', onclick: () => reply('done') }),
+                    (w.options?.length ? w.options : ['Done']).map((option, _i, all) =>
+                      el('button', { class: all.length === 1 ? 'primary small' : 'small', type: 'button', text: option, onclick: () => reply(option) }),
+                    ),
                     el('button', { class: 'ghost small', type: 'button', text: 'Not yet', onclick: () => reply('not_yet') }),
                     line,
                   )
@@ -833,7 +835,7 @@ export function createTickets(ctx) {
     };
     const editWaiting = () => {
       const who = select('', [['', 'Who?'], ...people.filter((p) => p.kind === 'user').map((p) => [p.name, p.name])], () => {}, { 'aria-label': 'Waiting on' });
-      const ask = el('input', { maxlength: '140', 'aria-label': 'What you need', placeholder: 'What you need from them, in a line' });
+      const ask = el('input', { maxlength: '140', 'aria-label': 'What you need', placeholder: 'What you need, in a line (a question gets Yes / No)' });
       wrap.replaceChildren(
         el('div', { class: 'now-row' }, el('strong', { text: 'Waiting on' }), who, ask),
         el('div', { class: 'row-end' }, el('button', { class: 'ghost small', type: 'button', text: 'Cancel', onclick: view }), el('button', { class: 'primary small', type: 'button', text: 'Ask', onclick: () => who.value && void save(ticket, { waitingOn: who.value, waitingAsk: ask.value }) })),

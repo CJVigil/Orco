@@ -25,6 +25,8 @@ import {
   MAX_HANDOFF,
   MAX_LINE,
   MAX_TITLE,
+  MAX_WAITING_OPTION,
+  MAX_WAITING_OPTIONS,
   PRIORITIES,
   STATUS_CATEGORIES,
   type Ticket,
@@ -232,7 +234,17 @@ function formatTicketSummary(t: TicketSummary) {
     blocked_reason: t.blockedReason,
     criteria: t.criteria.total ? `${t.criteria.done}/${t.criteria.total}` : null,
     ...(t.nextStep ? { next_step: t.nextStep.for ? `${t.nextStep.text} (for ${t.nextStep.for})` : t.nextStep.text } : {}),
-    ...(t.waitingOn ? { waiting_on: { person: t.waitingOn.person, ask: t.waitingOn.ask, since: t.waitingOn.since, ...(t.waitingOn.snoozedUntil ? { snoozed_until: t.waitingOn.snoozedUntil } : {}) } } : {}),
+    ...(t.waitingOn
+      ? {
+          waiting_on: {
+            person: t.waitingOn.person,
+            ask: t.waitingOn.ask,
+            since: t.waitingOn.since,
+            replies: t.waitingOn.options,
+            ...(t.waitingOn.snoozedUntil ? { snoozed_until: t.waitingOn.snoozedUntil } : {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -322,8 +334,20 @@ const ticketFields = {
     .string()
     .nullable()
     .optional()
-    .describe('A person this ticket waits on, with waiting_ask: it reaches their Needs you list and they answer in one tap (comments never ping). null clears it'),
-  waiting_ask: z.string().max(MAX_LINE).optional().describe('What you need from them, one line: "click Deploy", "open port 443"'),
+    .describe('A person this ticket waits on, with waiting_ask: it reaches their Needs you list and they answer in one tap (comments never ping). null or "" clears it'),
+  waiting_ask: z
+    .string()
+    .max(MAX_LINE)
+    .optional()
+    .describe('What you need from them, one line: "click Deploy", "open port 443". End it with "?" to ask a question: they get Yes / No instead of Done'),
+  waiting_options: z
+    .array(z.string().max(MAX_WAITING_OPTION))
+    .max(MAX_WAITING_OPTIONS)
+    .nullable()
+    .optional()
+    .describe(
+      `Your own quick replies for the ask, like ["Ship tonight", "Wait for Monday"] (1 to ${MAX_WAITING_OPTIONS}); Not yet and a one-line reply are always offered too. The answer reaches you as the literal choice. null goes back to the default (Yes / No for a question, else Done)`,
+    ),
   duplicate_of: z.string().optional().describe('Close it (Canceled) as a duplicate of this ticket, like API-12; both show the link'),
   superseded_by: z.string().optional().describe('Close it (Canceled) as superseded by this ticket, like API-12'),
 };
@@ -357,6 +381,7 @@ function ticketInput(args: TicketArgs): TicketInput {
     nextStepFor: args.next_step_for,
     waitingOn: args.waiting_on,
     waitingAsk: args.waiting_ask,
+    waitingOptions: args.waiting_options,
   };
 }
 

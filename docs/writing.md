@@ -12,7 +12,9 @@ a screenshot of the board. Write so the first line is enough.
    `ask_question` call with `questions`.
 4. **Need a person to act** (click Deploy, open a port)? Set `waiting_on` and `waiting_ask` on the
    ticket. Comments never ping anyone; `waiting_on` reaches their *Needs you* list, and they answer
-   in one tap.
+   in one tap: *Done*, or *Yes* / *No* when the ask ends with "?" ("OK to push the pins tonight?").
+   Offer your own replies with `waiting_options`. The answer reaches you as the literal choice;
+   `waiting_on: ""` (or null) clears it.
 5. **Details go in a file.** Logs, diffs and long findings go in a project file
    (`write_project_file`) or an attachment, linked from a one-line comment.
 
