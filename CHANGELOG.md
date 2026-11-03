@@ -17,6 +17,13 @@
   badge counts flags and stalled tasks too, matching what the page lists. New project and How Orco
   works moved into the menu under your name (New project stays in the sidebar until you have a
   project).
+- Fewer things competing for attention: each agent in My agents shows its name, Connect and its
+  last 30 days, with its settings folded behind one line that says how they are set ("Settings ·
+  Ask me first · Strict filter"); New token moved in there. A thread with no summary shows one
+  "+ Add a summary" link instead of an empty box. Board cards say "No next step" only for work in
+  progress that nothing else explains. A ticket's "Ask someone" sits on its Next line. The comment
+  box is one line until you click in. The working dot pulses a few times when it appears, then
+  stays still.
 - Layout fixes: agent settings no longer spill out of the My agents panel, task cards and their
   progress line fit on phones, board columns keep a readable width on phones, and a folded Backlog
   shows its count at the top of the column. Portfolio totals sit in one even row.

@@ -143,9 +143,9 @@ export function createTickets(ctx) {
   };
   const nextStepLine = (ticket) => {
     if (['completed', 'canceled'].includes(ticket.status.category)) return null;
-    return ticket.nextStep
-      ? el('div', { class: 'ticket-next', text: `Next: ${ticket.nextStep.text}${ticket.nextStep.for ? ` (${ticket.nextStep.for})` : ''}` })
-      : el('div', { class: 'ticket-next none', text: 'No next step' });
+    if (ticket.nextStep) return el('div', { class: 'ticket-next', text: `Next: ${ticket.nextStep.text}${ticket.nextStep.for ? ` (${ticket.nextStep.for})` : ''}` });
+    // "No next step" only where it is a useful nudge: work in progress that nothing else explains.
+    return ticket.status.category === 'started' && !cardState(ticket) ? el('div', { class: 'ticket-next none', text: 'No next step' }) : null;
   };
   // The board shows what matters by default: recent Done only, Backlog folded to a count.
   const FOCUS_KEY = 'orco.boardFocus';
@@ -799,6 +799,7 @@ export function createTickets(ctx) {
               el('strong', { text: 'Next:' }),
               el('span', { class: ticket.nextStep ? '' : 'muted', text: ticket.nextStep ? `${ticket.nextStep.text}${ticket.nextStep.for ? ` (${ticket.nextStep.for})` : ''}` : 'No next step' }),
               el('button', { class: 'ghost small', type: 'button', text: ticket.nextStep ? 'Edit' : 'Add', onclick: editNext }),
+              w ? null : el('button', { class: 'ghost small', type: 'button', text: 'Ask someone', title: 'Need someone to do something? Ask them here; it shows in their Needs you', onclick: editWaiting }),
             )
           : null,
         w
@@ -817,9 +818,7 @@ export function createTickets(ctx) {
                   )
                 : el('button', { class: 'ghost small', type: 'button', text: 'Clear', onclick: () => void save(ticket, { waitingOn: null }) }),
             )
-          : open
-            ? el('button', { class: 'link-button small', type: 'button', text: 'Need someone to do something? Ask them', onclick: editWaiting })
-            : null,
+          : null,
         ].filter(Boolean),
       );
     };

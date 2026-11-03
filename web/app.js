@@ -839,6 +839,9 @@ const POLICY_TEXT = {
   open: 'Anyone in a shared project',
   owner_only: 'Only me and my agents',
 };
+const FILTER_SHORT = { strict: 'Strict filter', normal: 'Normal filter', off: 'Filter off' };
+/** Which agents' settings are unfolded, kept across the panel's re-renders. */
+const openAgentSettings = new Set();
 
 async function showMyAgents() {
   openPanel('agents', 'My agents');
@@ -853,12 +856,12 @@ async function showMyAgents() {
   }
   $('panel-body').replaceChildren(
     agentActions(),
-    el('p', { class: 'panel-intro muted small', text: 'Choose who may give each agent tasks. Tasks from your own agents always go through.' }),
     ...agents.map((agent) => {
       const select = el(
         'select',
         {
           'aria-label': `Who may give ${agent.name} tasks`,
+          title: 'Tasks from your own agents always go through.',
           onchange: async (event) => {
             try {
               await api(`/agents/${encodeURIComponent(agent.name)}/policy`, { method: 'POST', body: { policy: event.target.value } });
@@ -946,21 +949,6 @@ async function showMyAgents() {
           el('strong', { text: agent.name }),
           el('span', { class: 'spacer' }),
           agent.hosted ? null : el('button', { class: 'ghost small', type: 'button', text: 'Connect…', title: `Ways to connect ${agent.name}`, onclick: () => guide.showConnect(agent.name) }),
-          agent.hosted ? null : el('button', {
-            class: 'ghost small',
-            type: 'button',
-            text: 'New token',
-            title: 'Make a new token; the old one stops working',
-            onclick: async () => {
-              if (!confirm(`Make a new token for ${agent.name}? Anything using the old one (a bridge, a Claude Code setup) stops working until you give it the new one.`)) return;
-              try {
-                const made = await api(`/agents/${encodeURIComponent(agent.name)}/token`, { method: 'POST', body: {} });
-                guide.showConnect(agent.name, made.token);
-              } catch (err) {
-                alert(err.message);
-              }
-            },
-          }),
         ),
         agent.hosted
           ? el('p', {
@@ -970,79 +958,112 @@ async function showMyAgents() {
           : null,
         agent.hosted ? el('div', { class: 'panel-actions inline' }, hostedButtons(agent)) : null,
         scorecard(agent.scorecard30d, spend),
+        // Everything you set once sits behind one line that says how it is set.
         el(
           'details',
-          { class: 'memory-details', ontoggle: (event) => event.target.open && void showMemory() },
-          el('summary', { class: 'small', text: `Private notes (${agent.memory ?? 0})` }),
-          el('p', { class: 'small muted', text: `What ${agent.name} keeps between sessions. Only it and you can see these.` }),
-          memory,
-        ),
-        connections.length
-          ? el('div', { class: 'trusted' }, el('span', { class: 'small muted', text: 'Connected apps:' }), el('ul', { class: 'connections' }, connections))
-          : null,
-        el('label', { class: 'small', text: 'Who may give it tasks' }),
-        select,
-        el(
-          'label',
-          { class: 'check small', title: 'Otherwise its suggestions wait in your Inbox for you to file or dismiss' },
-          el('input', {
-            type: 'checkbox',
-            checked: agent.autoFileFollowups,
-            onchange: async (event) => {
-              try {
-                await api(`/agents/${encodeURIComponent(agent.name)}/followups`, { method: 'POST', body: { auto: event.target.checked } });
-              } catch (err) {
-                alert(err.message);
-              }
-              void showMyAgents();
-            },
-          }),
-          'File the follow-ups it suggests as tickets without asking me',
-        ),
-        lostSettings(agent, agents),
-        el('label', { class: 'small', text: 'Safety filter with other owners’ agents' }),
-        el(
-          'select',
           {
-            'aria-label': `Safety filter for ${agent.name}`,
-            title: 'Strict: its messages are scrubbed of secrets, and risky requests from other owners’ agents (credentials, shell commands, deploys, deletions) wait for you. Normal: the same, except from people you always allow. Off: neither.',
-            onchange: async (event) => {
-              try {
-                await api(`/agents/${encodeURIComponent(agent.name)}/safety`, { method: 'POST', body: { filter: event.target.value } });
-              } catch (err) {
-                alert(err.message);
-              }
-              void showMyAgents();
-            },
+            class: 'agent-more',
+            open: openAgentSettings.has(agent.name),
+            ontoggle: (event) => (event.target.open ? openAgentSettings.add(agent.name) : openAgentSettings.delete(agent.name)),
           },
-          [
-            ['strict', 'Strict: hold risky requests from other owners’ agents (recommended)'],
-            ['normal', 'Normal: hold them unless I always allow the sender'],
-            ['off', 'Off: no scrubbing, no holds'],
-          ].map(([value, text]) => el('option', { value, text, selected: (agent.safetyFilter ?? 'strict') === value })),
-        ),
-        agent.taskPolicy === 'ask'
-          ? el(
-              'div',
-              { class: 'trusted' },
-              el('span', { class: 'small muted', text: trusted.length ? 'Always allowed without asking:' : 'No one is pre-approved.' }),
-              trusted.length ? el('ul', {}, trusted) : null,
-              el('button', {
-                class: 'ghost small',
-                type: 'button',
-                text: '+ Always allow someone',
-                onclick: async () => {
-                  await ask({
-                    title: `Always allow tasks for ${agent.name}`,
-                    label: 'User name',
-                    hint: 'Tasks from this person and their agents will start without asking you.',
-                    submit: (user) => api(`/agents/${encodeURIComponent(agent.name)}/trust`, { method: 'POST', body: { user, trusted: true } }),
-                  });
+          el('summary', { class: 'small', text: `Settings · ${POLICY_TEXT[agent.taskPolicy] ?? agent.taskPolicy} · ${FILTER_SHORT[agent.safetyFilter ?? 'strict']}` }),
+          el(
+            'div',
+            { class: 'agent-more-body' },
+            el(
+              'details',
+              { class: 'memory-details', ontoggle: (event) => event.target.open && void showMemory() },
+              el('summary', { class: 'small', text: `Private notes (${agent.memory ?? 0})` }),
+              el('p', { class: 'small muted', text: `What ${agent.name} keeps between sessions. Only it and you can see these.` }),
+              memory,
+            ),
+            connections.length
+              ? el('div', { class: 'trusted' }, el('span', { class: 'small muted', text: 'Connected apps:' }), el('ul', { class: 'connections' }, connections))
+              : null,
+            el('label', { class: 'small', text: 'Who may give it tasks' }),
+            select,
+            el(
+              'label',
+              { class: 'check small', title: 'Otherwise its suggestions wait in your Inbox for you to file or dismiss' },
+              el('input', {
+                type: 'checkbox',
+                checked: agent.autoFileFollowups,
+                onchange: async (event) => {
+                  try {
+                    await api(`/agents/${encodeURIComponent(agent.name)}/followups`, { method: 'POST', body: { auto: event.target.checked } });
+                  } catch (err) {
+                    alert(err.message);
+                  }
                   void showMyAgents();
                 },
               }),
-            )
-          : null,
+              'File the follow-ups it suggests as tickets without asking me',
+            ),
+            lostSettings(agent, agents),
+            el('label', { class: 'small', text: 'Safety filter with other owners’ agents' }),
+            el(
+              'select',
+              {
+                'aria-label': `Safety filter for ${agent.name}`,
+                title: 'Strict: its messages are scrubbed of secrets, and risky requests from other owners’ agents (credentials, shell commands, deploys, deletions) wait for you. Normal: the same, except from people you always allow. Off: neither.',
+                onchange: async (event) => {
+                  try {
+                    await api(`/agents/${encodeURIComponent(agent.name)}/safety`, { method: 'POST', body: { filter: event.target.value } });
+                  } catch (err) {
+                    alert(err.message);
+                  }
+                  void showMyAgents();
+                },
+              },
+              [
+                ['strict', 'Strict: hold risky requests from other owners’ agents (recommended)'],
+                ['normal', 'Normal: hold them unless I always allow the sender'],
+                ['off', 'Off: no scrubbing, no holds'],
+              ].map(([value, text]) => el('option', { value, text, selected: (agent.safetyFilter ?? 'strict') === value })),
+            ),
+            agent.taskPolicy === 'ask'
+              ? el(
+                  'div',
+                  { class: 'trusted' },
+                  el('span', { class: 'small muted', text: trusted.length ? 'Always allowed without asking:' : 'No one is pre-approved.' }),
+                  trusted.length ? el('ul', {}, trusted) : null,
+                  el('button', {
+                    class: 'ghost small',
+                    type: 'button',
+                    text: '+ Always allow someone',
+                    onclick: async () => {
+                      await ask({
+                        title: `Always allow tasks for ${agent.name}`,
+                        label: 'User name',
+                        hint: 'Tasks from this person and their agents will start without asking you.',
+                        submit: (user) => api(`/agents/${encodeURIComponent(agent.name)}/trust`, { method: 'POST', body: { user, trusted: true } }),
+                      });
+                      void showMyAgents();
+                    },
+                  }),
+                )
+              : null,
+            el(
+              'div',
+              { class: 'row-end' },
+              agent.hosted ? null : el('button', {
+                class: 'ghost small',
+                type: 'button',
+                text: 'New token',
+                title: 'Make a new token; the old one stops working',
+                onclick: async () => {
+                  if (!confirm(`Make a new token for ${agent.name}? Anything using the old one (a bridge, a Claude Code setup) stops working until you give it the new one.`)) return;
+                  try {
+                    const made = await api(`/agents/${encodeURIComponent(agent.name)}/token`, { method: 'POST', body: {} });
+                    guide.showConnect(agent.name, made.token);
+                  } catch (err) {
+                    alert(err.message);
+                  }
+                },
+              }),
+            ),
+          ),
+        ),
       );
     }),
   );
@@ -1485,20 +1506,29 @@ function summaryBox() {
   const summary = state.threadSummary;
   const wrap = el('section', { class: 'thread-summary' });
   const view = () => {
+    // No summary yet: one quiet link instead of an empty box at the top of every thread.
+    wrap.classList.toggle('empty', !summary);
+    if (!summary) {
+      wrap.replaceChildren(
+        el('button', { class: 'link-button small more-fields', type: 'button', text: '+ Add a summary', title: 'Decisions, open questions and where things stand', onclick: edit }),
+      );
+      return;
+    }
     wrap.replaceChildren(
       el(
         'div',
         { class: 'section-head' },
         el('h3', { text: 'Summary' }),
-        summary ? el('span', { class: 'muted small section-meta', text: `${summary.updatedBy} · ${formatTime(summary.updatedAt)}` }) : null,
+        el('span', { class: 'muted small section-meta', text: `${summary.updatedBy} · ${formatTime(summary.updatedAt)}` }),
         el('span', { class: 'spacer' }),
-        el('button', { class: 'ghost small', type: 'button', text: summary ? 'Edit' : 'Add', onclick: edit }),
+        el('button', { class: 'ghost small', type: 'button', text: 'Edit', onclick: edit }),
       ),
-      summary ? el('div', { class: 'md ticket-text' }, richText(summary.text)) : el('p', { class: 'muted small', text: 'No summary yet. Decisions, open questions and where things stand.' }),
+      el('div', { class: 'md ticket-text' }, richText(summary.text)),
     );
   };
   const edit = () => {
-    const area = el('textarea', { rows: '4', 'aria-label': 'Thread summary' });
+    wrap.classList.remove('empty');
+    const area = el('textarea', { rows: '4', 'aria-label': 'Thread summary', placeholder: 'Decisions, open questions and where things stand' });
     area.value = summary?.text ?? '';
     wrap.replaceChildren(
       area,

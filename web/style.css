@@ -1396,7 +1396,8 @@ a.inbox-row {
   height: 6px;
   border-radius: 50%;
   background: var(--listen);
-  animation: working-pulse 1.4s ease-in-out infinite;
+  /* A few slow pulses when it appears or updates, then still: motion that never stops pulls the eye. */
+  animation: working-pulse 2.4s ease-in-out 3;
 }
 
 @keyframes working-pulse {
@@ -4018,4 +4019,57 @@ button:disabled {
 .inbox-fold > summary {
   cursor: pointer;
   padding: 0.6rem 1rem;
+}
+
+/* My agents: each agent's settings fold behind one line that says how they are set. */
+.agent-more > summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.agent-more > summary:hover,
+.agent-more[open] > summary {
+  color: var(--text);
+}
+
+.agent-more-body {
+  display: grid;
+  gap: 0.4rem;
+  padding-top: 0.5rem;
+}
+
+.agent-more-body > * {
+  min-width: 0;
+}
+
+.agent-more-body select {
+  max-width: 100%;
+}
+
+.agent-more-body .row-end:empty {
+  display: none;
+}
+
+.thread-summary.empty {
+  margin: 0.25rem 1rem 0;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+/* Ticket comments: one line until you click in, and the button only once there is something to send. */
+.comment-box textarea {
+  height: 2.4rem;
+  min-height: 0;
+  resize: none;
+}
+
+.comment-box:focus-within textarea,
+.comment-box textarea:not(:placeholder-shown) {
+  height: 5.5rem;
+  resize: vertical;
+}
+
+.comment-box:not(:focus-within):has(textarea:placeholder-shown) .row-end {
+  display: none;
 }
