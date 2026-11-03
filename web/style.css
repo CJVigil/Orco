@@ -3863,3 +3863,44 @@ button:disabled {
 .needs-settings summary { cursor: pointer; color: var(--muted); }
 .needs-settings label { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; }
 .inbox-heading-row { display: flex; align-items: center; justify-content: space-between; }
+
+/* Narrow panels and phones: nothing spills past its box. */
+
+.agent-settings > * {
+  min-width: 0;
+}
+
+.agent-settings select {
+  max-width: 100%;
+}
+
+.task-card {
+  max-width: 100%;
+}
+
+.task-progress {
+  max-width: min(28rem, 100%);
+  min-width: 0;
+}
+
+.ticket-card {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 900px) {
+  .board-column {
+    flex: 0 0 min(82vw, 320px);
+  }
+}
+
+.task-wrap {
+  min-width: 0;
+  grid-template-columns: minmax(0, auto);
+}
+
+@media (max-width: 640px) {
+  .task-progress {
+    white-space: normal;
+  }
+}

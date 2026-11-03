@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Layout fixes: agent settings no longer spill out of the My agents panel, task cards and their
+  progress line fit on phones, board columns keep a readable width on phones, and a folded Backlog
+  shows its count at the top of the column.
 - Calmer notifications (#89): "Only what needs me" (the default) shows approvals, questions,
   reviews and asks at once and batches agent updates into one notification per 10 minutes; "All
   mentions" adds people's mentions; "Off". Quiet hours hold everything and send one summary when they

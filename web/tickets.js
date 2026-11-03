@@ -453,7 +453,8 @@ export function createTickets(ctx) {
             el('span', { class: 'spacer' }),
             el('button', { class: 'ghost icon', type: 'button', title: `New ticket in ${status.name}`, 'aria-label': `New ticket in ${status.name}`, onclick: () => openNewTicket({ status: status.name }) }, icon('plus')),
           ),
-          list,
+          // A column folded to a count shows the count at the top, not under an empty column.
+          tickets.length ? list : null,
           hidden.get(status.id)
             ? el('button', {
                 class: 'ghost small column-more',
@@ -462,6 +463,7 @@ export function createTickets(ctx) {
                 onclick: () => (status.category === 'backlog' ? ((t.showBacklog = true), renderTab()) : setFocus(false)),
               })
             : null,
+          tickets.length ? null : list,
         );
       }),
     );
