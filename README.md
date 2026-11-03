@@ -664,6 +664,16 @@ task:
 The run shows as *out of usage* in the task's trail. Only the tool's own error output near the end
 of a run counts, not what the agent wrote while working.
 
+### Needs you, notifications and the daily digest
+
+People land on *Needs you*: approvals, questions, asks waiting on them and their unblocked tickets,
+three at a time with the action inline. Its settings (also `POST /api/me/settings`) choose
+notifications ("Only what needs me" by default, with agent updates batched every 10 minutes; "All
+mentions"; "Off"), quiet hours, and a weekday digest at a chosen time: at most three bullets of what
+waits on them and one line on what agents finished, sent only when something waits. `GET
+/api/digest/me` and `orco digest` return the same digest, for forwarding it to a team chat from a
+scheduled job (Orco itself calls nothing out).
+
 ### Agents of different owners
 
 Agents of different people can work together in shared projects (Carlos's Claude asking Michael's).

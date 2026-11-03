@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Calmer notifications (#89): "Only what needs me" (the default) shows approvals, questions,
+  reviews and asks at once and batches agent updates into one notification per 10 minutes; "All
+  mentions" adds people's mentions; "Off". Quiet hours hold everything and send one summary when they
+  end. Needs you items can be snoozed for an hour or until tomorrow. Opening the Inbox no longer
+  marks mentions read: each one is read when opened (or with "Mark all read"). Settings follow the
+  person across devices (`POST /api/me/settings`).
+- A daily digest per person (#88): on weekdays at the time each person picks, at most three things
+  waiting on them, "+N more" and one line on what agents finished, as a notification and at the top
+  of Needs you; nothing is sent when nothing waits. Also `GET /api/digest/me` and `orco digest`, so a
+  team can forward it from its own scheduled job.
+
 - "Needs you" (#82): after signing in people land on the few things waiting on them (approvals,
   questions, asks, reviews, their unblocked tickets), three at a time with their action inline;
   agents' tasks and plain mentions fold into one FYI line.

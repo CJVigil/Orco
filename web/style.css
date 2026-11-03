@@ -3855,3 +3855,11 @@ button:disabled {
   .needs-item { grid-template-columns: 1fr; }
   .needs-actions { grid-column: 1; }
 }
+
+.needs-snooze { margin-left: auto; display: inline-flex; gap: 0.2rem; }
+.needs-digest { border: 1px solid var(--accent); border-radius: 10px; padding: 0.6rem 0.85rem; }
+.needs-digest ul { margin: 0.35rem 0 0; padding-left: 1.1rem; }
+.needs-settings { display: grid; gap: 0.4rem; }
+.needs-settings summary { cursor: pointer; color: var(--muted); }
+.needs-settings label { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; }
+.inbox-heading-row { display: flex; align-items: center; justify-content: space-between; }

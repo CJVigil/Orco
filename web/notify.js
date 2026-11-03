@@ -71,3 +71,81 @@ export function setBadge(count) {
     // Not supported here.
   }
 }
+
+/*
+ * Calmer notifications (#89). What needs the person (approvals, questions, reviews, asks waiting on
+ * them) shows at once; updates from agents batch into one notification per 10 minutes; people's plain
+ * mentions show only on "All mentions". In quiet hours everything waits and arrives as one summary.
+ * The settings live on the server (they follow the person); this applies them in the browser.
+ */
+const BATCH_MS = 10 * 60_000;
+let settings = { notifyLevel: 'needs_me', quietStart: null, quietEnd: null, tz: 'UTC' };
+let batch = [];
+let batchTimer = null;
+let held = [];
+let onOpenHeld = () => {};
+
+export function configure(next, onOpen) {
+  if (next) settings = { ...settings, ...next };
+  if (onOpen) onOpenHeld = onOpen;
+}
+
+function localTime(tz) {
+  try {
+    return new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date());
+  } catch {
+    return new Date().toTimeString().slice(0, 5);
+  }
+}
+
+export function inQuietHours() {
+  const { quietStart: start, quietEnd: end, tz } = settings;
+  if (!start || !end) return false;
+  const now = localTime(tz);
+  return start <= end ? now >= start && now < end : now >= start || now < end;
+}
+
+/**
+ * Offers a notification. kind: "needs" (it waits on this person), "agent" (an update from an agent)
+ * or "mention" (a person mentioned them).
+ */
+export function offer(kind, item, onOpen) {
+  if (settings.notifyLevel === 'off') return;
+  if (kind === 'mention' && settings.notifyLevel !== 'all') return;
+  if (inQuietHours()) {
+    held.push({ kind, item });
+    return;
+  }
+  if (kind === 'agent') {
+    batch.push(item);
+    if (!batchTimer) batchTimer = setTimeout(() => flushBatch(onOpen), BATCH_MS);
+    return;
+  }
+  void show(item, onOpen);
+}
+
+function flushBatch(onOpen) {
+  batchTimer = null;
+  const items = batch;
+  batch = [];
+  if (!items.length) return;
+  if (items.length === 1) return void show(items[0], onOpen);
+  void show({ title: `${items.length} updates from agents`, body: items.map((i) => i.title).slice(0, 3).join(' · '), tag: 'agent-batch', hash: '#!needs' }, onOpen);
+}
+
+/** Called every minute: when quiet hours end, what was held arrives as one summary. */
+export function tick() {
+  if (inQuietHours() || held.length === 0) return;
+  const needs = held.filter((h) => h.kind === 'needs').length;
+  const rest = held.length - needs;
+  held = [];
+  void show(
+    {
+      title: 'While you were away',
+      body: [needs ? `${needs} need${needs === 1 ? 's' : ''} you` : null, rest ? `${rest} update${rest === 1 ? '' : 's'}` : null].filter(Boolean).join(' · '),
+      tag: 'quiet-summary',
+      hash: '#!needs',
+    },
+    onOpenHeld,
+  );
+}

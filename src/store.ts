@@ -18,6 +18,7 @@ import { Hosted } from './hosted.js';
 import { Onyx } from './onyx.js';
 import { RoomStatuses } from './room-status.js';
 import { Safety } from './safety.js';
+import { Attention } from './attention.js';
 import { Onboarding } from './onboarding.js';
 import { Policies } from './policies.js';
 import { Portfolios } from './portfolio.js';
@@ -262,6 +263,7 @@ export class Store {
   readonly onyx: Onyx;
   readonly roomStatus: RoomStatuses;
   readonly safety: Safety;
+  readonly attention: Attention;
   readonly controls: Controls;
   readonly policies: Policies;
   readonly decisions: Decisions;
@@ -304,6 +306,7 @@ export class Store {
     this.onyx = new Onyx(this, undefined, () => this.now());
     this.roomStatus = new RoomStatuses(this);
     this.safety = new Safety(this);
+    this.attention = new Attention(this);
     this.controls = new Controls(this);
     this.policies = new Policies(this);
     this.decisions = new Decisions(this);
@@ -998,7 +1001,7 @@ export class Store {
       .all(actor.id, Math.min(Math.max(limit, 1), 100)) as unknown as MessageRow[];
     return rows
       .filter((row) => this.canSeeRoomId(actor, row.room_id))
-      .map((row) => ({ ...this.toMessage(row), seen: row.id <= seenUpTo }));
+      .map((row) => ({ ...this.toMessage(row), seen: row.id <= seenUpTo || this.attention.isSeen(actor, row.id) }));
   }
 
   search(actor: Participant, query: string, limit = 50): Message[] {

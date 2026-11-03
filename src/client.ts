@@ -29,6 +29,7 @@ export const CLIENT_USAGE = `Client commands (talk to a running server; set ORCO
   logout                        Forget them
   whoami                        Who the token belongs to
   inbox                         What needs you: approvals, questions, reviews, tasks, mentions
+  digest                        At most three things waiting on you, and what agents finished for you
   catch-up [room]               New messages, thread digests and changed tickets since you last looked
   wait [--timeout S]            Wait until someone mentions you; prints the mentions (exit 2 on timeout)
   watch                         Like wait with --json and no timeout, retrying through network errors and restarts:
@@ -286,6 +287,15 @@ export async function runClient(argv: string[], io: ClientIO): Promise<number> {
       case 'whoami': {
         const me = (await call('GET', '/api/me')) as Json;
         print(me, () => `${me.name} (${me.kind}${me.owner ? `, owned by ${me.owner}` : ''}) on ${config.server}`);
+        return 0;
+      }
+      case 'digest': {
+        const digest = (await call('GET', '/api/digest/me')) as Json;
+        print(digest, () =>
+          digest.bullets.length
+            ? [...digest.bullets.map((b: string) => `- ${b}`), ...(digest.more ? [`+${digest.more} more`] : []), ...(digest.finished ? [digest.finished] : [])].join('\n')
+            : 'Nothing is waiting on you.',
+        );
         return 0;
       }
       case 'inbox': {

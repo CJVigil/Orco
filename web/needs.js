@@ -5,7 +5,7 @@
 const SHOW = 3;
 
 export function createNeeds(ctx) {
-  const { api, el, $, answerBox, decideApproval, jumpTo, openTicket } = ctx;
+  const { api, el, $, answerBox, decideApproval, jumpTo, openTicket, me, notifyConfigure } = ctx;
   const root = $('needs-view');
   const n = { all: false, timer: null, loading: null };
 
@@ -131,14 +131,83 @@ export function createNeeds(ctx) {
     );
   }
 
+  /** Hides an item for an hour, or until tomorrow morning. */
+  function snoozeButtons(key) {
+    const tomorrow = () => {
+      const d = new Date();
+      d.setDate(d.getDate() + 1);
+      d.setHours(9, 0, 0, 0);
+      return d.toISOString();
+    };
+    const snooze = (until) => act(() => api('/snoozes', { method: 'POST', body: { key, until } }));
+    return el(
+      'span',
+      { class: 'needs-snooze' },
+      el('button', { class: 'ghost small', type: 'button', text: 'Snooze 1 h', onclick: () => void snooze(new Date(Date.now() + 3600_000).toISOString()) }),
+      el('button', { class: 'ghost small', type: 'button', text: 'Tomorrow', title: 'Until 9:00 tomorrow', onclick: () => void snooze(tomorrow()) }),
+    );
+  }
+
+  function digestCard(digest) {
+    if (!digest || !digest.bullets.length) return null;
+    return el(
+      'section',
+      { class: 'needs-digest' },
+      el('strong', { text: 'Your digest' }),
+      el('ul', { class: 'small' }, digest.bullets.map((b) => el('li', { text: b })), digest.more ? el('li', { class: 'muted', text: `+${digest.more} more` }) : null),
+      digest.finished ? el('p', { class: 'small muted', text: digest.finished }) : null,
+    );
+  }
+
+  /** Notification level, quiet hours and the daily digest time, for this person on every device. */
+  function settingsBlock() {
+    const s = me()?.attention;
+    if (!s) return null;
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    const save = (patch) => act(async () => {
+      const next = await api('/me/settings', { method: 'POST', body: { tz, ...patch } });
+      me().attention = next;
+      notifyConfigure(next);
+    });
+    const time = (value, label, key) => {
+      const input = el('input', { type: 'time', value: value ?? '', 'aria-label': label });
+      input.addEventListener('change', () => void save({ [key]: input.value || null }));
+      return input;
+    };
+    const quiet = (value, label, other, key, otherKey) => {
+      const input = el('input', { type: 'time', value: value ?? '', 'aria-label': label });
+      input.addEventListener('change', () => void save({ [key]: input.value || null, [otherKey]: input.value ? other ?? (key === 'quiet_start' ? '08:00' : '22:00') : null }));
+      return input;
+    };
+    const level = el(
+      'select',
+      { 'aria-label': 'Notifications', onchange: (event) => void save({ notify_level: event.target.value }) },
+      [
+        ['needs_me', 'Only what needs me (agent updates batched)'],
+        ['all', 'All mentions'],
+        ['off', 'Off'],
+      ].map(([value, text]) => el('option', { value, text, selected: s.notifyLevel === value })),
+    );
+    return el(
+      'details',
+      { class: 'needs-settings' },
+      el('summary', { class: 'small', text: 'Notifications and daily digest' }),
+      el('label', { class: 'small' }, 'Notify me about ', level),
+      el('label', { class: 'small' }, 'Quiet hours from ', quiet(s.quietStart, 'Quiet from', s.quietEnd, 'quiet_start', 'quiet_end'), ' to ', quiet(s.quietEnd, 'Quiet until', s.quietStart, 'quiet_end', 'quiet_start')),
+      el('label', { class: 'small' }, 'Weekday digest at ', time(s.digestTime, 'Digest time', 'digest_time'), s.digestTime ? el('button', { class: 'link-button small', type: 'button', text: 'Turn off', onclick: () => void save({ digest_time: null }) }) : null),
+    );
+  }
+
   function render(inbox) {
-    const list = items(inbox);
+    const snoozed = inbox.snoozes ?? {};
+    const list = items(inbox).filter((item) => !snoozed[item.key]);
     const shown = n.all ? list : list.slice(0, SHOW);
     root.replaceChildren(
       el(
         'div',
         { class: 'needs' },
         el('h2', { class: 'needs-title', text: list.length ? 'Needs you' : 'Nothing needs you' }),
+        digestCard(inbox.digest),
         list.length ? null : el('p', { class: 'muted', text: 'Approvals, questions and asks for you show up here, three at a time.' }),
         shown.map((item) =>
           el(
@@ -146,11 +215,13 @@ export function createNeeds(ctx) {
             { class: 'needs-item', 'data-key': item.key },
             el('div', { class: 'needs-kind', text: item.kind }),
             el('div', { class: 'needs-main' }, el('strong', { class: 'needs-line', text: item.title }), item.detail ? el('div', { class: 'needs-detail muted small', text: item.detail }) : null),
-            el('div', { class: 'needs-actions' }, item.actions()),
+            el('div', { class: 'needs-actions' }, item.actions(), snoozeButtons(item.key)),
           ),
         ),
         list.length > SHOW && !n.all ? el('button', { class: 'ghost small', type: 'button', text: `${list.length - SHOW} more`, onclick: () => ((n.all = true), render(inbox)) }) : null,
         fyi(inbox),
+        Object.keys(snoozed).length ? el('p', { class: 'small muted', text: `${Object.keys(snoozed).length} snoozed` }) : null,
+        settingsBlock(),
       ),
     );
   }

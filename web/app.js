@@ -1847,9 +1847,12 @@ function onMessage(message) {
   if (message.mentions.includes(state.me.name)) {
     scheduleInbox();
     if (message.author !== state.me.name) {
-      void notify.show(
+      // Approvals and questions need this person now; other mentions follow their notification level.
+      const needsMe = Boolean(message.question || message.approval || message.review);
+      notify.offer(
+        needsMe ? 'needs' : message.authorKind === 'agent' ? 'agent' : 'mention',
         {
-          title: message.question ? `${message.author} asks you` : `${message.author} in #${message.room}`,
+          title: message.question ? `${message.author} asks you` : message.approval ? `${message.author} needs your approval` : `${message.author} in #${message.room}`,
           body: message.text,
           tag: `message-${message.id}`,
           hash: `#${message.room}`,
@@ -1944,6 +1947,11 @@ function connect() {
     if (state.panel !== 'members') return;
     clearTimeout(presenceTimer);
     presenceTimer = setTimeout(() => void showMembers(), 300);
+  });
+  events.addEventListener('digest', (event) => {
+    const digest = JSON.parse(event.data);
+    notify.offer('needs', { title: 'Your digest', body: digest.bullets.join(' · ') + (digest.more ? ` · +${digest.more} more` : ''), tag: 'digest', hash: '#!needs' }, openFromNotification);
+    needs.onEvent();
   });
   events.addEventListener('status', (event) => {
     const { room, status } = JSON.parse(event.data);
@@ -2264,9 +2272,12 @@ function announceNew(inbox) {
       target: { id: t.messageId, room: t.room, threadId: null },
     })),
   ];
+  // Asks waiting on this person need them; flags and stalled tasks are updates about agents.
+  const asks = (inbox.waiting ?? []).map((t) => ({ key: `waiting-${t.ref}`, kind: 'needs', title: `${t.ref} waits on you`, body: t.waitingOn.ask, target: null, hash: '#!needs' }));
+  items.push(...asks);
   if (announced) {
     for (const item of items.filter((i) => !announced.has(i.key))) {
-      void notify.show({ title: item.title, body: item.body, tag: item.key, hash: '', target: item.target }, openFromNotification);
+      notify.offer(item.kind ?? 'agent', { title: item.title, body: item.body, tag: item.key, hash: item.hash ?? '', target: item.target }, openFromNotification);
     }
   }
   announced = new Set(items.map((i) => i.key));
@@ -2341,7 +2352,7 @@ function snippet(text, max = 160) {
 function messageRow(message, { unseen = false } = {}) {
   return el(
     'button',
-    { class: `inbox-row${unseen ? ' unseen' : ''}`, type: 'button', onclick: () => void jumpTo(message) },
+    { class: `inbox-row${unseen ? ' unseen' : ''}`, type: 'button', onclick: () => void (unseen ? openMention(message) : jumpTo(message)) },
     el(
       'span',
       { class: 'inbox-meta' },
@@ -2529,7 +2540,25 @@ function renderInbox(inbox) {
   }
   // Open questions are listed above with an answer box; don't repeat them as mentions.
   const mentions = inbox.mentions.filter((m) => m.question?.state !== 'open');
-  sections.push(inboxHeading('Mentions'));
+  const unread = mentions.filter((m) => !m.seen);
+  sections.push(
+    el(
+      'div',
+      { class: 'inbox-heading-row' },
+      inboxHeading('Mentions', unread.length),
+      unread.length
+        ? el('button', {
+            class: 'ghost small',
+            type: 'button',
+            text: 'Mark all read',
+            onclick: async () => {
+              await api('/inbox/seen', { method: 'POST', body: { up_to_id: unread[0].id } }).catch(() => {});
+              void refreshInbox();
+            },
+          })
+        : null,
+    ),
+  );
   sections.push(
     ...(mentions.length ? mentions.map((m) => messageRow(m, { unseen: !m.seen })) : [el('p', { class: 'panel-intro muted small', text: 'No one has mentioned you yet.' })]),
   );
@@ -2544,11 +2573,14 @@ async function showInbox() {
   const inbox = await api('/inbox');
   if (state.panel !== 'inbox') return;
   renderInbox(inbox);
-  const newest = inbox.mentions.find((m) => !m.seen);
-  if (newest) {
-    await api('/inbox/seen', { method: 'POST', body: { up_to_id: newest.id } });
-    void refreshInbox();
-  }
+  // Opening the Inbox marks nothing: a mention is handled when it is opened (or "Mark all read").
+}
+
+/** A mention opened from the Inbox counts as handled; the rest stay unread. */
+async function openMention(m) {
+  await api('/inbox/seen', { method: 'POST', body: { message_id: m.id } }).catch(() => {});
+  void refreshInbox();
+  await jumpTo({ id: m.id, room: m.room, threadId: m.threadId });
 }
 
 async function openTask(id) {
@@ -2692,6 +2724,7 @@ async function start() {
   }
   $('login').hidden = true;
   $('app').hidden = false;
+  notify.configure(state.me.attention, openFromNotification);
   $('me-name').textContent = state.me.name;
   $('me-avatar').replaceWith(Object.assign(avatar(state.me.name, state.me.kind), { id: 'me-avatar' }));
   await loadStructure();
@@ -2871,6 +2904,7 @@ document.addEventListener('click', (event) => {
 $('load-older').addEventListener('click', () => void loadOlder());
 $('toggle-sidebar').addEventListener('click', () => $('sidebar').classList.toggle('open'));
 window.addEventListener('hashchange', () => void selectRoom());
+setInterval(() => notify.tick(), 60_000);
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && state.view === 'room' && state.room) {
     state.unread.delete(state.room.ref);
@@ -2887,6 +2921,8 @@ const needs = createNeeds({
   decideApproval,
   jumpTo,
   openTicket: (ref) => tickets.openTicket(ref),
+  me: () => state.me,
+  notifyConfigure: (settings) => notify.configure(settings),
 });
 
 const portfolio = createPortfolio({

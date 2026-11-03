@@ -643,8 +643,31 @@ export function createApp(store: Store, options: AppOptions = {}) {
       owner: store.ownerName(me),
       orgAdmin: store.isOrgAdmin(me),
       onyx: store.onyx.enabled,
+      ...(me.kind === 'user' && !me.scope ? { attention: store.attention.settings(me) } : {}),
       ...(me.kind === 'user' && !me.scope ? { logins: store.identities.of(me.id) } : {}),
     });
+  });
+  // How a person wants to be interrupted: notification level, quiet hours, time zone, daily digest.
+  api.post('/me/settings', (req, res) => {
+    const b = req.body ?? {};
+    const nullable = (v: unknown) => (v === undefined ? undefined : v === null || v === '' ? null : String(v));
+    res.json(
+      store.attention.update(req.participant!, {
+        ...(b.notify_level !== undefined ? { notifyLevel: String(b.notify_level) as 'needs_me' } : {}),
+        ...(b.quiet_start !== undefined ? { quietStart: nullable(b.quiet_start) } : {}),
+        ...(b.quiet_end !== undefined ? { quietEnd: nullable(b.quiet_end) } : {}),
+        ...(b.tz !== undefined ? { tz: String(b.tz) } : {}),
+        ...(b.digest_time !== undefined ? { digestTime: nullable(b.digest_time) } : {}),
+      }),
+    );
+  });
+  // The daily digest as it reads now: a team can forward it to its chat from its own scheduled job.
+  api.get('/digest/me', (req, res) => {
+    res.json(store.attention.digest(req.participant!));
+  });
+  api.post('/snoozes', (req, res) => {
+    store.attention.snooze(req.participant!, String(req.body?.key ?? ''), req.body?.until ? String(req.body.until) : null);
+    res.status(204).end();
   });
   api.delete('/me/logins', (req, res) => {
     store.identities.unlink(req.participant!, req.participant!.name, String(req.body?.login ?? ''));
@@ -1537,6 +1560,8 @@ export function createApp(store: Store, options: AppOptions = {}) {
       tasks,
       tickets,
       waiting,
+      snoozes: store.attention.snoozes(me),
+      digest: me.kind === 'user' ? store.attention.latest(me) : null,
       questions,
       flags,
       stalled,
@@ -1575,9 +1600,16 @@ export function createApp(store: Store, options: AppOptions = {}) {
       release();
     }
   });
+  // A mention opened one by one (message_id), or everything up to one ("mark all read", up_to_id).
   api.post('/inbox/seen', (req, res) => {
+    const one = optionalInt(req.body?.message_id);
+    if (one !== undefined) {
+      store.attention.markSeen(req.participant!, one);
+      res.status(204).end();
+      return;
+    }
     const upTo = optionalInt(req.body?.up_to_id);
-    if (upTo === undefined) throw new OrcoError('invalid', 'Expected up_to_id');
+    if (upTo === undefined) throw new OrcoError('invalid', 'Expected message_id or up_to_id');
     store.markMentionsSeen(req.participant!, upTo);
     res.status(204).end();
   });
@@ -1769,6 +1801,9 @@ export function createApp(store: Store, options: AppOptions = {}) {
       const who = store.participantById(id);
       return who ? send('presence', { name: who.name, status: change.status, lastSeen: change.lastSeen, reason: change.reason }) : false;
     };
+    const onDigest = (event: { participantId: number; digest: unknown }) => {
+      if (event.participantId === me.id) send('digest', event.digest);
+    };
     const onRoomStatus = (event: { projectId: number | null; room: string; status: unknown }) => {
       if (store.canSee(me, event.projectId)) send('status', { room: event.room, status: event.status }, { room: event.room });
     };
@@ -1801,6 +1836,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
     store.events.on('decision', onDecision);
     store.events.on('controls', onControls);
     store.events.on('room_status', onRoomStatus);
+    store.events.on('digest', onDigest);
     presence.events.on('change', onPresence);
     // A stream lasts as long as the credential that opened it: a new token, a sign-out, an expired
     // session or a finished task's token ends it, at once when Orco knows and otherwise within a heartbeat.
@@ -1872,6 +1908,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
       store.events.off('decision', onDecision);
       store.events.off('controls', onControls);
       store.events.off('room_status', onRoomStatus);
+      store.events.off('digest', onDigest);
       presence.events.off('change', onPresence);
       release();
     });
@@ -1984,6 +2021,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
       store.runs.pruneLogs(store.limits.runLogDays);
       store.portfolios.runDue(store.digestSchedule);
       store.roomStatus.sweep();
+      store.attention.sendDue();
     } catch (err) {
       console.error('Sweep failed:', err);
     }

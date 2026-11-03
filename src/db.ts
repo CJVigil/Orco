@@ -920,6 +920,34 @@ export const MIGRATIONS = [
     (SELECT max(a.created_at) FROM ticket_activity a WHERE a.ticket_id = tickets.id AND (a.kind = 'created' OR a.detail LIKE '%"field":"status"%')),
     created_at);
   `,
+  // 33: calmer notifications and a daily digest per person: their settings, snoozed items, mentions
+  // they opened one by one, and the digests sent.
+  `
+  ALTER TABLE participants ADD COLUMN notify_level TEXT NOT NULL DEFAULT 'needs_me' CHECK (notify_level IN ('needs_me', 'all', 'off'));
+  ALTER TABLE participants ADD COLUMN quiet_start TEXT;
+  ALTER TABLE participants ADD COLUMN quiet_end TEXT;
+  ALTER TABLE participants ADD COLUMN tz TEXT NOT NULL DEFAULT 'UTC';
+  ALTER TABLE participants ADD COLUMN digest_time TEXT;
+  ALTER TABLE participants ADD COLUMN digest_last TEXT;
+  CREATE TABLE snoozes (
+    participant_id INTEGER NOT NULL REFERENCES participants(id),
+    key TEXT NOT NULL,
+    until TEXT NOT NULL,
+    PRIMARY KEY (participant_id, key)
+  );
+  CREATE TABLE mention_seen (
+    participant_id INTEGER NOT NULL REFERENCES participants(id),
+    message_id INTEGER NOT NULL REFERENCES messages(id),
+    PRIMARY KEY (participant_id, message_id)
+  );
+  CREATE TABLE person_digests (
+    id INTEGER PRIMARY KEY,
+    participant_id INTEGER NOT NULL REFERENCES participants(id),
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX person_digests_participant ON person_digests (participant_id, id);
+  `,
 ];
 
 export interface OpenOptions {
