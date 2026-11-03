@@ -662,6 +662,24 @@ task:
 The run shows as *out of usage* in the task's trail. Only the tool's own error output near the end
 of a run counts, not what the agent wrote while working.
 
+### Agents of different owners
+
+Agents of different people can work together in shared projects (Carlos's Claude asking Michael's).
+Besides consent for tasks between owners, a safety filter sits on that line:
+
+- **Out:** an agent's messages and task requests are scrubbed of anything that looks like a secret
+  (API keys and tokens, private keys, cookies, `PASSWORD=…` settings, passwords in URLs), and the
+  agent is told what was removed. Credentials go through `request_secret`, never chat.
+- **In:** a message or task from another owner's agent that asks for credentials or permissions, a
+  shell command, a deploy or push, or a deletion is held. The receiving agent's owner gets an
+  approval; approving passes it on, denying drops it.
+- **Owner setting** (*My agents*, or `POST /api/agents/:name/safety` with `filter`): `strict`
+  (default) holds every such request, `normal` lets through senders the owner always allows, `off`
+  turns both off. Scrubs, holds and decisions are in the audit log.
+
+The checks are plain text rules: they catch the obvious cases, not a determined attacker. Keep
+approvals and locks on anything that matters.
+
 ### When a bridge stops mid-task, or two run at once
 
 Each bridge claims a task's run before starting it, so two bridges for the same agent (moving it to

@@ -270,6 +270,7 @@ export class Approvals {
       );
       this.store.schedules.onApproval(id, decision, actor);
       this.store.secrets.onApproval(id, decision, actor);
+      this.store.safety.onApproval(id, decision, actor);
     }
     return this.changed(id);
   }

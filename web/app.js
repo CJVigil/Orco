@@ -977,6 +977,27 @@ async function showMyAgents() {
           'File the follow-ups it suggests as tickets without asking me',
         ),
         lostSettings(agent, agents),
+        el('label', { class: 'small', text: 'Safety filter with other owners’ agents' }),
+        el(
+          'select',
+          {
+            'aria-label': `Safety filter for ${agent.name}`,
+            title: 'Strict: its messages are scrubbed of secrets, and risky requests from other owners’ agents (credentials, shell commands, deploys, deletions) wait for you. Normal: the same, except from people you always allow. Off: neither.',
+            onchange: async (event) => {
+              try {
+                await api(`/agents/${encodeURIComponent(agent.name)}/safety`, { method: 'POST', body: { filter: event.target.value } });
+              } catch (err) {
+                alert(err.message);
+              }
+              void showMyAgents();
+            },
+          },
+          [
+            ['strict', 'Strict: hold risky requests from other owners’ agents (recommended)'],
+            ['normal', 'Normal: hold them unless I always allow the sender'],
+            ['off', 'Off: no scrubbing, no holds'],
+          ].map(([value, text]) => el('option', { value, text, selected: (agent.safetyFilter ?? 'strict') === value })),
+        ),
         agent.taskPolicy === 'ask'
           ? el(
               'div',

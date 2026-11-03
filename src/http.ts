@@ -1626,6 +1626,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
           memory: store.memory.list(req.participant!, agent.name).length,
           hosted: store.hosted.of(participant),
           lost: store.tasks.lostPolicy(participant),
+          safetyFilter: store.safety.level(participant),
           paused: store.controls.pausedFor(participant, null)?.scope === 'agent',
         };
       }),
@@ -1639,6 +1640,10 @@ export function createApp(store: Store, options: AppOptions = {}) {
   });
   api.post('/agents/:name/policy', (req, res) => {
     res.json(store.setTaskPolicy(req.participant!, String(req.params.name), req.body?.policy));
+  });
+  // How carefully the agent's traffic with other owners' agents is filtered: its owner decides (#81).
+  api.post('/agents/:name/safety', (req, res) => {
+    res.json({ filter: store.safety.setLevel(req.participant!, String(req.params.name), String(req.body?.filter ?? '')) });
   });
   // What happens when the agent goes quiet mid-task: its owner decides (minutes, fallback, release locks).
   api.post('/agents/:name/lost', (req, res) => {

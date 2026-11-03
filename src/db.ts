@@ -889,6 +889,19 @@ export const MIGRATIONS = [
   ALTER TABLE approvals ADD COLUMN valid_until INTEGER;
   CREATE INDEX approvals_ticket ON approvals (ticket_id);
   `,
+  // 30: the safety filter between agents of different owners (#81).
+  `
+  ALTER TABLE participants ADD COLUMN safety_filter TEXT NOT NULL DEFAULT 'strict' CHECK (safety_filter IN ('strict', 'normal', 'off'));
+  CREATE TABLE held_mentions (
+    message_id INTEGER NOT NULL REFERENCES messages(id),
+    agent_id INTEGER NOT NULL REFERENCES participants(id),
+    approval_id INTEGER NOT NULL REFERENCES approvals(id),
+    rule TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('held', 'released', 'dropped')),
+    PRIMARY KEY (message_id, agent_id)
+  );
+  CREATE INDEX held_mentions_approval ON held_mentions (approval_id);
+  `,
 ];
 
 export interface OpenOptions {

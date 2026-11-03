@@ -348,6 +348,7 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         text: `Notice: task #${n.taskId} in ${n.room} was cancelled${n.note ? ` (${n.note})` : ''}. Stop working on it, undo nothing you were not asked to, and do not mark it done.`,
       });
     }
+    for (const text of store.safety.takeNotices(me)) result.content.push({ type: 'text', text: `Notice: ${text}` });
     return result;
   };
   /** The tasks behind these messages that are assigned to me, so reading them counts as seeing them. */

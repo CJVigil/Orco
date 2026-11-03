@@ -319,7 +319,8 @@ export class Tasks {
       expiresAt?: number | null;
     },
   ): Task {
-    const request = input.request.trim();
+    // An agent's request is scrubbed of secrets before it is stored or posted (#81).
+    const request = this.store.safety.scrub(actor, input.request.trim(), { projectId: null });
     const expiresAt = input.expiresAt ?? null;
     if (expiresAt !== null && !(Number.isFinite(expiresAt) && expiresAt > this.store.now() && expiresAt <= this.store.now() + MAX_EXPIRY_MS)) {
       throw new OrcoError('invalid', 'A task expires between now and 30 days from now');
@@ -353,7 +354,9 @@ export class Tasks {
     // Over a monthly budget, the task waits for the person who set it (see controls.ts). Otherwise the
     // owner's consent comes first; a person confirming outside text only stands in when none is needed.
     const gate = this.store.controls.taskGate(actor, assignee, room);
-    const needsConsent = this.consent(actor, assignee, owner);
+    // A risky request from another owner's agent waits for this agent's owner, trusted or not (strict).
+    const held = this.store.safety.holdReason(actor, assignee, request);
+    const needsConsent = this.consent(actor, assignee, owner) || held !== null;
     const confirmBy = !gate && !needsConsent && input.confirmBy?.kind === 'user' ? input.confirmBy : null;
     const approver = gate?.approver ?? confirmBy ?? owner;
     const needsApproval = gate !== null || confirmBy !== null || needsConsent;
@@ -363,6 +366,8 @@ export class Tasks {
       ? `@${approver.name} ${gate.reason}. ${actor.name} asks ${assignee.name} to: ${request}\nApprove to let it start anyway, or deny.`
       : confirmBy
         ? `@${confirmBy.name} This came from outside Orco. Should ${assignee.name} start on it?\n${request}\nApprove to let it start, or deny.`
+      : held && needsApproval
+        ? `@${owner.name} Held by the safety filter (${held}): ${actor.name} asks your agent ${assignee.name} to: ${request}\nApprove to let ${assignee.name} start, or deny.`
       : needsApproval
         ? `@${owner.name} ${actor.name} asks your agent ${assignee.name} to: ${request}\nApprove to let ${assignee.name} start, or deny.`
         : `@${assignee.name} ${request}`;
@@ -407,6 +412,7 @@ export class Tasks {
         parentId: task.parentId,
         depth,
         needsApproval,
+        ...(held ? { heldBySafetyFilter: held } : {}),
         ...(gate ? { overBudget: gate.reason } : {}),
         ...(task.budget ? { budget: { minutes: task.budget.minutes, cents: task.budget.cents } } : {}),
         ...(input.scheduleId ? { scheduleId: input.scheduleId } : {}),

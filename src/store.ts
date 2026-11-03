@@ -17,6 +17,7 @@ import { Identities } from './identities.js';
 import { Hosted } from './hosted.js';
 import { Onyx } from './onyx.js';
 import { RoomStatuses } from './room-status.js';
+import { Safety } from './safety.js';
 import { Onboarding } from './onboarding.js';
 import { Policies } from './policies.js';
 import { Portfolios } from './portfolio.js';
@@ -260,6 +261,7 @@ export class Store {
   readonly hosted: Hosted;
   readonly onyx: Onyx;
   readonly roomStatus: RoomStatuses;
+  readonly safety: Safety;
   readonly controls: Controls;
   readonly policies: Policies;
   readonly decisions: Decisions;
@@ -301,6 +303,7 @@ export class Store {
     this.hosted = new Hosted(this);
     this.onyx = new Onyx(this, undefined, () => this.now());
     this.roomStatus = new RoomStatuses(this);
+    this.safety = new Safety(this);
     this.controls = new Controls(this);
     this.policies = new Policies(this);
     this.decisions = new Decisions(this);
@@ -896,12 +899,15 @@ export class Store {
       external?: ExternalContent;
     } = {},
   ): Message {
-    const trimmed = this.hideSecrets(actor, text.trim());
+    const room = this.room(actor, roomRef);
+    // An agent's words are scrubbed of anything that looks like a secret before anyone sees them (#81).
+    const trimmed = this.safety.scrub(actor, this.hideSecrets(actor, text.trim()), { projectId: room.projectId, room: room.ref });
     const attachmentIds = options.attachmentIds ?? [];
-    const external = options.external ? checkExternal({ ...options.external, text: this.hideSecrets(actor, options.external.text) }) : null;
+    const external = options.external
+      ? checkExternal({ ...options.external, text: this.safety.scrub(actor, this.hideSecrets(actor, options.external.text), { projectId: room.projectId, room: room.ref }) })
+      : null;
     if (!trimmed && attachmentIds.length === 0 && !external) throw new OrcoError('invalid', 'Message text is empty');
     if (trimmed.length > MAX_TEXT) throw new OrcoError('invalid', `Message is over ${MAX_TEXT} characters`);
-    const room = this.room(actor, roomRef);
     // Posts Orco makes as part of another action (task notices, approvals) were checked with that action.
     if (!options.skipRateLimit) this.assertWrite(actor, room.projectId);
     this.attachments.checkAttachable(actor, room, attachmentIds);
@@ -948,7 +954,9 @@ export class Store {
       },
     });
     this.events.emit('message', message);
-    for (const target of mentioned) this.events.emit(`mention:${target.id}`, message);
+    // A risky request from another owner's agent waits for the receiving agent's owner (#81).
+    const held = this.safety.holdMentions(actor, message, mentioned);
+    for (const target of mentioned) if (!held.has(target.id)) this.events.emit(`mention:${target.id}`, message);
     return message;
   }
 
@@ -1030,6 +1038,7 @@ export class Store {
         `${MESSAGE_SELECT}
          JOIN mentions mn ON mn.message_id = m.id AND mn.participant_id = ?
          WHERE m.id > (SELECT seen_mention_id FROM participants WHERE id = ?)
+           AND NOT EXISTS (SELECT 1 FROM held_mentions h WHERE h.message_id = m.id AND h.agent_id = mn.participant_id)
          ORDER BY m.id`,
       )
       .all(actor.id, actor.id) as unknown as MessageRow[];
