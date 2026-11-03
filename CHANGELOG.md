@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Quieter screens: a ticket shows only the fields and sections that have something in them, with
+  one "Add" line for the rest (handoff, description, criteria, blocker, sub-ticket) and one link for
+  unset fields. Needs you cards carry one "Later" instead of two snooze buttons, and the reply box
+  on an ask opens from "Reply". A task card's Trail and Cancel appear when you point at or tab to
+  it, and Add member moved into the room's ⋯ menu.
 - Layout fixes: agent settings no longer spill out of the My agents panel, task cards and their
   progress line fit on phones, board columns keep a readable width on phones, and a folded Backlog
   shows its count at the top of the column. Portfolio totals sit in one even row.

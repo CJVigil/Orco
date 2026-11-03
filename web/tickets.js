@@ -523,6 +523,10 @@ export function createTickets(ctx) {
       return;
     }
     t.pendingDetail = false;
+    if (!refresh && t.open !== ref) {
+      t.moreFields = false;
+      t.adding = new Set();
+    }
     if (!refresh) openPanel('ticket', ref);
     t.open = ref;
     let ticket;
@@ -602,6 +606,13 @@ export function createTickets(ctx) {
     const due = el('input', { type: 'date', value: ticket.dueDate ?? null, 'aria-label': 'Due date' });
     due.addEventListener('change', () => void save(ticket, { dueDate: due.value || null }));
 
+    const optional = [
+      ['Estimate', estimate, ticket.estimate !== null],
+      ['Due', due, Boolean(ticket.dueDate)],
+      ['Milestone', select(ticket.milestone?.name ?? '', [['', 'None'], ...plan.milestones.map((m) => [m.name, m.name])], change('milestone', (v) => v || null), { 'aria-label': 'Milestone' }), Boolean(ticket.milestone)],
+      ['Cycle', select(ticket.cycle?.number ?? '', [['', 'None'], ...cycles.map((c) => [String(c.number), c.name])], change('cycle', (v) => (v ? Number(v) : null)), { 'aria-label': 'Cycle' }), Boolean(ticket.cycle)],
+      ['Labels', labelPicker, ticket.labels.length > 0],
+    ];
     const props = el(
       'div',
       { class: 'props' },
@@ -616,11 +627,16 @@ export function createTickets(ctx) {
           { 'aria-label': 'Assignee' },
         ),
       ),
-      field('Estimate', estimate),
-      field('Due', due),
-      field('Milestone', select(ticket.milestone?.name ?? '', [['', 'None'], ...plan.milestones.map((m) => [m.name, m.name])], change('milestone', (v) => v || null), { 'aria-label': 'Milestone' })),
-      field('Cycle', select(ticket.cycle?.number ?? '', [['', 'None'], ...cycles.map((c) => [String(c.number), c.name])], change('cycle', (v) => (v ? Number(v) : null)), { 'aria-label': 'Cycle' })),
-      field('Labels', labelPicker),
+      // Fewer things to look at: the optional fields show only once set, the rest behind one link.
+      ...optional.filter(([, , set]) => set || t.moreFields).map(([label, control]) => field(label, control)),
+      optional.every(([, , set]) => set) || t.moreFields
+        ? null
+        : el('button', {
+            class: 'link-button small more-fields',
+            type: 'button',
+            text: `+ ${optional.filter(([, , set]) => !set).map(([label]) => label.toLowerCase()).join(', ')}`,
+            onclick: () => ((t.moreFields = true), renderDetail(ticket)),
+          }),
     );
 
     const agentRow =
@@ -661,15 +677,51 @@ export function createTickets(ctx) {
         nowBlock(ticket),
         props,
         agentRow,
-        handoffBlock(ticket),
-        descriptionBlock(ticket),
-        criteriaBlock(ticket),
-        linksBlock(ticket),
-        childrenBlock(ticket),
+        sections(ticket),
         activityBlock(ticket, draft),
       ),
     );
     autosize(title);
+  }
+
+  /**
+   * The ticket's sections, only those with something in them (or that the person just chose to add),
+   * and one quiet "Add" line for the rest: an empty ticket reads as a title, a next step and a few
+   * fields, not a form.
+   */
+  function sections(ticket) {
+    const adding = t.adding ?? (t.adding = new Set());
+    const list = [
+      ['handoff', 'handoff', Boolean(ticket.handoff), (editing) => handoffBlock(ticket, { editing })],
+      ['description', 'description', Boolean(ticket.description), (editing) => descriptionBlock(ticket, { editing })],
+      ['criteria', 'criteria', ticket.criteriaItems.length > 0, () => criteriaBlock(ticket)],
+      [
+        'links',
+        'blocker',
+        Boolean(ticket.blockers.length || ticket.blocking.length || ticket.blockedReason || ticket.closedAs || ticket.replaces?.length),
+        () => linksBlock(ticket),
+      ],
+      ['children', 'sub-ticket', ticket.children.length > 0, () => childrenBlock(ticket)],
+    ];
+    const shown = list.filter(([key, , filled]) => filled || adding.has(key)).map(([key, , filled, make]) => make(!filled && adding.has(key)));
+    const missing = list.filter(([key, , filled]) => !filled && !adding.has(key));
+    const pick = (key) => {
+      if (key === 'children') return openNewTicket({ parent: ticket.ref, project: ticket.project });
+      adding.add(key);
+      renderDetail(ticket);
+      $('panel-body').querySelector(`[data-section="${key}"] input, [data-section="${key}"] textarea`)?.focus();
+    };
+    return [
+      ...shown,
+      missing.length
+        ? el(
+            'p',
+            { class: 'detail-add small' },
+            el('span', { class: 'muted', text: 'Add ' }),
+            missing.flatMap(([key, label], i) => [i ? el('span', { class: 'muted', text: ' · ' }) : null, el('button', { class: 'link-button', type: 'button', text: label, onclick: () => pick(key) })]),
+          )
+        : null,
+    ];
   }
 
   /**
@@ -783,8 +835,8 @@ export function createTickets(ctx) {
     });
   }
 
-  function handoffBlock(ticket) {
-    const wrap = el('section', { class: 'detail-section' });
+  function handoffBlock(ticket, { editing = false } = {}) {
+    const wrap = el('section', { class: 'detail-section', 'data-section': 'handoff' });
     const view = () => {
       t.editing = false;
       const h = ticket.handoff;
@@ -824,7 +876,8 @@ export function createTickets(ctx) {
       );
       area.focus();
     };
-    view();
+    if (editing) edit();
+    else view();
     return wrap;
   }
 
@@ -840,7 +893,7 @@ export function createTickets(ctx) {
     const done = items.filter((c) => c.done).length;
     return el(
       'section',
-      { class: 'detail-section' },
+      { class: 'detail-section', 'data-section': 'criteria' },
       el('div', { class: 'section-head' }, el('h3', { text: `Acceptance criteria${items.length ? ` · ${done}/${items.length}` : ''}` })),
       el(
         'ul',
@@ -901,7 +954,7 @@ export function createTickets(ctx) {
     reason.addEventListener('change', saveReason);
     return el(
       'section',
-      { class: 'detail-section' },
+      { class: 'detail-section', 'data-section': 'links' },
       el(
         'div',
         { class: 'section-head' },
@@ -917,13 +970,25 @@ export function createTickets(ctx) {
       ticket.blockers.map((b) => row(b, () => void save(ticket, { blockedByRemove: [b.ref] }))),
       ticket.blocking.length ? el('p', { class: 'muted small link-label', text: 'Blocking' }) : null,
       ticket.blocking.map((b) => row(b, null)),
-      reason,
-      add,
+      // The two inputs stay folded behind one link unless there is a reason to show or the person
+      // just chose to add a blocker.
+      ticket.blockedReason || t.adding?.has('links-open') || !(ticket.blockers.length || ticket.blocking.length || ticket.closedAs || ticket.replaces?.length)
+        ? [reason, add]
+        : el('button', {
+            class: 'link-button small more-fields',
+            type: 'button',
+            text: '+ Add a blocker',
+            onclick: () => {
+              (t.adding ?? (t.adding = new Set())).add('links-open');
+              renderDetail(ticket);
+              $('panel-body').querySelector('[data-section="links"] input')?.focus();
+            },
+          }),
     );
   }
 
-  function descriptionBlock(ticket) {
-    const wrap = el('section', { class: 'detail-section' });
+  function descriptionBlock(ticket, { editing = false } = {}) {
+    const wrap = el('section', { class: 'detail-section', 'data-section': 'description' });
     const view = () => {
       t.editing = false;
       wrap.replaceChildren(
@@ -955,14 +1020,15 @@ export function createTickets(ctx) {
       );
       area.focus();
     };
-    view();
+    if (editing) edit();
+    else view();
     return wrap;
   }
 
   function childrenBlock(ticket) {
     return el(
       'section',
-      { class: 'detail-section' },
+      { class: 'detail-section', 'data-section': 'children' },
       el(
         'div',
         { class: 'section-head' },

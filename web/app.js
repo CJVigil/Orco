@@ -569,24 +569,28 @@ function taskCard(message) {
           el('button', { class: 'ghost small', type: 'button', title: 'Not good: tell the agent why', text: `▼ ${feedback.down || ''}`.trim(), onclick: () => void rateTask(id, 'down') }),
         )
       : null,
-    state.me.kind === 'user'
-      ? el('button', { class: 'ghost small', type: 'button', text: 'Trail', title: 'What the agent did on this task', onclick: () => void showTrail(id) })
-      : null,
-    open && mine
-      ? el('button', {
-          class: 'ghost small',
-          type: 'button',
-          text: 'Cancel',
-          onclick: async () => {
-            if (!confirm(`Cancel task #${id}?`)) return;
-            try {
-              await api(`/tasks/${id}`, { method: 'POST', body: { state: 'cancelled' } });
-            } catch (err) {
-              alert(err.message);
-            }
-          },
-        })
-      : null,
+    el(
+      'span',
+      { class: 'task-actions' },
+      state.me.kind === 'user'
+        ? el('button', { class: 'ghost small', type: 'button', text: 'Trail', title: 'What the agent did on this task', onclick: () => void showTrail(id) })
+        : null,
+      open && mine
+        ? el('button', {
+            class: 'ghost small',
+            type: 'button',
+            text: 'Cancel',
+            onclick: async () => {
+              if (!confirm(`Cancel task #${id}?`)) return;
+              try {
+                await api(`/tasks/${id}`, { method: 'POST', body: { state: 'cancelled' } });
+              } catch (err) {
+                alert(err.message);
+              }
+            },
+          })
+        : null,
+    ),
   );
   const hint = el('div', {
     class: 'task-hint small',

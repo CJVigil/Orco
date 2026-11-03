@@ -3904,3 +3904,60 @@ button:disabled {
     white-space: normal;
   }
 }
+
+/* Ticket detail: empty sections fold into one line. */
+
+.detail-add {
+  margin: 0.25rem 0 0;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.detail-add .link-button,
+.more-fields {
+  color: var(--muted);
+}
+
+.detail-add .link-button:hover,
+.more-fields:hover {
+  color: var(--text);
+}
+
+.more-fields {
+  justify-self: start;
+  padding: 0.15rem 0;
+}
+
+/* Secondary task actions (Trail, Cancel) wait until the card is pointed at or focused, on devices
+   that can hover. They float over the card's end, so they reserve no space while hidden. */
+.task-actions:empty {
+  display: none;
+}
+
+.task-actions {
+  display: inline-flex;
+  gap: 0.2rem;
+}
+
+@media (hover: hover) {
+  .task-card {
+    position: relative;
+  }
+
+  .task-card .task-actions {
+    position: absolute;
+    right: 0.3rem;
+    top: 50%;
+    transform: translateY(-50%);
+    padding-left: 0.4rem;
+    background: var(--bg-raised);
+    box-shadow: -12px 0 12px var(--bg-raised);
+    opacity: 0;
+    transition: opacity 0.12s;
+  }
+
+  .task-card:hover .task-actions,
+  .task-card:focus-within .task-actions {
+    opacity: 1;
+  }
+}

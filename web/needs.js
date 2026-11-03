@@ -51,12 +51,24 @@ export function createNeeds(ctx) {
         kind: 'Do',
         title: t.waitingOn.ask,
         detail: `${t.ref} · ${t.title}${t.assignee ? ` · for ${t.assignee.name}` : ''}`,
-        actions: () => [
-          el('button', { class: 'primary small', type: 'button', text: 'Done', onclick: () => void send('done') }),
-          el('button', { class: 'ghost small', type: 'button', text: 'Not yet', title: 'Ask me again tomorrow', onclick: () => void send('not_yet') }),
-          reply,
-          el('button', { class: 'ghost small', type: 'button', text: 'Open', onclick: () => void openTicket(t.ref) }),
-        ],
+        actions: () => {
+          // The reply box stays folded until asked for: two clear choices first.
+          const replyButton = el('button', {
+            class: 'ghost small',
+            type: 'button',
+            text: 'Reply',
+            onclick: () => {
+              replyButton.replaceWith(reply);
+              reply.focus();
+            },
+          });
+          return [
+            el('button', { class: 'primary small', type: 'button', text: 'Done', onclick: () => void send('done') }),
+            el('button', { class: 'ghost small', type: 'button', text: 'Not yet', title: 'Ask me again tomorrow', onclick: () => void send('not_yet') }),
+            replyButton,
+            el('button', { class: 'ghost small', type: 'button', text: 'Open', onclick: () => void openTicket(t.ref) }),
+          ];
+        },
       });
     }
     for (const r of inbox.reviews) {
@@ -140,12 +152,15 @@ export function createNeeds(ctx) {
       return d.toISOString();
     };
     const snooze = (until) => act(() => api('/snoozes', { method: 'POST', body: { key, until } }));
-    return el(
-      'span',
-      { class: 'needs-snooze' },
-      el('button', { class: 'ghost small', type: 'button', text: 'Snooze 1 h', onclick: () => void snooze(new Date(Date.now() + 3600_000).toISOString()) }),
-      el('button', { class: 'ghost small', type: 'button', text: 'Tomorrow', title: 'Until 9:00 tomorrow', onclick: () => void snooze(tomorrow()) }),
-    );
+    // One quiet "Later" instead of two buttons on every card; it opens into the two choices.
+    const wrap = el('span', { class: 'needs-snooze' });
+    const choices = () =>
+      wrap.replaceChildren(
+        el('button', { class: 'ghost small', type: 'button', text: 'In 1 hour', onclick: () => void snooze(new Date(Date.now() + 3600_000).toISOString()) }),
+        el('button', { class: 'ghost small', type: 'button', text: 'Tomorrow', title: 'Until 9:00 tomorrow', onclick: () => void snooze(tomorrow()) }),
+      );
+    wrap.replaceChildren(el('button', { class: 'ghost small needs-later', type: 'button', text: 'Later', title: 'Hide this for now', onclick: () => (choices(), wrap.querySelector('button')?.focus()) }));
+    return wrap;
   }
 
   function digestCard(digest) {
