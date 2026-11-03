@@ -890,6 +890,11 @@ export function createApp(store: Store, options: AppOptions = {}) {
     }
     res.json(messages);
   });
+  api.post('/messages/:id/edit', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a message id');
+    res.json(store.editMessage(req.participant!, id, str(req.body?.text, 'text') ?? ''));
+  });
   api.post('/messages', (req, res) => {
     const { room, text, thread_id, attachment_ids, external } = req.body ?? {};
     const ids = Array.isArray(attachment_ids) ? attachment_ids.map((id: unknown) => optionalInt(id) ?? NaN) : [];
@@ -1802,6 +1807,9 @@ export function createApp(store: Store, options: AppOptions = {}) {
       latest = Math.max(latest, message.id);
       if (store.canSee(me, message.projectId)) send('message', message, { room: message.room });
     };
+    const onMessageEdit = (message: Message) => {
+      if (store.canSee(me, message.projectId)) send('message_edit', message, { room: message.room });
+    };
     const onStructure = () => send('structure', {});
     const onTask = (task: Task) => {
       if (store.canSee(me, task.projectId)) send('task', task, { room: task.room });
@@ -1871,6 +1879,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
     store.events.on('flag', onFlag);
     store.events.on('summary', onSummary);
     store.events.on('message', onMessage);
+    store.events.on('message_edit', onMessageEdit);
     store.events.on('structure', onStructure);
     store.events.on('task', onTask);
     store.events.on('lock', onLock);
@@ -1943,6 +1952,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
       store.events.off('flag', onFlag);
       store.events.off('summary', onSummary);
       store.events.off('message', onMessage);
+      store.events.off('message_edit', onMessageEdit);
       store.events.off('structure', onStructure);
       store.events.off('task', onTask);
       store.events.off('lock', onLock);

@@ -81,6 +81,8 @@ export interface Message {
   owner: string | null;
   text: string;
   createdAt: string;
+  /** When its author last edited it (#93), or null. */
+  editedAt: string | null;
   mentions: string[];
   replyCount: number;
   task: TaskSummary | null;
@@ -198,12 +200,16 @@ interface MessageRow {
   external_source: string | null;
   external_text: string | null;
   created_at: string;
+  edited_at: string | null;
   reply_count: number;
 }
 
+/** How long after posting a person may still edit a message. */
+const EDIT_WINDOW_MS = 24 * 3600_000;
+
 const MESSAGE_SELECT = `
   SELECT m.id, m.room_id, r.project_id, p.name AS project, r.name AS room, m.thread_id, a.name AS author,
-         a.kind AS author_kind, o.name AS owner, m.text, m.external_source, m.external_text, m.created_at,
+         a.kind AS author_kind, o.name AS owner, m.text, m.external_source, m.external_text, m.created_at, m.edited_at,
          (SELECT count(*) FROM messages t WHERE t.thread_id = m.id) AS reply_count
   FROM messages m
   JOIN rooms r ON r.id = m.room_id
@@ -963,6 +969,33 @@ export class Store {
     return message;
   }
 
+  /**
+   * A person fixes their own plain message within a day (#93). An edit pings no one new (mentions stay
+   * as posted), keeps secrets out like a post, and the audit log keeps the text it replaced.
+   */
+  editMessage(actor: Participant, id: number, text: string): Message {
+    const row = this.db.prepare(`${MESSAGE_SELECT} WHERE m.id = ?`).get(id) as MessageRow | undefined;
+    if (!row || !this.canSeeRoomId(actor, row.room_id)) throw new OrcoError('not_found', `No message ${id}`);
+    if (actor.kind !== 'user') throw new OrcoError('forbidden', 'Only people edit their messages');
+    if (row.author !== actor.name) throw new OrcoError('forbidden', 'You can only edit your own messages');
+    if (Date.parse(row.created_at) < this.now() - EDIT_WINDOW_MS) throw new OrcoError('conflict', 'Messages can be edited for a day after they are posted');
+    const current = this.toMessage(row);
+    if (current.task || current.approval || current.question || current.review || current.external) {
+      throw new OrcoError('conflict', 'A message that carries a task, approval, question, review or relayed text cannot be edited');
+    }
+    this.assertWrite(actor, row.project_id);
+    const trimmed = this.hideSecrets(actor, text.trim());
+    if (!trimmed && current.attachments.length === 0) throw new OrcoError('invalid', 'Message text is empty');
+    if (trimmed.length > MAX_TEXT) throw new OrcoError('invalid', `Message is over ${MAX_TEXT} characters`);
+    if (trimmed === row.text) return current;
+    this.checkRate(actor, 'post');
+    this.db.prepare('UPDATE messages SET text = ?, edited_at = ? WHERE id = ?').run(trimmed, new Date(this.now()).toISOString(), id);
+    this.audit.record(actor, 'message.edit', { projectId: row.project_id, subject: `message:${id}`, detail: { from: row.text, to: trimmed } });
+    const message = this.message(id);
+    this.events.emit('message_edit', message);
+    return message;
+  }
+
   read(
     actor: Participant,
     roomRef: string,
@@ -1274,6 +1307,7 @@ export class Store {
       owner: row.owner,
       text: row.text,
       createdAt: row.created_at,
+      editedAt: row.edited_at,
       mentions: mentions.map((m) => m.name),
       replyCount: row.reply_count,
       task: this.tasks.summaryForMessage(row.id),

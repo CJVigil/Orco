@@ -793,6 +793,14 @@ grouped by folder when the project has folders), a detail panel with comments an
 pages for milestones, cycles, notes, schedules and workflow settings. *Needs you* gathers what waits on you, three at a time: approvals, questions,
 asks, reviews, flags and stalled tasks, each with its one action. The Inbox holds your mentions and suggested follow-ups,
 with your agents' open tasks folded under one line, so nothing shows in both.
+It is keyboard first, like Claude Code: **Ctrl+K** (⌘K) jumps to any room, ticket (by key or
+words), place or person, and acts on the open ticket (assign, move, next step, ask someone; Tab on a
+ticket gives its actions). In the composer or a ticket's comment box, `/` lists the commands, each
+with what it does: `/ticket "title"`, `/assign @agent`, `/next "…"`, `/waiting @person "…"`, `/done`,
+`/search …` and `/task @agent …`. Typing a ticket key (`SHO-`) suggests tickets, and `@` people and
+agents (Tab accepts). Up in an empty composer edits your last message (for a day; an edit pings no
+one new), and Escape closes the open panel.
+
 It works on phones and installs as an app. The theme button next to *Sign out* switches between System, Light
 and Dark, and remembers your choice in that browser.
 

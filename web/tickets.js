@@ -1,6 +1,8 @@
 // Tickets: board, list, ticket details, milestones, cycles and workflow settings for one project.
 // Builds DOM through the `el` helper from app.js; ticket text is untrusted and only ever set as text.
 
+import { parseCommand } from './commands.js';
+
 const TABS = [
   ['board', 'Board'],
   ['list', 'List'],
@@ -948,6 +950,7 @@ export function createTickets(ctx) {
   }
 
   function renderDetail(ticket, warning) {
+    t.openProject = ticket.project;
     const body = $('panel-body');
     const draft = body.querySelector('.comment-box textarea')?.value ?? '';
     $('panel-title').textContent = ticket.ref;
@@ -1586,10 +1589,21 @@ export function createTickets(ctx) {
         el('span', {}, a.actor ? [el('strong', { text: who }), ` ${text}`] : `${text[0].toUpperCase()}${text.slice(1)}`, a.kind === 'task' && a.body ? el('span', { class: 'activity-note', text: ` — ${a.body}` }) : null, el('span', { class: 'muted small', text: ` · ${ago(a.createdAt)}` })),
       );
     });
-    const box = el('textarea', { rows: '2', placeholder: 'Leave a comment', 'aria-label': 'Comment' });
+    const box = el('textarea', { rows: '2', placeholder: 'Leave a comment, or / for commands', 'aria-label': 'Comment' });
     box.value = draft;
     const send = async () => {
       if (!box.value.trim()) return;
+      // A slash command acts on this ticket instead of posting (#93): /next "call Michael".
+      const command = parseCommand(box.value);
+      if (command && command.name !== 'task') {
+        try {
+          await ctx.runCommand(command, { ticket: ticket.ref, project: ticket.project });
+          box.value = '';
+        } catch (err) {
+          notify(err.message);
+        }
+        return;
+      }
       try {
         const updated = await api(`/tickets/${ticket.ref}/comments`, { method: 'POST', body: { text: box.value } });
         box.value = '';
@@ -1599,8 +1613,15 @@ export function createTickets(ctx) {
       }
     };
     box.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) void send();
+      // A command is one line, so Enter runs it; a comment sends with Ctrl+Enter.
+      if (event.key === 'Enter' && (event.metaKey || event.ctrlKey || (!event.shiftKey && parseCommand(box.value)))) {
+        event.preventDefault();
+        void send();
+      }
     });
+    const commentBox = el('div', { class: 'comment-box' }, box, el('div', { class: 'row-end' }, el('button', { class: 'primary small', type: 'button', text: 'Comment', onclick: () => void send() })));
+    ctx.attachCommands?.(box, 'ticket');
+    ctx.attachTicketRefs?.(box);
     return el(
       'section',
       { class: 'detail-section' },
@@ -1612,7 +1633,7 @@ export function createTickets(ctx) {
         el('label', { class: 'check small' }, el('input', { type: 'checkbox', checked: peopleOnly, onchange: (event) => (setPeopleOnly(event.target.checked), renderDetail(ticket)) }), 'People only'),
       ),
       el('ol', { class: 'activity' }, foldRuns(items, entries)),
-      el('div', { class: 'comment-box' }, box, el('div', { class: 'row-end' }, el('button', { class: 'primary small', type: 'button', text: 'Comment', onclick: () => void send() }))),
+      commentBox,
       el('p', { class: 'muted small detail-foot', text: `Opened by ${ticket.creator} ${ago(ticket.createdAt)} · updated ${ago(ticket.updatedAt)}` }),
     );
   }
@@ -2557,5 +2578,8 @@ export function createTickets(ctx) {
     );
   }
 
-  return { show, onEvent, onTask, onNotes, onSchedules, onFiles, inboxRow, openTicket, openNewTicket, navFolders, get project() { return t.project; } };
+  /** The ticket open in the panel, for commands and the palette (#93). */
+  const openRef = () => (panel() === 'ticket' && t.open ? { ref: t.open, project: t.openProject } : null);
+
+  return { show, onEvent, onTask, onNotes, onSchedules, onFiles, inboxRow, openTicket, openNewTicket, navFolders, openRef, planFor, get project() { return t.project; } };
 }

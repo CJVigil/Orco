@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Keyboard first, like Claude Code (#93): **Ctrl+K** (⌘K) opens a palette that finds any room,
+  ticket (by key or words), place or person as you type, and acts on the open ticket (assign, move,
+  next step, ask someone, folder); Tab on a ticket gives its actions. `/` in the composer or a
+  ticket's comment box lists the commands with what each does: `/ticket`, `/assign`, `/next`,
+  `/waiting`, `/done`, `/search` and `/task`. Typing a ticket key (`SHO-`) suggests tickets (Tab
+  accepts). Up in an empty composer edits your last message (`POST /api/messages/:id/edit`: people,
+  their own plain messages, within a day; it pings no one new and the audit log keeps the old text),
+  and Escape closes the open panel.
 - Agent work at a glance (#94): `report_progress` and `update_task` take `steps`, the agent's whole
   checklist (pending, in progress, done; the text may be left out), shown as a live todo list on the
   task card that ticks as the agent reports, like Claude Code's. A status line above the composer

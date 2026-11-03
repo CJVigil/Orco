@@ -977,6 +977,9 @@ export const MIGRATIONS = [
   // 37: an agent's checklist for a task, like Claude Code's todo list (#94): a JSON list of steps.
   `
   ALTER TABLE tasks ADD COLUMN steps TEXT;
+  `,  // 38: when a person last edited their message (#93).
+  `
+  ALTER TABLE messages ADD COLUMN edited_at TEXT;
   `,
 ];
 

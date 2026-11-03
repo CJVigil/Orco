@@ -4800,3 +4800,133 @@ details.md-work-item[open] > summary .md-work-action::after {
   height: 100%;
   background: var(--ok);
 }
+
+/* Command palette (#93). */
+.palette-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  justify-items: center;
+  align-items: start;
+  padding: 12vh 1rem 1rem;
+  background: color-mix(in srgb, #000 35%, transparent);
+}
+
+.palette {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(36rem, 100%);
+  max-height: 70vh;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-raised);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+
+.palette-input {
+  width: 100%;
+  padding: 0.85rem 1rem;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: none;
+  color: var(--text);
+  font-size: 1rem;
+  outline: none;
+}
+
+.palette-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.3rem;
+  overflow-y: auto;
+}
+
+.palette-item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding: 0.45rem 0.6rem;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.palette-item.active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.palette-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette-hint-text {
+  margin-left: auto;
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette-tab {
+  flex: none;
+  font-family: var(--mono);
+  opacity: 0;
+}
+
+.palette-item.active .palette-tab {
+  opacity: 1;
+}
+
+.palette-title,
+.palette-empty {
+  padding: 0.45rem 0.6rem;
+}
+
+.palette-hint {
+  padding: 0.4rem 1rem;
+  border-top: 1px solid var(--border);
+}
+
+/* Editing a message from the composer (#93): a note just above the box. */
+.edit-banner {
+  position: absolute;
+  left: 1rem;
+  bottom: 100%;
+  padding: 0.1rem 0.5rem;
+  border-radius: 6px 6px 0 0;
+  background: var(--bg);
+  color: var(--accent);
+}
+
+.composer.editing textarea {
+  border-color: var(--accent);
+}
+
+.msg-head .edited {
+  margin-left: 0.25rem;
+}
+
+.suggest-menu .mention-name {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+}
+
+.comment-box {
+  position: relative;
+}
+
+.comment-box .mention-menu {
+  left: 0;
+  max-width: 100%;
+}
+
+/* While a message is being edited, its note takes the status line's place. */
+.main:has(#composer.editing) .work-status {
+  visibility: hidden;
+}

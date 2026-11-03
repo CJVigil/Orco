@@ -1,4 +1,6 @@
-import { attachMentionAutocomplete } from './autocomplete.js';
+import { attachMentionAutocomplete, attachSuggest } from './autocomplete.js';
+import { commandSuggestions, parseCommand } from './commands.js';
+import { createPalette } from './palette.js';
 import { icon } from './icons.js';
 import { codeChildren, renderMarkdown } from './markdown.js';
 import * as notify from './notify.js';
@@ -255,6 +257,7 @@ function renderMessage(message, previous, { inThread = false } = {}) {
       message.authorKind === 'agent' ? el('span', { class: 'tag', text: 'Agent' }) : null,
       message.owner ? el('span', { class: 'owner', text: `owned by ${message.owner}` }) : null,
       el('time', { class: 'time', datetime: message.createdAt, title: new Date(message.createdAt).toLocaleString(), text: formatTime(message.createdAt) }),
+      message.editedAt ? el('span', { class: 'edited muted small', title: `Edited ${new Date(message.editedAt).toLocaleString()}`, text: '(edited)' }) : null,
     ),
     message.text ? foldedBody(message.text) : null,
     message.external ? externalBlock(message.external) : null,
@@ -2215,6 +2218,7 @@ function connect() {
     dot.title = 'Live';
   });
   events.addEventListener('message', (event) => onMessage(JSON.parse(event.data)));
+  events.addEventListener('message_edit', (event) => onMessageEdit(JSON.parse(event.data)));
   events.addEventListener('structure', async () => {
     peopleCache.clear();
     await loadStructure();
@@ -2405,8 +2409,17 @@ async function uploadImage(file, room) {
   return data.id;
 }
 
-function wireComposer(form, textarea, pendingEl, roomOf, send) {
+function wireComposer(form, textarea, pendingEl, roomOf, send, options = {}) {
   const pending = [];
+  // Up in an empty box edits your last message (#93); Escape cancels the edit.
+  let editing = null;
+  const banner = el('div', { class: 'edit-banner small', hidden: true });
+  form.prepend(banner);
+  const stopEditing = () => {
+    editing = null;
+    banner.hidden = true;
+    form.classList.remove('editing');
+  };
   const fileInput = form.querySelector('.attach-input');
   const renderPending = () => {
     pendingEl.replaceChildren(
@@ -2478,11 +2491,40 @@ function wireComposer(form, textarea, pendingEl, roomOf, send) {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
       form.requestSubmit();
+    } else if (event.key === 'ArrowUp' && !textarea.value && !editing && options.lastOwn) {
+      const last = options.lastOwn();
+      if (!last) return;
+      event.preventDefault();
+      editing = last;
+      textarea.value = last.text;
+      autosize(textarea);
+      banner.textContent = 'Editing your message · Enter to save · Esc to cancel';
+      banner.hidden = false;
+      form.classList.add('editing');
+    } else if (event.key === 'Escape' && editing) {
+      event.preventDefault();
+      event.stopPropagation();
+      stopEditing();
+      textarea.value = '';
+      autosize(textarea);
     }
   });
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     const text = textarea.value.trim();
+    if (editing) {
+      const id = editing.id;
+      try {
+        const edited = await api(`/messages/${id}/edit`, { method: 'POST', body: { text } });
+        onMessageEdit(edited);
+        stopEditing();
+        textarea.value = '';
+        autosize(textarea);
+      } catch (err) {
+        alert(err.message);
+      }
+      return;
+    }
     if (!text && pending.length === 0) return;
     textarea.disabled = true;
     try {
@@ -3366,6 +3408,9 @@ const tickets = createTickets({
   rooms: () => state.rooms,
   $,
   onNav: () => renderNav(),
+  runCommand: (command, where) => runCommand(command, where),
+  attachCommands: (box, where) => attachCommands(box, where),
+  attachTicketRefs: (box) => attachTicketRefs(box),
 });
 
 const guide = createGuide({
@@ -3413,17 +3458,217 @@ function parseTask(text) {
   return { ...body, request };
 }
 
-wireComposer($('composer'), $('composer-text'), $('composer-pending'), () => state.room.ref, async (text, ids) => {
-  if (text.startsWith('/task')) {
-    if (ids.length) throw new Error('Tasks cannot carry attachments yet; post the file, then create the task.');
-    await api('/tasks', { method: 'POST', body: { ...parseTask(text), room: state.room.ref } });
-    return null;
-  }
-  return api('/messages', { method: 'POST', body: { room: state.room.ref, text, attachment_ids: ids } });
-});
-wireComposer($('thread-composer'), $('thread-text'), $('thread-pending'), () => state.thread.room, (text, ids) =>
-  api('/messages', { method: 'POST', body: { room: state.thread.room, text, thread_id: state.thread.id, attachment_ids: ids } }),
+wireComposer(
+  $('composer'),
+  $('composer-text'),
+  $('composer-pending'),
+  () => state.room.ref,
+  async (text, ids) => {
+    if (text.startsWith('/task')) {
+      if (ids.length) throw new Error('Tasks cannot carry attachments yet; post the file, then create the task.');
+      await api('/tasks', { method: 'POST', body: { ...parseTask(text), room: state.room.ref } });
+      return null;
+    }
+    const command = parseCommand(text);
+    if (command) {
+      await runCommand(command, { project: state.room.project });
+      return null;
+    }
+    return api('/messages', { method: 'POST', body: { room: state.room.ref, text, attachment_ids: ids } });
+  },
+  { lastOwn: () => lastEditable(state.messages) },
 );
+wireComposer(
+  $('thread-composer'),
+  $('thread-text'),
+  $('thread-pending'),
+  () => state.thread.room,
+  (text, ids) => api('/messages', { method: 'POST', body: { room: state.thread.room, text, thread_id: state.thread.id, attachment_ids: ids } }),
+  { lastOwn: () => lastEditable(state.threadMessages) },
+);
+
+/* Keyboard first (#93): slash commands, ticket refs, the palette, Up to edit, Escape to close. */
+
+/** A short note at the bottom of the screen. */
+function toast(text) {
+  if (!text) return;
+  const node = el('div', { class: 'toast', role: 'status', text });
+  document.body.append(node);
+  setTimeout(() => node.remove(), 4000);
+}
+
+/** The project a ticket key belongs to, like SHO for shop. */
+const projectOfRef = (ref) => state.projects.find((p) => p.ticketKey === String(ref).split('-')[0])?.name ?? null;
+
+/**
+ * Runs a slash command. Ticket commands act on `ticket` (typed in its comment box) or on the ticket
+ * open in the panel; /ticket files one in `project`.
+ */
+async function runCommand(command, { ticket = null, project = null } = {}) {
+  if (command.error) throw new Error(command.error);
+  if (command.name === 'search') return void runSearch(command.query);
+  if (command.name === 'ticket') {
+    const where = project ?? (ticket ? projectOfRef(ticket) : null) ?? tickets.openRef()?.project;
+    if (!where) throw new Error('Tickets live in projects: use /ticket in a project room or ticket');
+    const result = await api(`/projects/${encodeURIComponent(where)}/tickets`, { method: 'POST', body: { title: command.title } });
+    toast(`Filed ${result.ticket.ref}`);
+    return void tickets.openTicket(result.ticket.ref);
+  }
+  const ref = ticket ?? tickets.openRef()?.ref;
+  if (!ref) throw new Error(`Open a ticket first, or type /${command.name} in its comment box`);
+  let body;
+  let done;
+  if (command.name === 'assign') [body, done] = [{ assignee: command.who }, command.who ? `assigned to ${command.who}` : 'unassigned'];
+  else if (command.name === 'next') [body, done] = [{ nextStep: command.text }, `next: ${command.text}`];
+  else if (command.name === 'waiting') [body, done] = [{ waitingOn: command.who, waitingAsk: command.ask }, `waiting on ${command.who}`];
+  else {
+    const plan = await tickets.planFor(projectOfRef(ref));
+    const status = plan.statuses.find((s) => s.category === 'completed');
+    [body, done] = [{ status: status.name }, `moved to ${status.name}`];
+  }
+  const result = await api(`/tickets/${encodeURIComponent(ref)}`, { method: 'POST', body });
+  toast(`${ref}: ${done}${result.warning ? `. ${result.warning}` : ''}`);
+  if (tickets.openRef()?.ref === ref) void tickets.openTicket(ref, { refresh: true, force: true });
+}
+
+/** Slash command suggestions with what each does, as soon as "/" is typed (#93). */
+function attachCommands(textarea, where) {
+  attachSuggest(
+    textarea,
+    {
+      name: `cmd-${textarea.id || where}`,
+      match: (before) => (/^\/[a-z]*$/.test(before) ? { start: 0, query: before } : null),
+      items: async (query) => commandSuggestions(query, where),
+      label: (c) => [c.usage, c.hint],
+      insert: (c) => (c.name === 'task' ? '/task @' : `/${c.name} `),
+    },
+    el,
+  );
+}
+
+// Ticket refs as you type their key (SHO-…), from each project's tickets, kept a minute.
+const refCache = new Map();
+
+async function ticketRefs(key, prefix) {
+  const project = state.projects.find((p) => p.ticketKey === key);
+  if (!project) return [];
+  let cached = refCache.get(project.name);
+  if (!cached || cached.at < Date.now() - 60_000) {
+    cached = { at: Date.now(), list: await api(`/tickets?project=${encodeURIComponent(project.name)}&limit=500`).catch(() => []) };
+    refCache.set(project.name, cached);
+  }
+  return cached.list
+    .filter((t) => String(t.number).startsWith(prefix))
+    .sort((a, b) => b.number - a.number)
+    .slice(0, 8);
+}
+
+function attachTicketRefs(textarea) {
+  attachSuggest(
+    textarea,
+    {
+      name: `ref-${textarea.id || 'box'}`,
+      match: (before) => {
+        const m = /(?:^|[\s(])([A-Z][A-Z0-9]{0,9})-(\d{0,9})$/.exec(before);
+        if (!m || !state.projects.some((p) => p.ticketKey === m[1])) return null;
+        return { start: before.length - m[1].length - 1 - m[2].length, query: m[2], key: m[1] };
+      },
+      items: (query, token) => ticketRefs(token.key, query),
+      label: (t) => [t.ref, t.title],
+      insert: (t) => `${t.ref} `,
+    },
+    el,
+  );
+}
+
+/** Your last message here that you can still edit: plain, and from the last day. */
+function lastEditable(messages) {
+  const since = Date.now() - 24 * 3600_000;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.author !== state.me.name) continue;
+    if (m.task || m.approval || m.question || m.review || m.external || Date.parse(m.createdAt) < since) return null;
+    return m;
+  }
+  return null;
+}
+
+/** Someone edited a message: show the new text where it is on screen. */
+function onMessageEdit(message) {
+  let touched = false;
+  for (const list of [state.messages, state.threadMessages]) {
+    const i = list.findIndex((m) => m.id === message.id);
+    if (i >= 0) {
+      list[i] = { ...list[i], text: message.text, editedAt: message.editedAt };
+      touched = true;
+    }
+  }
+  if (!touched) return;
+  renderMessages({ keepScroll: true });
+  if (state.panel === 'thread') renderThread({ keepScroll: true });
+}
+
+for (const [box, where] of [
+  [$('composer-text'), 'room'],
+  [$('thread-text'), 'thread'],
+]) {
+  attachCommands(box, where);
+  attachTicketRefs(box);
+}
+
+const palette = createPalette({
+  el,
+  api,
+  planFor: (project) => tickets.planFor(project),
+  currentTicket: () => tickets.openRef(),
+  rooms: () => state.rooms,
+  projects: () => state.projects,
+  people: () => api('/participants').then((list) => list.filter((p) => p.name !== state.me.name)).catch(() => []),
+  places: () => [
+    { label: 'Needs you', hint: 'what waits on you', run: () => (palette.close(), (location.hash = '#!needs')) },
+    { label: 'Inbox', hint: 'mentions', run: () => (palette.close(), void showInbox()) },
+    { label: 'Portfolio', hint: 'all projects', run: () => (palette.close(), (location.hash = '#!portfolio')) },
+    { label: 'My agents', hint: 'settings', run: () => (palette.close(), void showMyAgents()) },
+    { label: 'Notifications', hint: 'settings', run: () => (palette.close(), showNotifications()) },
+    ...(state.room?.project || tickets.openRef()
+      ? [{ label: 'New ticket', hint: state.room?.project ?? tickets.openRef()?.project, run: () => (palette.close(), void tickets.openNewTicket({ project: tickets.openRef()?.project ?? state.room.project })) }]
+      : []),
+  ],
+  openRoom: (ref) => (location.hash = `#${ref}`),
+  openTickets: (project) => (location.hash = `#~${project}/board`),
+  openTicket: (ref) => void tickets.openTicket(ref),
+  mention: (name) => {
+    const box = state.panel === 'thread' ? $('thread-text') : $('composer-text');
+    box.value = `${box.value}${box.value && !box.value.endsWith(' ') ? ' ' : ''}@${name} `;
+    box.focus();
+  },
+  search: (query) => void runSearch(query),
+  afterTicket: (ref) => {
+    if (tickets.openRef()?.ref === ref) void tickets.openTicket(ref, { refresh: true, force: true });
+  },
+  notify: toast,
+});
+
+// Say where the palette is: in the sidebar's search box.
+$('search-input').placeholder = `Search · ${/Mac|iPhone|iPad/.test(navigator.platform) ? '⌘K' : 'Ctrl+K'}`;
+
+document.addEventListener('keydown', (event) => {
+  if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'k') {
+    if ($('app').hidden) return;
+    event.preventDefault();
+    palette.open();
+    return;
+  }
+  // Escape closes the open panel, unless it is closing something smaller (a menu, a dialog, a draft).
+  if (event.key !== 'Escape' || event.defaultPrevented || palette.isOpen()) return;
+  if (document.querySelector('dialog[open]')) return;
+  const target = event.target;
+  if (target?.matches?.('input, textarea, select') && target.value) return;
+  if (state.panel) {
+    event.preventDefault();
+    closePanel();
+  }
+});
 
 /** Opens a sign-in link (#signin=…) if there is one, then starts the app. */
 async function boot() {
