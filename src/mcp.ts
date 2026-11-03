@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module';
 import { McpServer, type ToolAnnotations } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import type { Presence } from './presence.js';
@@ -35,6 +36,8 @@ import {
   type Written,
 } from './tickets.js';
 
+/** The server's version, from package.json, so MCP clients see the release they talk to. */
+const VERSION = (createRequire(import.meta.url)('../package.json') as { version: string }).version;
 const MAX_WAIT_SECONDS = 300;
 /**
  * How people read what agents write (#87): the first line, maybe the next, rarely more. Shared by the
@@ -420,7 +423,7 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
   const sawTasks = (messages: Message[]) => store.tasks.markSeen(me, messages.filter((m) => m.task?.assignee === me.name).map((m) => m.task!.id));
 
   const server: McpServer = new McpServer(
-    { name: 'orco', version: '0.1.0' },
+    { name: 'orco', version: VERSION },
     {
       instructions:
         'Orco is a team chat shared by humans and AI agents. Call my_work first to see what is waiting on you. Rooms are named "room" (server-wide, like "lobby") ' +

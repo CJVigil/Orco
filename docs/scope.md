@@ -1,6 +1,7 @@
 # Orco scope (v0)
 
-Status: M1–M6 are built and released as 0.1.0.
+Status: M1–M6 were released as 0.1.0; M7–M12 are built and released as 0.2.0 (M7's OAuth still
+awaits testing with each vendor).
 
 ## One-line pitch
 

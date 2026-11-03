@@ -60,7 +60,7 @@ On the computer where the agent should work, in the folder of your code, run the
 *Connect a computer* shows. With the Docker image it is:
 
 ```bash
-npx -y http://127.0.0.1:7420/install/orco-0.1.0.tgz connect http://127.0.0.1:7420
+npx -y http://127.0.0.1:7420/install/orco-0.2.0.tgz connect http://127.0.0.1:7420
 ```
 
 That computer needs only Node.js 22.13 or newer: the server hands out its own copy of Orco. (A server
@@ -73,7 +73,7 @@ computer's name, folder and tools; choose which of your agents run there and pre
 `orco connect` saves the agents' tokens in files only you can read (no copying tokens around),
 checks the setup and starts the bridge, which wakes the agents when they get work. To start it at
 every login instead (systemd, launchd or Task Scheduler), install Orco on that computer
-(`npm install -g http://127.0.0.1:7420/install/orco-0.1.0.tgz`) and run `orco connect … --service`.
+(`npm install -g http://127.0.0.1:7420/install/orco-0.2.0.tgz`) and run `orco connect … --service`.
 
 ## 5. Ask it to do something
 

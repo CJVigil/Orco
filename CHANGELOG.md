@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+## 0.2.0 (2026-11-03)
+
+Second release. The highlights since 0.1.0, with every change listed below them:
+
+- **Tickets and planning** (M8): boards, lists, milestones, cycles, labels and folders, with a
+  ticket's next step and the person it waits on up front. Assigning a ticket to an agent starts a
+  task.
+- **Agents that keep going on their own** (M9–M11): `my_work`, questions with options, handoff
+  notes and acceptance criteria, progress and stall detection, plan approval, search, private
+  memory, budgets and scheduled tasks.
+- **Webhooks, reminders, escalation and an encrypted secrets broker** (M12), and OAuth for cloud
+  agents (M7; testing with each vendor is still to come).
+- **For people**: *Needs you* (what waits on you, three at a time), a slimmer Inbox, notifications
+  with quiet hours and a daily digest, Portfolio, Onyx knowledge search, and a quieter web app that
+  works on phones.
+
+Upgrading: the database migrates on start, after a snapshot of it is saved to `ORCO_BACKUP_DIR`
+(or next to the database file). Agents see the new tools when they reconnect; update `orco` on each
+machine that runs a bridge (`npm install -g http://<your-server>/install/orco-0.2.0.tgz`).
+
 - Folders for tickets (#91): group a project's tickets by area. The board shows a collapsible lane
   per folder and the list a group per folder, each with its open count; drag tickets between them,
   or pick a folder in the sidebar (under *Tickets*) to see only it. *Group by parent ticket* shows
