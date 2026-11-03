@@ -1166,6 +1166,10 @@ function renderNav() {
       ),
     );
   }
+  // New project lives in the menu under your name; someone with no project yet sees it here too.
+  if (!state.projects.length) {
+    nav.append(el('button', { class: 'ghost wide nav-new-project', type: 'button', onclick: () => void newProject() }, icon('folder-plus'), el('span', { text: 'New project' })));
+  }
 }
 
 async function loadStructure() {
@@ -2329,15 +2333,17 @@ async function refreshInbox() {
   const inbox = await api('/inbox').catch(() => null);
   if (!inbox) return;
   const c = inbox.counts;
-  const count = c.approvals + c.questions + c.flags + c.stalled + (c.reviews ?? 0) + (c.suggestions ?? 0) + c.unseenMentions;
-  notify.setBadge(count);
+  const total = c.approvals + c.questions + c.flags + c.stalled + (c.reviews ?? 0) + (c.suggestions ?? 0) + c.unseenMentions;
+  notify.setBadge(total);
+  // A person's Inbox badge counts what the Inbox holds (mentions, suggestions); the rest counts on Needs you.
+  const count = state.me.kind === 'user' && !state.me.scope ? c.unseenMentions + (c.suggestions ?? 0) : total;
   announceNew(inbox);
   const badge = $('inbox-badge');
   badge.hidden = count === 0;
   badge.textContent = String(count);
   $('inbox').classList.toggle('has-items', count > 0);
   // Needs you counts only what waits on you to act.
-  const needsCount = c.approvals + c.questions + (c.waiting ?? 0) + (c.reviews ?? 0);
+  const needsCount = c.approvals + c.questions + (c.waiting ?? 0) + (c.reviews ?? 0) + c.flags + c.stalled;
   $('needs-count').hidden = needsCount === 0;
   $('needs-count').textContent = String(needsCount);
   if (state.panel === 'inbox') renderInbox(inbox);
@@ -2372,7 +2378,96 @@ function inboxHeading(text, count) {
   return el('h3', { class: 'inbox-heading' }, text, count ? el('span', { text: String(count) }) : null);
 }
 
+/** Follow-ups agents suggested, each with File ticket and Dismiss. */
+function suggestionRows(inbox) {
+  if (!inbox.suggestions?.length) return [];
+  return [
+    inboxHeading('Suggested follow-ups', inbox.suggestions.length),
+    ...inbox.suggestions.map((f) =>
+      el(
+        'div',
+        { class: 'inbox-card' },
+        el(
+          'button',
+          { class: 'inbox-row', type: 'button', onclick: () => void openTask(f.taskId) },
+          el('span', { class: 'inbox-meta' }, el('strong', { text: f.author }), el('span', { class: 'muted', text: ` suggests, from task #${f.taskId} · ${f.project}` })),
+          el('span', { class: 'inbox-text', text: f.title }),
+          f.description ? el('span', { class: 'flag-quote', text: snippet(f.description, 240) }) : null,
+        ),
+        el(
+          'div',
+          { class: 'row-end' },
+          el('button', { class: 'ghost small', type: 'button', text: 'Dismiss', onclick: () => void decideSuggestion(f.id, 'dismiss') }),
+          el('button', { class: 'primary small', type: 'button', text: 'File ticket', onclick: () => void decideSuggestion(f.id, 'accept') }),
+        ),
+      ),
+    ),
+  ];
+}
+
+/**
+ * A person's Inbox holds only what Needs you does not: mentions and suggested follow-ups, with agents' open tasks folded
+ * under one line. Approvals, questions, asks and reviews live in Needs you alone, so nothing shows
+ * twice. Agents (and scoped sessions) keep the full list.
+ */
+function renderPersonInbox(inbox) {
+  const c = inbox.counts;
+  const needsCount = c.approvals + c.questions + (c.waiting ?? 0) + (c.reviews ?? 0) + c.flags + c.stalled;
+  const mentions = inbox.mentions.filter((m) => m.question?.state !== 'open');
+  const unread = mentions.filter((m) => !m.seen);
+  $('panel-body').replaceChildren(
+    needsCount
+      ? el(
+          'button',
+          { class: 'inbox-row inbox-needs', type: 'button', onclick: () => ((location.hash = '#!needs'), closePanel()) },
+          el('strong', { text: `${needsCount} ${needsCount === 1 ? 'thing needs' : 'things need'} you` }),
+          el('span', { class: 'muted small', text: 'Open Needs you →' }),
+        )
+      : null,
+    el(
+      'div',
+      { class: 'inbox-heading-row' },
+      inboxHeading('Mentions', unread.length),
+      unread.length
+        ? el('button', {
+            class: 'ghost small',
+            type: 'button',
+            text: 'Mark all read',
+            onclick: async () => {
+              await api('/inbox/seen', { method: 'POST', body: { up_to_id: unread[0].id } }).catch(() => {});
+              void refreshInbox();
+            },
+          })
+        : null,
+    ),
+    ...(mentions.length ? mentions.map((m) => messageRow(m, { unseen: !m.seen })) : [el('p', { class: 'panel-intro muted small', text: 'No one has mentioned you yet.' })]),
+    ...suggestionRows(inbox),
+    inbox.tasks.length
+      ? el(
+          'details',
+          { class: 'inbox-fold' },
+          el('summary', { class: 'small muted', text: `Your agents' open tasks · ${inbox.tasks.length}` }),
+          inbox.tasks.map((t) =>
+            el(
+              'button',
+              { class: 'inbox-row', type: 'button', onclick: () => void jumpTo({ id: t.messageId, room: t.room, threadId: null }) },
+              el(
+                'span',
+                { class: 'inbox-meta' },
+                el('strong', { text: `Task #${t.id}` }),
+                el('span', { class: 'muted', text: ` → ${t.assignee} · ` }),
+                t.stalled ? el('span', { class: 'chip stalled', text: 'Stalled' }) : el('span', { class: `chip task-${t.state}`, text: TASK_LABEL[t.state] }),
+              ),
+              el('span', { class: 'inbox-text', text: snippet(t.request) }),
+            ),
+          ),
+        )
+      : null,
+  );
+}
+
 function renderInbox(inbox) {
+  if (state.me.kind === 'user' && !state.me.scope) return renderPersonInbox(inbox);
   const sections = [];
   if (inbox.approvals.length) {
     sections.push(
@@ -2483,30 +2578,7 @@ function renderInbox(inbox) {
       ),
     );
   }
-  if (inbox.suggestions?.length) {
-    sections.push(
-      inboxHeading('Suggested follow-ups', inbox.suggestions.length),
-      ...inbox.suggestions.map((f) =>
-        el(
-          'div',
-          { class: 'inbox-card' },
-          el(
-            'button',
-            { class: 'inbox-row', type: 'button', onclick: () => void openTask(f.taskId) },
-            el('span', { class: 'inbox-meta' }, el('strong', { text: f.author }), el('span', { class: 'muted', text: ` suggests, from task #${f.taskId} · ${f.project}` })),
-            el('span', { class: 'inbox-text', text: f.title }),
-            f.description ? el('span', { class: 'flag-quote', text: snippet(f.description, 240) }) : null,
-          ),
-          el(
-            'div',
-            { class: 'row-end' },
-            el('button', { class: 'ghost small', type: 'button', text: 'Dismiss', onclick: () => void decideSuggestion(f.id, 'dismiss') }),
-            el('button', { class: 'primary small', type: 'button', text: 'File ticket', onclick: () => void decideSuggestion(f.id, 'accept') }),
-          ),
-        ),
-      ),
-    );
-  }
+  sections.push(...suggestionRows(inbox));
   if (inbox.stalled.length) {
     sections.push(
       inboxHeading('Stalled', inbox.stalled.length),

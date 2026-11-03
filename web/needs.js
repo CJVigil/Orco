@@ -125,7 +125,8 @@ export function createNeeds(ctx) {
 
   function fyi(inbox) {
     const tasks = inbox.tasks ?? [];
-    const mentions = (inbox.mentions ?? []).filter((m) => !m.seen);
+    // Open questions are already cards above; count them once.
+    const mentions = (inbox.mentions ?? []).filter((m) => !m.seen && m.question?.state !== 'open');
     const suggestions = inbox.suggestions ?? [];
     const count = tasks.length + mentions.length + suggestions.length;
     if (!count) return null;

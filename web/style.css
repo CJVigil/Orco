@@ -3997,3 +3997,25 @@ button:disabled {
     opacity: 1;
   }
 }
+
+/* Inbox for people: one pointer to Needs you, then mentions; agents' tasks folded. */
+.inbox-needs {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.75rem 1rem 0.25rem;
+  width: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.inbox-fold {
+  margin-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.inbox-fold > summary {
+  cursor: pointer;
+  padding: 0.6rem 1rem;
+}
