@@ -1244,6 +1244,8 @@ function renderNav() {
               icon('task'),
               el('span', { text: 'Tickets' }),
             ),
+        // The folders of the project whose tickets are on screen (#91).
+        onTickets ? el('div', { class: 'nav-folders' }, tickets.navFolders(project.name)) : null,
         shown.map(roomLink),
       ),
     );
@@ -3148,6 +3150,7 @@ const tickets = createTickets({
   me: () => state.me,
   rooms: () => state.rooms,
   $,
+  onNav: () => renderNav(),
 });
 
 const guide = createGuide({

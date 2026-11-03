@@ -87,6 +87,21 @@ export interface Label {
   color: string;
 }
 
+/** A folder inside a project, grouping tickets by area (#91), with its open and total ticket counts. */
+export interface Folder {
+  id: number;
+  name: string;
+  emoji: string | null;
+  color: string | null;
+  position: number;
+  open: number;
+  total: number;
+}
+
+export const MAX_FOLDERS = 100;
+/** Folder names: 1-40 characters on one line; "none" is kept for "no folder" in filters. */
+const FOLDER_NAME = /^[^\s\p{C}](?:[^\p{C}]{0,38}[^\s\p{C}])?$/u;
+
 export interface Progress {
   tickets: number;
   completed: number;
@@ -128,6 +143,8 @@ export interface TicketSummary {
   labels: Label[];
   milestone: { id: number; name: string } | null;
   cycle: { id: number; number: number } | null;
+  /** The folder it sits in, if any. */
+  folder: { id: number; name: string; emoji: string | null } | null;
   parent: string | null;
   task: { id: number; state: TaskState; since: string } | null;
   /** Unfinished tickets this one waits on. */
@@ -203,6 +220,8 @@ export interface TicketInput {
   labels?: string[];
   milestone?: string | null;
   cycle?: number | 'current' | null;
+  /** The folder to put it in, by name; null or empty takes it out of its folder. */
+  folder?: string | null;
   parent?: string | null;
   sort?: number;
   handoff?: string;
@@ -238,6 +257,8 @@ export interface TicketFilter {
   label?: string;
   milestone?: string;
   cycle?: number | 'current';
+  /** A folder by name, or "none" for tickets in no folder. */
+  folder?: string;
   priority?: Priority;
   parent?: string;
   /** Only blocked tickets (true) or only unblocked ones (false). */
@@ -253,6 +274,7 @@ export interface ProjectPlan {
   labels: Label[];
   milestones: Milestone[];
   cycles: Cycle[];
+  folders: Folder[];
   members: { name: string; kind: 'user' | 'agent'; owner: string | null }[];
 }
 
@@ -303,6 +325,9 @@ interface TicketRow {
   waiting_since: string | null;
   waiting_snoozed_until: string | null;
   waiting_options: string | null;
+  folder_id: number | null;
+  folder: string | null;
+  folder_emoji: string | null;
   status_changed_at: string | null;
   closed_for: number | null;
   sort: number;
@@ -322,6 +347,7 @@ const TICKET_SELECT = `
          (SELECT q.id FROM questions q WHERE q.task_id = t.task_id AND q.state = 'open') AS task_open_question,
          t.handoff, hb.name AS handoff_by, t.handoff_at, t.blocked_reason, t.closed_reason, t.closed_for,
          t.next_step, nsf.name AS next_step_for, t.waiting_on AS waiting_on_id, wo.name AS waiting_on, t.waiting_ask, t.waiting_since, t.waiting_snoozed_until, t.waiting_options, t.status_changed_at,
+         t.folder_id, f.name AS folder, f.emoji AS folder_emoji,
          t.sort, t.created_at, t.updated_at, t.started_at, t.completed_at
   FROM tickets t
   JOIN projects p ON p.id = t.project_id
@@ -336,6 +362,7 @@ const TICKET_SELECT = `
   LEFT JOIN participants hb ON hb.id = t.handoff_by
   LEFT JOIN participants nsf ON nsf.id = t.next_step_for
   LEFT JOIN participants wo ON wo.id = t.waiting_on
+  LEFT JOIN ticket_folders f ON f.id = t.folder_id
 `;
 
 /** One line of at most MAX_LINE characters (newlines become spaces). */
@@ -467,6 +494,7 @@ export class Tickets {
     const labels = this.labelIds(proj.id, input.labels ?? []);
     const milestoneId = input.milestone ? this.milestoneByName(proj.id, input.milestone).id : null;
     const cycleId = input.cycle === undefined || input.cycle === null ? null : this.cycleRef(proj.id, input.cycle).id;
+    const folderId = input.folder?.trim() ? this.folderByName(proj.id, input.folder).id : null;
     const parentId = input.parent ? this.parentRow(actor, proj.id, input.parent, null).id : null;
     const priority = this.priority(input.priority ?? 'none');
     const estimate = this.estimate(input.estimate ?? null);
@@ -490,12 +518,12 @@ export class Tickets {
       const { lastInsertRowid } = this.store.db
         .prepare(
           `INSERT INTO tickets (project_id, number, title, description, status_id, priority, estimate, due_date, assignee_id,
-             creator_id, parent_id, milestone_id, cycle_id, sort, started_at, completed_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+             creator_id, parent_id, milestone_id, cycle_id, folder_id, sort, started_at, completed_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
              CASE WHEN ? = 'started' THEN ${NOW_SQL} END, CASE WHEN ? IN ('completed', 'canceled') THEN ${NOW_SQL} END)`,
         )
         .run(proj.id, number, title, description, status.id, priority, estimate, dueDate, assignee?.id ?? null, actor.id, parentId,
-          milestoneId, cycleId, sort, status.category, status.category);
+          milestoneId, cycleId, folderId, sort, status.category, status.category);
       id = Number(lastInsertRowid);
       const link = this.store.db.prepare('INSERT INTO ticket_labels (ticket_id, label_id) VALUES (?, ?)');
       for (const labelId of labels) link.run(id, labelId);
@@ -696,6 +724,13 @@ export class Tickets {
       if ((cycle?.id ?? null) !== row.cycle_id) {
         set('cycle_id', cycle?.id ?? null);
         changes.push({ field: 'cycle', from: row.cycle_number, to: cycle?.number ?? null });
+      }
+    }
+    if (input.folder !== undefined) {
+      const folder = input.folder?.trim() ? this.folderByName(row.project_id, input.folder) : null;
+      if ((folder?.id ?? null) !== row.folder_id) {
+        set('folder_id', folder?.id ?? null);
+        changes.push({ field: 'folder', from: row.folder, to: folder?.name ?? null });
       }
     }
     if (input.parent !== undefined) {
@@ -1090,6 +1125,16 @@ export class Tickets {
         params.push(filter.cycle);
       }
     }
+    if (filter.folder?.trim()) {
+      const name = filter.folder.trim();
+      if (name.toLowerCase() === 'none') where.push('t.folder_id IS NULL');
+      else {
+        // In one project, a folder that does not exist is a mistake worth naming; across projects, a match by name.
+        if (filter.project) this.folderByName(this.project(actor, filter.project).id, name);
+        where.push('f.name = ?');
+        params.push(name);
+      }
+    }
     if (filter.priority) {
       where.push('t.priority = ?');
       params.push(this.priority(filter.priority));
@@ -1131,8 +1176,86 @@ export class Tickets {
       labels: this.labels(proj.id),
       milestones: this.milestones(proj.id),
       cycles: this.cycles(proj.id),
+      folders: this.folderList(proj.id),
       members: this.store.members(actor, proj.name).map((p) => ({ name: p.name, kind: p.kind, owner: p.owner })),
     };
+  }
+
+  /* Folders (#91) */
+
+  /** A project's folders in order, with how many open and total tickets each holds. */
+  folders(actor: Participant, project: string): Folder[] {
+    return this.folderList(this.project(actor, project).id);
+  }
+
+  /** Anyone who can change tickets in the project, agents included, may add a folder; only people rename or remove them. */
+  createFolder(actor: Participant, project: string, input: { name: string; emoji?: string | null; color?: string | null }): Folder {
+    const proj = this.writable(actor, project);
+    this.store.checkRate(actor, 'post');
+    const name = this.folderName(input.name);
+    const emoji = this.folderEmoji(input.emoji);
+    const color = this.folderColor(input.color);
+    const existing = this.folderList(proj.id);
+    if (existing.length >= MAX_FOLDERS) throw new OrcoError('invalid', `A project can have at most ${MAX_FOLDERS} folders`);
+    const position = existing.reduce((max, f) => Math.max(max, f.position), -1) + 1;
+    try {
+      this.store.db
+        .prepare('INSERT INTO ticket_folders (project_id, name, emoji, color, position, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(proj.id, name, emoji, color, position, new Date(this.store.now()).toISOString());
+    } catch (err) {
+      if (err instanceof Error && /UNIQUE/.test(err.message)) throw new OrcoError('conflict', `There is already a folder called ${name}`);
+      throw err;
+    }
+    this.store.audit.record(actor, 'folder.create', { projectId: proj.id, subject: `project:${proj.name}`, detail: { name, emoji, color } });
+    this.planChanged(proj.id);
+    return this.folderByName(proj.id, name);
+  }
+
+  /** Renames, recolors or moves a folder; people only. */
+  updateFolder(actor: Participant, project: string, id: number, input: { name?: string; emoji?: string | null; color?: string | null; position?: number }): Folder {
+    const proj = this.folderKeeper(actor, project);
+    const list = this.folderList(proj.id);
+    const folder = list.find((f) => f.id === id);
+    if (!folder) throw new OrcoError('not_found', `No folder ${id} in ${proj.name}`);
+    const name = input.name === undefined ? folder.name : this.folderName(input.name);
+    const emoji = input.emoji === undefined ? folder.emoji : this.folderEmoji(input.emoji);
+    const color = input.color === undefined ? folder.color : this.folderColor(input.color);
+    this.store.begin();
+    try {
+      this.store.db.prepare('UPDATE ticket_folders SET name = ?, emoji = ?, color = ? WHERE id = ?').run(name, emoji, color, id);
+      if (input.position !== undefined) {
+        const rest = list.filter((f) => f.id !== id);
+        rest.splice(Math.min(Math.max(Math.trunc(input.position), 0), rest.length), 0, folder);
+        const move = this.store.db.prepare('UPDATE ticket_folders SET position = ? WHERE id = ?');
+        rest.forEach((f, i) => move.run(i, f.id));
+      }
+      this.store.commit();
+    } catch (err) {
+      this.store.rollback();
+      if (err instanceof Error && /UNIQUE/.test(err.message)) throw new OrcoError('conflict', `There is already a folder called ${name}`);
+      throw err;
+    }
+    this.store.audit.record(actor, 'folder.update', { projectId: proj.id, subject: `project:${proj.name}`, detail: { id, from: folder.name, name, emoji, color, position: input.position } });
+    this.planChanged(proj.id);
+    return this.folderList(proj.id).find((f) => f.id === id)!;
+  }
+
+  /** Removes a folder; its tickets stay, in no folder. People only. */
+  deleteFolder(actor: Participant, project: string, id: number): void {
+    const proj = this.folderKeeper(actor, project);
+    const folder = this.folderList(proj.id).find((f) => f.id === id);
+    if (!folder) throw new OrcoError('not_found', `No folder ${id} in ${proj.name}`);
+    this.store.begin();
+    try {
+      this.store.db.prepare(`UPDATE tickets SET folder_id = NULL, updated_at = ${NOW_SQL} WHERE folder_id = ?`).run(id);
+      this.store.db.prepare('DELETE FROM ticket_folders WHERE id = ?').run(id);
+      this.store.commit();
+    } catch (err) {
+      this.store.rollback();
+      throw err;
+    }
+    this.store.audit.record(actor, 'folder.delete', { projectId: proj.id, subject: `project:${proj.name}`, detail: { name: folder.name, tickets: folder.total } });
+    this.planChanged(proj.id);
   }
 
   addStatus(actor: Participant, project: string, input: { name: string; category: StatusCategory; position?: number }): TicketStatus[] {
@@ -1618,6 +1741,7 @@ export class Tickets {
         labels: labels.get(row.id) ?? [],
         milestone: row.milestone_id === null ? null : { id: row.milestone_id, name: row.milestone! },
         cycle: row.cycle_id === null ? null : { id: row.cycle_id, number: row.cycle_number! },
+        folder: row.folder_id === null ? null : { id: row.folder_id, name: row.folder!, emoji: row.folder_emoji },
         parent: row.parent_number === null ? null : `${row.ticket_key}-${row.parent_number}`,
         task: row.task_id === null || state === null ? null : { id: row.task_id, state, since: row.task_since! },
         blockedBy: blockedBy.get(row.id) ?? [],
@@ -1825,6 +1949,57 @@ export class Tickets {
       )
       .all(projectId) as unknown as (ProgressRow & { id: number; name: string; description: string; target_date: string | null })[];
     return rows.map((r) => ({ id: r.id, name: r.name, description: r.description, targetDate: r.target_date, progress: progressOf(r) }));
+  }
+
+  private folderList(projectId: number): Folder[] {
+    const rows = this.store.db
+      .prepare(
+        `SELECT f.id, f.name, f.emoji, f.color, f.position, count(t.id) AS total,
+           coalesce(sum(CASE WHEN s.category NOT IN ('completed', 'canceled') THEN 1 ELSE 0 END), 0) AS open
+         FROM ticket_folders f
+         LEFT JOIN tickets t ON t.folder_id = f.id
+         LEFT JOIN ticket_statuses s ON s.id = t.status_id
+         WHERE f.project_id = ?
+         GROUP BY f.id
+         ORDER BY f.position, f.name`,
+      )
+      .all(projectId) as unknown as Folder[];
+    return rows.map((r) => ({ id: r.id, name: r.name, emoji: r.emoji, color: r.color, position: r.position, open: Number(r.open), total: Number(r.total) }));
+  }
+
+  private folderByName(projectId: number, name: string): Folder {
+    const all = this.folderList(projectId);
+    const folder = all.find((f) => f.name.toLowerCase() === name.trim().toLowerCase());
+    if (!folder) {
+      throw new OrcoError('not_found', `No folder ${name.trim()}${all.length ? `; folders are ${all.map((f) => f.name).join(', ')}` : ''} (create_folder makes one)`);
+    }
+    return folder;
+  }
+
+  /** A project in which the actor may rename, reorder or remove folders: people only. */
+  private folderKeeper(actor: Participant, project: string): Project {
+    if (actor.kind !== 'user') throw new OrcoError('forbidden', 'Only people rename, reorder or remove folders; agents can create them');
+    return this.writable(actor, project);
+  }
+
+  private folderName(value: string): string {
+    const name = String(value ?? '').replace(/\s+/g, ' ').trim();
+    if (!FOLDER_NAME.test(name)) throw new OrcoError('invalid', 'Folder names are 1-40 characters on one line');
+    if (name.toLowerCase() === 'none') throw new OrcoError('invalid', '"none" means "no folder" in filters; pick another name');
+    return name;
+  }
+
+  private folderEmoji(value: string | null | undefined): string | null {
+    const emoji = String(value ?? '').trim();
+    if (!emoji) return null;
+    if (emoji.length > 16 || /\s/.test(emoji)) throw new OrcoError('invalid', 'A folder emoji is one emoji or a short symbol');
+    return emoji;
+  }
+
+  private folderColor(value: string | null | undefined): string | null {
+    if (value === null || value === undefined || value === '') return null;
+    if (!LABEL_COLORS.includes(value)) throw new OrcoError('invalid', `Folder color must be one of ${LABEL_COLORS.join(', ')}`);
+    return value;
   }
 
   private milestoneByName(projectId: number, name: string): Milestone {

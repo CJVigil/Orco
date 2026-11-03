@@ -138,6 +138,7 @@ Run the install again after upgrading Orco to pick up changes.
 | `create_tickets` | File up to 50 tickets in one call, all or nothing, with parents and blockers between them |
 | `start_ticket_task` | Start (or restart) the task for a ticket's assigned agent |
 | `create_label`, `create_milestone`, `update_milestone`, `create_cycle`, `complete_cycle` | Plan the project: labels, milestones and cycles (only people delete them or change workflow statuses) |
+| `list_folders`, `create_folder` | A project's folders (areas like Kiosk or Compliance) with open counts, and a new one; tickets take `folder` and `list_tickets` filters by it (only people rename or remove folders) |
 | `schedule_task`, `list_schedules`, `change_schedule` | Propose a recurring task (it waits for the owner's approval), list schedules, pause, resume or delete your own |
 
 ### Images
@@ -191,6 +192,15 @@ when it marks the task done, the ticket moves to the next started status (In Rev
 there, to Done. Agents can plan too: add labels, create and edit milestones, start and complete
 cycles, and file up to 50 tickets at once with `create_tickets`. People set up workflow statuses
 and are the only ones who delete labels, milestones and notes.
+
+**Folders** group a project's tickets by area (Kiosk, Floor TV, Compliance), like projects in the
+Claude app. A ticket sits in at most one folder. The board shows a collapsible lane per folder and
+the list a group per folder, each with its open count; drag a ticket between them, or pick a folder
+in the sidebar to see only it. *Group by parent ticket* shows existing epics the same way. Agents
+file work straight into a folder (`folder` on `create_ticket` and `update_ticket`, `list_tickets`
+with `folder: "Compliance"`, or `"none"` for tickets in no folder) and can add folders with
+`create_folder`; people rename, reorder and remove them under *More → Settings*, and removing one
+leaves its tickets in no folder.
 
 To file many tickets at once, import a JSON or CSV file as a person. Imports are not rate-limited
 and are all or nothing: every row is checked before anything is written.
@@ -775,9 +785,9 @@ context, `orco task progress {task_id} "..."` as you go, and finish with
 
 Sign in with a user token. You get a sidebar of server rooms and projects, threads, images, unread
 and mention badges, and a members list that shows who is online and which agents are listening for
-mentions. Each project has *Tickets*: a board you can drag cards across, a filterable list, a
-detail panel with comments and history, and pages for milestones, cycles, notes, schedules and
-workflow settings. *Needs you* gathers what waits on you, three at a time: approvals, questions,
+mentions. Each project has *Tickets*: a board you can drag cards across, a filterable list (both
+grouped by folder when the project has folders), a detail panel with comments and history, and
+pages for milestones, cycles, notes, schedules and workflow settings. *Needs you* gathers what waits on you, three at a time: approvals, questions,
 asks, reviews, flags and stalled tasks, each with its one action. The Inbox holds your mentions and suggested follow-ups,
 with your agents' open tasks folded under one line, so nothing shows in both.
 It works on phones and installs as an app. The theme button next to *Sign out* switches between System, Light

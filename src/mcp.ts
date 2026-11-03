@@ -87,6 +87,7 @@ const READ_ONLY_TOOLS = new Set([
   'list_tickets',
   'get_ticket',
   'project_plan',
+  'list_folders',
   'project_notes',
   'wait_for',
   'find_agent',
@@ -227,6 +228,7 @@ function formatTicketSummary(t: TicketSummary) {
     due: t.dueDate,
     milestone: t.milestone?.name ?? null,
     cycle: t.cycle?.number ?? null,
+    ...(t.folder ? { folder: t.folder.name } : {}),
     parent: t.parent,
     task: t.task,
     blocked: t.blocked,
@@ -308,6 +310,11 @@ const ticketFields = {
   labels: z.array(z.string()).optional().describe('Replaces the label set; names from project_plan'),
   milestone: z.string().nullable().optional(),
   cycle: z.union([z.number().int(), z.literal('current')]).nullable().optional(),
+  folder: z
+    .string()
+    .nullable()
+    .optional()
+    .describe('The folder it belongs in, by name (list_folders; create_folder makes a new one). null or "" takes it out of its folder'),
   parent: z.string().nullable().optional().describe('Parent ticket, like API-3'),
   handoff: z
     .string()
@@ -366,6 +373,7 @@ function ticketInput(args: TicketArgs): TicketInput {
     labels: args.labels,
     milestone: args.milestone,
     cycle: args.cycle,
+    folder: args.folder,
     parent: args.parent,
     handoff: args.handoff,
     criteriaAdd: args.criteria_add,
@@ -1137,7 +1145,7 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
     'project_plan',
     {
       annotations: annotate('project_plan'),
-      description: "A project's ticket key, workflow statuses, labels, milestones (with progress), cycles and members.",
+      description: "A project's ticket key, workflow statuses, labels, milestones (with progress), cycles, folders and members.",
       inputSchema: z.object({ project: z.string() }),
     },
     async ({ project }) => run(() => store.tickets.plan(me, project)),
@@ -1157,6 +1165,7 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         label: z.string().optional(),
         milestone: z.string().optional(),
         cycle: z.union([z.number().int(), z.literal('current')]).optional(),
+        folder: z.string().optional().describe('Only this folder, by name; "none" for tickets in no folder'),
         blocked: z.boolean().optional().describe('Only blocked (true) or only unblocked (false) tickets'),
         query: z.string().optional().describe('Words in the title or description, or a ticket ref'),
         limit: z.number().int().min(1).max(500).optional(),
@@ -1175,6 +1184,7 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
             label: args.label,
             milestone: args.milestone,
             cycle: args.cycle,
+            folder: args.folder,
             blocked: args.blocked,
             query: args.query,
             limit: args.limit,
@@ -1203,7 +1213,8 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
     'create_ticket',
     {
       annotations: annotate('create_ticket'),
-      description: 'File a ticket in a project. It starts in the first backlog status unless you pass one. Replies with a summary; full: true for the whole ticket.',
+      description:
+        'File a ticket in a project. It starts in the first backlog status unless you pass one. When the project has folders (list_folders), put it in the one that fits with folder. Replies with a summary; full: true for the whole ticket.',
       inputSchema: z.object({ project: z.string(), ...ticketFields, title: z.string().max(MAX_TITLE), full: z.boolean().optional() }),
     },
     async ({ project, full, ...args }) => run(() => formatWritten(store.tickets.create(me, project, { ...ticketInput(args), title: args.title }), full)),
@@ -1292,6 +1303,35 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
       run(() => {
         const label = store.tickets.createLabel(me, project, name, color);
         return `Label ${label.name} is ready in ${project}.`;
+      }),
+  );
+
+  server.registerTool(
+    'list_folders',
+    {
+      annotations: annotate('list_folders'),
+      description: "A project's ticket folders (areas like Kiosk or Compliance), with open and total counts. File new tickets into the folder that fits.",
+      inputSchema: z.object({ project: z.string() }),
+    },
+    async ({ project }) =>
+      run(() => ({ folders: store.tickets.folders(me, project).map((f) => ({ name: f.name, ...(f.emoji ? { emoji: f.emoji } : {}), open: f.open, total: f.total })) })),
+  );
+
+  server.registerTool(
+    'create_folder',
+    {
+      annotations: annotate('create_folder'),
+      description: 'Add a folder to a project for one area of work. Check list_folders first and reuse a folder when one fits; people rename and remove folders.',
+      inputSchema: z.object({
+        project: z.string(),
+        name: z.string().max(40).describe('1-40 characters, like "Kiosk" or "Compliance"'),
+        emoji: z.string().max(16).optional().describe('One emoji shown before the name'),
+      }),
+    },
+    async ({ project, name, emoji }) =>
+      run(() => {
+        const folder = store.tickets.createFolder(me, project, { name, emoji });
+        return `Folder ${folder.name} is ready in ${project}. Put tickets in it with folder: "${folder.name}".`;
       }),
   );
 

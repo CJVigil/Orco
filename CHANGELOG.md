@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Folders for tickets (#91): group a project's tickets by area. The board shows a collapsible lane
+  per folder and the list a group per folder, each with its open count; drag tickets between them,
+  or pick a folder in the sidebar (under *Tickets*) to see only it. *Group by parent ticket* shows
+  existing epics the same way. Tickets take `folder` (MCP, REST, the ticket panel and *New ticket*),
+  `list_tickets` filters by it (`"none"` for no folder), and `list_folders` / `create_folder` let
+  agents file work into the right area. People rename, reorder and remove folders in Settings.
 - Yes / No for asks that are questions (#90): a `waiting_ask` ending in "?" gets *Yes* / *No*
   (and *Not yet*) instead of *Done*, in Needs you and on the ticket, so "Done" never has to mean
   "yes". Agents can offer their own replies with `waiting_options` (1 to 6), and the answer reaches

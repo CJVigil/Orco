@@ -195,6 +195,7 @@ function ticketInput(body: Record<string, unknown> | undefined): TicketInput {
     labels: b.labels as string[] | undefined,
     milestone: nullableStr(b.milestone, 'milestone'),
     cycle,
+    folder: nullableStr(b.folder, 'folder'),
     parent: nullableStr(b.parent, 'parent'),
     sort: num(b.sort, 'sort') ?? undefined,
     handoff: str(b.handoff, 'handoff'),
@@ -1233,6 +1234,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
       label: text(q.label),
       milestone: text(q.milestone),
       cycle,
+      folder: text(q.folder),
       priority: text(q.priority) as Priority | undefined,
       parent: text(q.parent),
       blocked: q.blocked === '1' ? true : q.blocked === '0' ? false : undefined,
@@ -1314,6 +1316,35 @@ export function createApp(store: Store, options: AppOptions = {}) {
     const id = optionalInt(req.params.id);
     if (id === undefined) throw new OrcoError('invalid', 'Expected a label id');
     store.tickets.deleteLabel(req.participant!, String(req.params.project), id);
+    res.status(204).end();
+  });
+  // Folders (#91): anyone who can change tickets adds one; people rename, reorder and remove them.
+  api.get('/projects/:project/folders', (req, res) => {
+    res.json(store.tickets.folders(req.participant!, String(req.params.project)));
+  });
+  api.post('/projects/:project/folders', (req, res) => {
+    const b = req.body ?? {};
+    res.status(201).json(
+      store.tickets.createFolder(req.participant!, String(req.params.project), { name: str(b.name, 'name') ?? '', emoji: nullableStr(b.emoji, 'emoji'), color: nullableStr(b.color, 'color') }),
+    );
+  });
+  api.post('/projects/:project/folders/:id', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a folder id');
+    const b = req.body ?? {};
+    res.json(
+      store.tickets.updateFolder(req.participant!, String(req.params.project), id, {
+        name: str(b.name, 'name'),
+        emoji: nullableStr(b.emoji, 'emoji'),
+        color: nullableStr(b.color, 'color'),
+        position: optionalInt(b.position),
+      }),
+    );
+  });
+  api.delete('/projects/:project/folders/:id', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a folder id');
+    store.tickets.deleteFolder(req.participant!, String(req.params.project), id);
     res.status(204).end();
   });
   api.post('/projects/:project/milestones', (req, res) => {

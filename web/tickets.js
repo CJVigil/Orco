@@ -46,7 +46,7 @@ const TASK_EVENT = {
   cancelled: (d) => `task #${d.taskId} for ${d.agent} was cancelled`,
 };
 const OPEN_TASK = ['awaiting_approval', 'requested', 'accepted', 'needs_input'];
-const EMPTY_FILTERS = { q: '', assignee: '', label: '', priority: '', milestone: '', cycle: '', blocked: '' };
+const EMPTY_FILTERS = { q: '', assignee: '', label: '', priority: '', milestone: '', cycle: '', folder: '', blocked: '' };
 
 /** Why a ticket is blocked, for tooltips: open blocking tickets and any outside reason. */
 function blockedWhy(ticket) {
@@ -55,6 +55,7 @@ function blockedWhy(ticket) {
 
 export function createTickets(ctx) {
   const { api, el, icon, avatar, richText, openPanel, closePanel, panel, jumpTo, me, rooms, $ } = ctx;
+  const onNav = () => ctx.onNav?.();
   const t = { project: null, tab: 'board', plan: null, tickets: [], filters: { ...EMPTY_FILTERS }, open: null, editing: false, timer: null };
   const root = $('tickets-view');
 
@@ -211,7 +212,13 @@ export function createTickets(ctx) {
     t.files = files;
     t.integrations = integrations;
     plans.set(project, plan);
+    // A filter on a folder that was removed or renamed would show nothing; drop it.
+    if (t.filters.folder && t.filters.folder !== 'none' && !(plan.folders ?? []).some((f) => f.name.toLowerCase() === t.filters.folder.toLowerCase())) {
+      t.filters.folder = '';
+      void refreshTickets();
+    }
     t.tickets = tickets;
+    onNav();
     const filters = root.querySelector('.ticket-filters');
     if (!root.querySelector('.ticket-tabs')) renderShell();
     else if (filters && !typing(filters)) filters.replaceWith(filterBar());
@@ -232,6 +239,7 @@ export function createTickets(ctx) {
     if (f.priority) params.set('priority', f.priority);
     if (f.milestone) params.set('milestone', f.milestone);
     if (f.cycle) params.set('cycle', f.cycle);
+    if (f.folder) params.set('folder', f.folder);
     if (f.blocked) params.set('blocked', f.blocked);
     return api(`/tickets?${params}`);
   }
@@ -323,6 +331,16 @@ export function createTickets(ctx) {
             'Focus',
           )
         : null;
+    // Group the board and list by folder or parent ticket (#91); one folder on screen needs no groups.
+    const canGroup = (t.tab === 'board' || t.tab === 'list') && plan && !f.folder && ((plan.folders ?? []).length || t.tickets.some((x) => x.parent));
+    const group = canGroup
+      ? select(
+          groupMode(),
+          [(plan.folders ?? []).length ? ['folder', 'Group by folder'] : null, ['parent', 'Group by parent ticket'], ['none', 'No groups']].filter(Boolean),
+          setGroupMode,
+          { 'aria-label': 'Group by', class: 'group-by' },
+        )
+      : null;
     if (!open) {
       return el(
         'div',
@@ -330,6 +348,7 @@ export function createTickets(ctx) {
         el('span', { class: 'filter-search' }, icon('search'), search),
         el('button', { class: 'ghost small', type: 'button', text: 'Filters', 'aria-expanded': 'false', onclick: () => ((t.showFilters = true), renderShell(), void refreshTickets()) }),
         el('span', { class: 'spacer' }),
+        group,
         focus,
       );
     }
@@ -350,14 +369,28 @@ export function createTickets(ctx) {
             'aria-label': 'Cycle',
           })
         : null,
+      plan?.folders?.length
+        ? select(
+            f.folder,
+            [['', 'Any folder'], ['none', 'No folder'], ...plan.folders.map((x) => [x.name, x.emoji ? `${x.emoji} ${x.name}` : x.name])],
+            (value) => {
+              f.folder = value;
+              renderShell();
+              void refreshTickets();
+              onNav();
+            },
+            { 'aria-label': 'Folder' },
+          )
+        : null,
       select(f.blocked, [['', 'Blocked or not'], ['1', 'Blocked'], ['0', 'Not blocked']], set('blocked'), { 'aria-label': 'Blocked' }),
       el('button', {
         class: 'ghost small',
         type: 'button',
         text: Object.values(f).some(Boolean) ? 'Clear' : 'Hide',
-        onclick: () => ((t.filters = { ...EMPTY_FILTERS }), (t.showFilters = false), renderShell(), void refreshTickets()),
+        onclick: () => ((t.filters = { ...EMPTY_FILTERS }), (t.showFilters = false), renderShell(), void refreshTickets(), onNav()),
       }),
       el('span', { class: 'spacer' }),
+      group,
       focus,
     );
   }
@@ -380,6 +413,271 @@ export function createTickets(ctx) {
     t.pendingTab = false;
     const views = { board: renderBoard, list: renderList, milestones: renderMilestones, cycles: renderCycles, notes: renderNotes, files: renderFiles, schedules: renderSchedules, integrations: renderIntegrations, settings: renderSettings };
     body.replaceChildren(...[views[t.tab]()].flat(Infinity).filter((node) => node !== null && node !== undefined));
+  }
+
+  /* Folders and grouping (#91) */
+
+  const GROUP_KEY = (project) => `orco.groupBy.${project}`;
+  const LANES_KEY = (project) => `orco.lanesFolded.${project}`;
+
+  /** How the board and list group tickets: by folder, by parent ticket, or not at all. */
+  function groupMode() {
+    if (t.filters.folder) return 'none';
+    let stored = null;
+    try {
+      stored = localStorage.getItem(GROUP_KEY(t.project));
+    } catch {
+      // Private windows: the default applies.
+    }
+    const folders = t.plan.folders ?? [];
+    const mode = stored ?? t.groupBy ?? (folders.length ? 'folder' : 'none');
+    return mode === 'folder' && !folders.length ? 'none' : mode;
+  }
+
+  function setGroupMode(mode) {
+    t.groupBy = mode;
+    try {
+      localStorage.setItem(GROUP_KEY(t.project), mode);
+    } catch {
+      // Kept for this page only.
+    }
+    renderShell();
+    renderTab();
+  }
+
+  function foldedLanes() {
+    if (t.lanesFor !== t.project) {
+      t.lanesFor = t.project;
+      t.lanesFolded = new Set();
+      try {
+        t.lanesFolded = new Set(JSON.parse(localStorage.getItem(LANES_KEY(t.project)) ?? '[]'));
+      } catch {
+        // Nothing folded.
+      }
+    }
+    return t.lanesFolded;
+  }
+
+  function setLaneFolded(key, folded) {
+    const set = foldedLanes();
+    if (folded === set.has(key)) return;
+    if (folded) set.add(key);
+    else set.delete(key);
+    try {
+      localStorage.setItem(LANES_KEY(t.project), JSON.stringify([...set]));
+    } catch {
+      // Kept for this page only.
+    }
+  }
+
+  const isOpen = (ticket) => !['completed', 'canceled'].includes(ticket.status.category);
+
+  /**
+   * The groups for the current mode, in order: every folder (so a ticket can be dragged into an empty
+   * one) and "No folder" when anything is outside them; or each parent ticket and "No parent". Each
+   * carries the change that moves a ticket into it.
+   */
+  function lanes(mode, tickets) {
+    if (mode === 'folder') {
+      const groups = (t.plan.folders ?? []).map((f) => ({
+        key: `folder:${f.id}`,
+        label: f.name,
+        emoji: f.emoji,
+        tickets: tickets.filter((x) => x.folder?.id === f.id),
+        move: { folder: f.name },
+        newTicket: { folder: f.name },
+      }));
+      const loose = tickets.filter((x) => !x.folder);
+      if (loose.length) groups.push({ key: 'folder:none', label: 'No folder', emoji: null, tickets: loose, move: { folder: null }, newTicket: {} });
+      return groups.map((g) => ({ ...g, open: g.tickets.filter(isOpen).length }));
+    }
+    if (mode === 'parent') {
+      const refs = [...new Set(tickets.map((x) => x.parent).filter(Boolean))];
+      const titleOf = (ref) => t.tickets.find((x) => x.ref === ref)?.title ?? '';
+      const groups = refs.map((ref) => ({
+        key: `parent:${ref}`,
+        label: `${ref} ${titleOf(ref)}`.trim(),
+        emoji: null,
+        tickets: tickets.filter((x) => x.parent === ref),
+        move: { parent: ref },
+        newTicket: { parent: ref },
+      }));
+      const loose = tickets.filter((x) => !x.parent);
+      if (loose.length) groups.push({ key: 'parent:none', label: 'No parent', emoji: null, tickets: loose, move: { parent: null }, newTicket: {} });
+      return groups.map((g) => ({ ...g, open: g.tickets.filter(isOpen).length }));
+    }
+    return null;
+  }
+
+  function laneHead(lane, folded, onToggle) {
+    return el(
+      'div',
+      { class: 'lane-head' },
+      el(
+        'button',
+        { class: 'lane-toggle', type: 'button', 'aria-expanded': String(!folded), onclick: onToggle },
+        el('span', { class: 'fold-caret', 'aria-hidden': 'true', text: folded ? '▸' : '▾' }),
+        lane.emoji ? el('span', { class: 'lane-emoji', 'aria-hidden': 'true', text: lane.emoji }) : null,
+        el('span', { class: 'lane-name', text: lane.label }),
+        el('span', { class: 'muted small', text: `${lane.open} open` }),
+      ),
+      el('button', { class: 'ghost icon', type: 'button', title: `New ticket in ${lane.label}`, 'aria-label': `New ticket in ${lane.label}`, onclick: () => openNewTicket(lane.newTicket) }, icon('plus')),
+    );
+  }
+
+  /** The sidebar's folder links for the project on screen, each with its open count, and "+ New folder". */
+  function navFolders(project) {
+    if (project !== t.project || !t.plan || !root || root.hidden) return [];
+    const add = el('button', { class: 'room-link folder-link folder-new', type: 'button', text: '+ New folder' });
+    add.addEventListener('click', () => {
+      const input = el('input', { class: 'folder-new-input', maxlength: '40', placeholder: 'Folder name', 'aria-label': 'New folder name' });
+      const done = () => input.replaceWith(add);
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') done();
+        if (event.key !== 'Enter' || !input.value.trim()) return;
+        event.preventDefault();
+        void api(`/projects/${encodeURIComponent(t.project)}/folders`, { method: 'POST', body: { name: input.value } })
+          .then(() => load())
+          .catch((err) => notify(err.message));
+      });
+      input.addEventListener('blur', () => setTimeout(done, 150));
+      add.replaceWith(input);
+      input.focus();
+    });
+    return [...folderLinks(), add];
+  }
+
+  function folderLinks() {
+    return (t.plan.folders ?? []).map((f) =>
+      el(
+        'button',
+        {
+          class: `room-link folder-link${t.filters.folder.toLowerCase() === f.name.toLowerCase() ? ' active' : ''}`,
+          type: 'button',
+          'aria-current': t.filters.folder.toLowerCase() === f.name.toLowerCase() ? 'true' : null,
+          title: `Show only ${f.name}`,
+          onclick: () => pickFolder(f.name),
+        },
+        el('span', { class: 'folder-emoji', 'aria-hidden': 'true', text: f.emoji || '▪' }),
+        el('span', { class: 'folder-name', text: f.name }),
+        f.open ? el('span', { class: 'folder-count', text: String(f.open) }) : null,
+      ),
+    );
+  }
+
+  /** Shows one folder (or every folder again, when it is already the one shown). */
+  function pickFolder(name) {
+    t.filters.folder = t.filters.folder.toLowerCase() === name.toLowerCase() ? '' : name;
+    if (t.tab !== 'board' && t.tab !== 'list') location.hash = `#~${t.project}/board`;
+    else {
+      renderShell();
+      void refreshTickets();
+    }
+    onNav();
+  }
+
+  /** Lets cards dropped on `list` take `status`, and `move` (a folder or parent) when they come from another group. */
+  function dropZone(list, status, move) {
+    const line = el('div', { class: 'drop-line' });
+    list.addEventListener('dragover', (event) => {
+      if (!dragging) return;
+      event.preventDefault();
+      const cards = [...list.querySelectorAll('.ticket-card:not(.dragging)')];
+      const next = cards.find((c) => event.clientY < c.getBoundingClientRect().top + c.offsetHeight / 2);
+      list.insertBefore(line, next ?? null);
+    });
+    list.addEventListener('dragleave', (event) => {
+      if (!list.contains(event.relatedTarget)) line.remove();
+    });
+    list.addEventListener('drop', (event) => {
+      event.preventDefault();
+      if (!dragging || !line.parentNode) return;
+      const sortOf = (node) => t.tickets.find((x) => x.ref === node?.dataset?.ref)?.sort;
+      const prev = sortOf(line.previousElementSibling?.classList.contains('ticket-card') ? line.previousElementSibling : null);
+      const next = sortOf(line.nextElementSibling?.classList.contains('ticket-card') ? line.nextElementSibling : null);
+      const sort = prev !== undefined && next !== undefined ? (prev + next) / 2 : next !== undefined ? next - 1 : prev !== undefined ? prev + 1 : 0;
+      const moved = root.querySelector(`.ticket-card[data-ref="${CSS.escape(dragging.ref)}"]`);
+      if (moved) list.insertBefore(moved, line);
+      line.remove();
+      const ticket = dragging;
+      ticket.sort = sort;
+      ticket.status = { ...ticket.status, id: status.id, name: status.name, category: status.category };
+      void api(`/tickets/${ticket.ref}`, { method: 'POST', body: { status: status.name, sort, ...(move ?? {}) } })
+        .then((result) => notify(result.warning))
+        .catch((err) => notify(err.message))
+        .finally(() => void refreshTickets());
+    });
+  }
+
+  /** What Focus leaves in each column of `tickets`: recent Done only, Backlog folded to a count. */
+  function focusCells(columns, tickets) {
+    const byStatus = new Map(columns.map((s) => [s.id, []]));
+    for (const ticket of tickets) byStatus.get(ticket.status.id)?.push(ticket);
+    const hidden = new Map();
+    if (t.focus) {
+      const weekAgo = new Date(Date.now() - 7 * 86_400_000).toISOString();
+      for (const status of columns) {
+        const all = byStatus.get(status.id);
+        if (status.category === 'completed') {
+          const recent = all.filter((x) => (x.completedAt ?? x.updatedAt) >= weekAgo);
+          hidden.set(status.id, all.length - recent.length);
+          byStatus.set(status.id, recent);
+        } else if (status.category === 'backlog' && !t.showBacklog) {
+          hidden.set(status.id, all.length);
+          byStatus.set(status.id, []);
+        }
+      }
+    }
+    return { byStatus, hidden };
+  }
+
+  const moreButton = (status, count) =>
+    el('button', {
+      class: 'ghost small column-more',
+      type: 'button',
+      text: status.category === 'backlog' ? `${count} in ${status.name}` : `+${count} older`,
+      onclick: () => (status.category === 'backlog' ? ((t.showBacklog = true), renderTab()) : setFocus(false)),
+    });
+
+  /** The board in groups: one header row of statuses, then a collapsible lane per folder or parent. */
+  function renderLaneBoard(columns, groups) {
+    const totals = new Map(columns.map((s) => [s.id, t.tickets.filter((x) => x.status.id === s.id).length]));
+    const header = el(
+      'div',
+      { class: 'lane-row lane-columns' },
+      columns.map((status) =>
+        el(
+          'header',
+          { class: `column-head cat-${status.category}` },
+          statusIcon(status.category),
+          el('span', { class: 'column-name', text: status.name }),
+          el('span', { class: 'muted small', text: String(totals.get(status.id)) }),
+          el('span', { class: 'spacer' }),
+          el('button', { class: 'ghost icon', type: 'button', title: `New ticket in ${status.name}`, 'aria-label': `New ticket in ${status.name}`, onclick: () => openNewTicket({ status: status.name }) }, icon('plus')),
+        ),
+      ),
+    );
+    const folded = foldedLanes();
+    const sections = groups.map((lane) => {
+      const isFolded = folded.has(lane.key);
+      const head = laneHead(lane, isFolded, () => {
+        setLaneFolded(lane.key, !isFolded);
+        renderTab();
+      });
+      if (isFolded) return el('section', { class: 'lane folded', 'data-lane': lane.key }, head);
+      const { byStatus, hidden } = focusCells(columns, lane.tickets);
+      const row = el(
+        'div',
+        { class: 'lane-row' },
+        columns.map((status) => {
+          const list = el('div', { class: 'column-cards lane-cards', 'data-status': status.name }, byStatus.get(status.id).map(card));
+          dropZone(list, status, lane.move);
+          return el('div', { class: `lane-cell cat-${status.category}` }, hidden.get(status.id) ? moreButton(status, hidden.get(status.id)) : null, list);
+        }),
+      );
+      return el('section', { class: 'lane', 'data-lane': lane.key }, head, row);
+    });
+    return el('div', { class: 'board lanes' }, header, sections);
   }
 
   /* Board */
@@ -434,59 +732,18 @@ export function createTickets(ctx) {
   function renderBoard() {
     if (t.focus === undefined) t.focus = focusOn();
     const columns = t.plan.statuses.filter((s) => s.category !== 'canceled');
-    const byStatus = new Map(columns.map((s) => [s.id, []]));
-    for (const ticket of t.tickets) byStatus.get(ticket.status.id)?.push(ticket);
-    const weekAgo = new Date(Date.now() - 7 * 86_400_000).toISOString();
-    const hidden = new Map();
-    if (t.focus) {
-      for (const status of columns) {
-        const all = byStatus.get(status.id);
-        if (status.category === 'completed') {
-          const recent = all.filter((x) => (x.completedAt ?? x.updatedAt) >= weekAgo);
-          hidden.set(status.id, all.length - recent.length);
-          byStatus.set(status.id, recent);
-        } else if (status.category === 'backlog' && !t.showBacklog) {
-          hidden.set(status.id, all.length);
-          byStatus.set(status.id, []);
-        }
-      }
-    }
     const canceled = t.tickets.filter((x) => x.status.category === 'canceled').length;
+    const note = canceled ? el('p', { class: 'muted small board-note', text: `${canceled} canceled ${canceled === 1 ? 'ticket is' : 'tickets are'} in the List view.` }) : null;
+    const groups = lanes(groupMode(), t.tickets.filter((x) => x.status.category !== 'canceled'));
+    if (groups) return [renderLaneBoard(columns, groups), note];
+    const { byStatus, hidden } = focusCells(columns, t.tickets);
     const board = el(
       'div',
       { class: 'board' },
       columns.map((status) => {
         const tickets = byStatus.get(status.id);
         const list = el('div', { class: 'column-cards', 'data-status': status.name }, tickets.map(card));
-        const line = el('div', { class: 'drop-line' });
-        list.addEventListener('dragover', (event) => {
-          if (!dragging) return;
-          event.preventDefault();
-          const cards = [...list.querySelectorAll('.ticket-card:not(.dragging)')];
-          const next = cards.find((c) => event.clientY < c.getBoundingClientRect().top + c.offsetHeight / 2);
-          list.insertBefore(line, next ?? null);
-        });
-        list.addEventListener('dragleave', (event) => {
-          if (!list.contains(event.relatedTarget)) line.remove();
-        });
-        list.addEventListener('drop', (event) => {
-          event.preventDefault();
-          if (!dragging || !line.parentNode) return;
-          const sortOf = (node) => t.tickets.find((x) => x.ref === node?.dataset?.ref)?.sort;
-          const prev = sortOf(line.previousElementSibling?.classList.contains('ticket-card') ? line.previousElementSibling : null);
-          const next = sortOf(line.nextElementSibling?.classList.contains('ticket-card') ? line.nextElementSibling : null);
-          const sort = prev !== undefined && next !== undefined ? (prev + next) / 2 : next !== undefined ? next - 1 : prev !== undefined ? prev + 1 : 0;
-          const moved = root.querySelector(`.ticket-card[data-ref="${CSS.escape(dragging.ref)}"]`);
-          if (moved) list.insertBefore(moved, line);
-          line.remove();
-          const ticket = dragging;
-          ticket.sort = sort;
-          ticket.status = { ...ticket.status, id: status.id, name: status.name, category: status.category };
-          void api(`/tickets/${ticket.ref}`, { method: 'POST', body: { status: status.name, sort } })
-            .then((result) => notify(result.warning))
-            .catch((err) => notify(err.message))
-            .finally(() => void refreshTickets());
-        });
+        dropZone(list, status, null);
         return el(
           'section',
           { class: `board-column cat-${status.category}` },
@@ -501,25 +758,84 @@ export function createTickets(ctx) {
           ),
           // A column folded to a count shows the count at the top, not under an empty column.
           tickets.length ? list : null,
-          hidden.get(status.id)
-            ? el('button', {
-                class: 'ghost small column-more',
-                type: 'button',
-                text: status.category === 'backlog' ? `${hidden.get(status.id)} in ${status.name}` : `+${hidden.get(status.id)} older`,
-                onclick: () => (status.category === 'backlog' ? ((t.showBacklog = true), renderTab()) : setFocus(false)),
-              })
-            : null,
+          hidden.get(status.id) ? moreButton(status, hidden.get(status.id)) : null,
           tickets.length ? null : list,
         );
       }),
     );
-    return [board, canceled ? el('p', { class: 'muted small board-note', text: `${canceled} canceled ${canceled === 1 ? 'ticket is' : 'tickets are'} in the List view.` }) : null];
+    return [board, note];
   }
 
   /* List */
 
+  function listRow(ticket, { grouped = false } = {}) {
+    return el(
+      'button',
+      {
+        class: 'list-row',
+        type: 'button',
+        'data-ref': ticket.ref,
+        // In groups, a row drags to another folder or parent.
+        draggable: grouped ? 'true' : null,
+        ondragstart: grouped
+          ? (event) => {
+              dragging = ticket;
+              event.dataTransfer.setData('text/plain', ticket.ref);
+              event.dataTransfer.effectAllowed = 'move';
+            }
+          : null,
+        ondragend: grouped ? () => (dragging = null) : null,
+        onclick: () => void openTicket(ticket.ref),
+      },
+      grouped ? statusIcon(ticket.status.category) : null,
+      priorityIcon(ticket.priority),
+      el('span', { class: 'ticket-ref', text: ticket.ref }),
+      el('span', { class: 'list-title' }, el('span', { text: ticket.title }), stateLine(ticket), ticket.nextStep && !['completed', 'canceled'].includes(ticket.status.category) ? el('span', { class: 'ticket-next', text: `Next: ${ticket.nextStep.text}` }) : null),
+      el('span', { class: 'list-meta' }, taskBadge(ticket.task), ticket.labels.map(labelChip), ticket.estimate !== null ? el('span', { class: 'meta-pill', text: `${ticket.estimate} pt` }) : null, ticket.dueDate ? el('span', { class: 'meta-pill', text: shortDate(ticket.dueDate) }) : null),
+      ticket.assignee ? avatar(ticket.assignee.name, ticket.assignee.kind) : el('span', { class: 'avatar-blank', title: 'Unassigned' }),
+    );
+  }
+
   function renderList() {
     if (t.tickets.length === 0) return emptyState();
+    const groups = lanes(groupMode(), t.tickets);
+    if (groups) {
+      const folded = foldedLanes();
+      return groups.map((lane) => {
+        const group = el(
+          'details',
+          { class: 'list-group lane-group', 'data-lane': lane.key, open: folded.has(lane.key) ? null : true, ontoggle: (event) => setLaneFolded(lane.key, !event.target.open) },
+          el(
+            'summary',
+            {},
+            lane.emoji ? el('span', { 'aria-hidden': 'true', text: lane.emoji }) : null,
+            el('span', { text: lane.label }),
+            el('span', { class: 'muted small', text: `${lane.open} open` }),
+          ),
+          lane.tickets.length ? lane.tickets.map((ticket) => listRow(ticket, { grouped: true })) : el('p', { class: 'muted small lane-empty', text: 'Nothing here yet. Drag a ticket in.' }),
+        );
+        group.addEventListener('dragover', (event) => {
+          if (!dragging) return;
+          event.preventDefault();
+          group.classList.add('drop-target');
+        });
+        group.addEventListener('dragleave', (event) => {
+          if (!group.contains(event.relatedTarget)) group.classList.remove('drop-target');
+        });
+        group.addEventListener('drop', (event) => {
+          event.preventDefault();
+          group.classList.remove('drop-target');
+          const ticket = dragging;
+          dragging = null;
+          if (!ticket) return;
+          void api(`/tickets/${ticket.ref}`, { method: 'POST', body: lane.move })
+            .then((result) => notify(result.warning))
+            .catch((err) => notify(err.message))
+            .finally(() => void refreshTickets());
+        });
+        return group;
+      });
+    }
     return t.plan.statuses.map((status) => {
       const tickets = t.tickets.filter((x) => x.status.id === status.id);
       if (tickets.length === 0) return null;
@@ -527,17 +843,7 @@ export function createTickets(ctx) {
         'details',
         { class: 'list-group', open: status.category === 'completed' || status.category === 'canceled' ? null : true },
         el('summary', {}, statusIcon(status.category), el('span', { text: status.name }), el('span', { class: 'muted small', text: String(tickets.length) })),
-        tickets.map((ticket) =>
-          el(
-            'button',
-            { class: 'list-row', type: 'button', onclick: () => void openTicket(ticket.ref) },
-            priorityIcon(ticket.priority),
-            el('span', { class: 'ticket-ref', text: ticket.ref }),
-            el('span', { class: 'list-title' }, el('span', { text: ticket.title }), stateLine(ticket), ticket.nextStep && !['completed', 'canceled'].includes(ticket.status.category) ? el('span', { class: 'ticket-next', text: `Next: ${ticket.nextStep.text}` }) : null),
-            el('span', { class: 'list-meta' }, taskBadge(ticket.task), ticket.labels.map(labelChip), ticket.estimate !== null ? el('span', { class: 'meta-pill', text: `${ticket.estimate} pt` }) : null, ticket.dueDate ? el('span', { class: 'meta-pill', text: shortDate(ticket.dueDate) }) : null),
-            ticket.assignee ? avatar(ticket.assignee.name, ticket.assignee.kind) : el('span', { class: 'avatar-blank', title: 'Unassigned' }),
-          ),
-        ),
+        tickets.map((ticket) => listRow(ticket)),
       );
     });
   }
@@ -658,7 +964,14 @@ export function createTickets(ctx) {
       ['Milestone', select(ticket.milestone?.name ?? '', [['', 'None'], ...plan.milestones.map((m) => [m.name, m.name])], change('milestone', (v) => v || null), { 'aria-label': 'Milestone' }), Boolean(ticket.milestone)],
       ['Cycle', select(ticket.cycle?.number ?? '', [['', 'None'], ...cycles.map((c) => [String(c.number), c.name])], change('cycle', (v) => (v ? Number(v) : null)), { 'aria-label': 'Cycle' }), Boolean(ticket.cycle)],
       ['Labels', labelPicker, ticket.labels.length > 0],
-    ];
+      plan.folders?.length
+        ? [
+            'Folder',
+            select(ticket.folder?.name ?? '', [['', 'None'], ...plan.folders.map((f) => [f.name, f.emoji ? `${f.emoji} ${f.name}` : f.name])], change('folder', (v) => v || null), { 'aria-label': 'Folder' }),
+            Boolean(ticket.folder),
+          ]
+        : null,
+    ].filter(Boolean);
     const props = el(
       'div',
       { class: 'props' },
@@ -1128,6 +1441,8 @@ export function createTickets(ctx) {
         return v(c.to) ? `moved it to milestone ${c.to}` : 'removed it from its milestone';
       case 'cycle':
         return v(c.to) ? `moved it to Cycle ${c.to}` : 'took it out of its cycle';
+      case 'folder':
+        return v(c.to) ? `moved it to the ${c.to} folder` : 'took it out of its folder';
       case 'parent':
         return v(c.to) ? `made it a sub-ticket of ${c.to}` : 'made it a top-level ticket';
       case 'handoff':
@@ -1284,6 +1599,15 @@ export function createTickets(ctx) {
       ),
       milestone: select(defaults.milestone ?? '', [['', 'No milestone'], ...plan.milestones.map((m) => [m.name, m.name])], () => {}, { 'aria-label': 'Milestone' }),
       cycle: select(defaults.cycle ?? '', [['', 'No cycle'], ...plan.cycles.filter((c) => !c.completedAt).map((c) => [String(c.number), c.current ? `${c.name} (current)` : c.name])], () => {}, { 'aria-label': 'Cycle' }),
+      // New work goes into the folder on screen unless someone picks another.
+      folder: plan.folders?.length
+        ? select(
+            defaults.folder ?? (project === t.project && t.filters.folder && t.filters.folder !== 'none' ? t.filters.folder : ''),
+            [['', 'No folder'], ...plan.folders.map((f) => [f.name, f.emoji ? `${f.emoji} ${f.name}` : f.name])],
+            () => {},
+            { 'aria-label': 'Folder' },
+          )
+        : null,
     };
     const estimate = el('input', { type: 'number', min: '0', max: '100', step: '1', placeholder: 'Points', 'aria-label': 'Estimate' });
     const chosen = new Set();
@@ -1324,6 +1648,7 @@ export function createTickets(ctx) {
             cycle: fields.cycle.value ? Number(fields.cycle.value) : null,
             estimate: estimate.value === '' ? null : Number(estimate.value),
             labels: [...chosen],
+            folder: fields.folder?.value || null,
             parent: defaults.parent ?? null,
           };
           try {
@@ -1340,7 +1665,7 @@ export function createTickets(ctx) {
       defaults.parent ? el('p', { class: 'muted small', text: `Sub-ticket of ${defaults.parent}` }) : null,
       title,
       description,
-      el('div', { class: 'new-ticket-grid' }, fields.status, fields.priority, fields.assignee, estimate, fields.milestone, fields.cycle),
+      el('div', { class: 'new-ticket-grid' }, fields.status, fields.priority, fields.assignee, estimate, fields.milestone, fields.cycle, fields.folder),
       labels.length ? el('div', { class: 'label-picker' }, labels) : null,
       el('p', { class: 'muted small', text: 'Assigning an agent starts a task for it right away.' }),
       error,
@@ -2011,8 +2336,55 @@ export function createTickets(ctx) {
       el('button', { class: 'primary small', type: 'submit', text: 'Add label' }),
     );
 
+    // Folders (#91): rename, give an emoji, reorder, remove (its tickets stay, in no folder).
+    const folders = t.plan.folders ?? [];
+    const folderRows = folders.map((f, i) => {
+      const emoji = el('input', { class: 'folder-emoji-input', value: f.emoji ?? null, maxlength: '16', placeholder: '📁', 'aria-label': `Emoji for ${f.name}` });
+      emoji.addEventListener('change', () => void act(() => api(`${base}/folders/${f.id}`, { method: 'POST', body: { emoji: emoji.value || null } })));
+      const name = el('input', { value: f.name, maxlength: '40', 'aria-label': `Name of folder ${f.name}` });
+      name.addEventListener('change', () => void act(() => api(`${base}/folders/${f.id}`, { method: 'POST', body: { name: name.value } })));
+      return el(
+        'div',
+        { class: 'status-row folder-row' },
+        emoji,
+        name,
+        el('span', { class: 'muted small', text: `${f.open} open · ${f.total} in all` }),
+        el('button', { class: 'ghost small', type: 'button', disabled: i === 0 ? true : null, 'aria-label': `Move ${f.name} up`, text: '↑', onclick: () => void act(() => api(`${base}/folders/${f.id}`, { method: 'POST', body: { position: i - 1 } })) }),
+        el('button', { class: 'ghost small', type: 'button', disabled: i === folders.length - 1 ? true : null, 'aria-label': `Move ${f.name} down`, text: '↓', onclick: () => void act(() => api(`${base}/folders/${f.id}`, { method: 'POST', body: { position: i + 1 } })) }),
+        el('button', {
+          class: 'ghost small danger',
+          type: 'button',
+          text: 'Remove',
+          onclick: () => {
+            if (confirm(`Remove the folder ${f.name}? Its ${f.total} ticket${f.total === 1 ? '' : 's'} stay, in no folder.`)) void act(() => api(`${base}/folders/${f.id}`, { method: 'DELETE' }));
+          },
+        }),
+      );
+    });
+    const folderName = el('input', { placeholder: 'New folder, like Kiosk', maxlength: '40', required: true, 'aria-label': 'New folder name' });
+    const folderEmoji = el('input', { class: 'folder-emoji-input', maxlength: '16', placeholder: '📁', 'aria-label': 'New folder emoji' });
+    const addFolder = el(
+      'form',
+      {
+        class: 'inline-form',
+        onsubmit: (event) => {
+          event.preventDefault();
+          void act(() => api(`${base}/folders`, { method: 'POST', body: { name: folderName.value, emoji: folderEmoji.value || null } }));
+        },
+      },
+      folderEmoji,
+      folderName,
+      el('button', { class: 'primary small', type: 'submit', text: 'Add folder' }),
+    );
+
     if (me().kind !== 'user') return el('p', { class: 'muted plan-intro', text: 'Only people can change the workflow.' });
     return [
+      el('section', { class: 'settings-section' },
+        el('h3', { text: 'Folders' }),
+        el('p', { class: 'muted small', text: 'Group tickets by area. The board and list show a group per folder; agents can add folders and file tickets into them.' }),
+        folderRows.length ? el('div', { class: 'status-list' }, folderRows) : el('p', { class: 'muted small', text: 'No folders yet.' }),
+        addFolder,
+      ),
       el('section', { class: 'settings-section' },
         el('h3', { text: 'Workflow' }),
         el('p', { class: 'muted small', text: `Statuses in board order. The category tells boards and agents what each one means. Ticket key: ${t.plan.key}.` }),
@@ -2101,5 +2473,5 @@ export function createTickets(ctx) {
     );
   }
 
-  return { show, onEvent, onNotes, onSchedules, onFiles, inboxRow, openTicket, openNewTicket, get project() { return t.project; } };
+  return { show, onEvent, onNotes, onSchedules, onFiles, inboxRow, openTicket, openNewTicket, navFolders, get project() { return t.project; } };
 }

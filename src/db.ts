@@ -952,6 +952,21 @@ export const MIGRATIONS = [
   `
   ALTER TABLE tickets ADD COLUMN waiting_options TEXT;
   `,
+  // 35: folders inside a project, to group tickets by area (#91). A ticket sits in at most one.
+  `
+  CREATE TABLE ticket_folders (
+    id INTEGER PRIMARY KEY,
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    name TEXT NOT NULL COLLATE NOCASE,
+    emoji TEXT,
+    color TEXT,
+    position INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    UNIQUE (project_id, name)
+  );
+  ALTER TABLE tickets ADD COLUMN folder_id INTEGER REFERENCES ticket_folders(id);
+  CREATE INDEX tickets_folder ON tickets (folder_id);
+  `,
 ];
 
 export interface OpenOptions {

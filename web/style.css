@@ -4173,3 +4173,201 @@ button:disabled {
   gap: 0.35rem;
   white-space: nowrap;
 }
+
+/* Folders (#91): lanes on the board, groups in the list, links in the sidebar. */
+.board.lanes {
+  flex-direction: column;
+  gap: 0.6rem;
+  overflow: auto;
+}
+
+.lane-row {
+  display: flex;
+  gap: 0.75rem;
+  min-width: min-content;
+}
+
+.lane-row > * {
+  flex: 1 1 0;
+  min-width: 200px;
+  max-width: 320px;
+}
+
+.lane-columns {
+  position: sticky;
+  top: -0.75rem;
+  z-index: 2;
+  padding-top: 0.75rem;
+  margin-top: -0.75rem;
+  background: var(--bg);
+}
+
+.lane-columns .column-head {
+  background: var(--bg-side);
+  border-radius: var(--radius);
+}
+
+.lane {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.lane-head {
+  position: sticky;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  width: max-content;
+  max-width: 100%;
+}
+
+.lane-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 0.25rem;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.lane-toggle .muted {
+  font-weight: 400;
+}
+
+.lane-cell {
+  display: flex;
+  flex-direction: column;
+  min-height: 3rem;
+  background: var(--bg-side);
+  border-radius: var(--radius);
+}
+
+.lane-cards {
+  flex: none;
+  padding-top: 0.5rem;
+  overflow: visible;
+}
+
+.lane-cell .column-more {
+  margin-top: 0.35rem;
+}
+
+@media (hover: hover) {
+  .lane-head .ghost.icon {
+    opacity: 0;
+    transition: opacity 0.12s;
+  }
+
+  .lane-head:hover .ghost.icon,
+  .lane-head .ghost.icon:focus-visible {
+    opacity: 1;
+  }
+}
+
+.lane-group.drop-target > summary {
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+}
+
+.lane-empty {
+  margin: 0;
+  padding: 0.5rem 1.25rem;
+}
+
+.nav-folders {
+  display: grid;
+}
+
+button.folder-link {
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding-left: 1.6rem;
+  font-size: 0.86rem;
+}
+
+.folder-link.active {
+  background: var(--bg-hover);
+  color: var(--text);
+  font-weight: 500;
+}
+
+.folder-emoji {
+  width: 1rem;
+  flex: none;
+  text-align: center;
+  font-size: 0.8rem;
+}
+
+.folder-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-count {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.folder-new {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.folder-new-input {
+  margin: 0.1rem 0.5rem 0.1rem 1.6rem;
+  width: calc(100% - 2.1rem);
+  font-size: 0.86rem;
+}
+
+.folder-emoji-input {
+  width: 3.2rem;
+  flex: none;
+  text-align: center;
+}
+
+.group-by {
+  font-size: 0.8rem;
+}
+
+@media (max-width: 900px) {
+  .lane-row > * {
+    flex: 0 0 min(82vw, 320px);
+  }
+}
+
+.folder-row {
+  flex-wrap: nowrap;
+}
+
+.status-row input.folder-emoji-input,
+.inline-form input.folder-emoji-input {
+  flex: 0 0 3.2rem;
+  width: 3.2rem;
+}
+
+.folder-row .muted {
+  white-space: nowrap;
+  margin-right: 0.25rem;
+}
+
+.lane-cards {
+  min-height: 2.25rem;
+}
+
+@media (hover: hover) {
+  .lane-columns .column-head:hover .ghost.icon {
+    opacity: 1;
+  }
+}
