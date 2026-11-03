@@ -974,6 +974,10 @@ export const MIGRATIONS = [
   ALTER TABLE approvals ADD COLUMN standing INTEGER NOT NULL DEFAULT 0;
   CREATE INDEX approvals_standing ON approvals (ticket_id, requester_id) WHERE standing = 1;
   `,
+  // 37: an agent's checklist for a task, like Claude Code's todo list (#94): a JSON list of steps.
+  `
+  ALTER TABLE tasks ADD COLUMN steps TEXT;
+  `,
 ];
 
 export interface OpenOptions {

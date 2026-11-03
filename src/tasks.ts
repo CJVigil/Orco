@@ -22,6 +22,49 @@ export interface TaskProgress {
   at: string;
 }
 
+export type StepState = 'pending' | 'in_progress' | 'done';
+export const STEP_STATES: readonly StepState[] = ['pending', 'in_progress', 'done'];
+/** One line of an agent's checklist for a task (#94). */
+export interface TaskStep {
+  text: string;
+  state: StepState;
+}
+export const MAX_STEPS = 20;
+export const MAX_STEP = 120;
+
+/** A task's checklist from its stored JSON; anything unreadable is an empty list. */
+export function stepsOf(json: string | null): TaskStep[] {
+  if (!json) return [];
+  try {
+    const list = JSON.parse(json) as unknown;
+    return Array.isArray(list) ? (list as TaskStep[]).filter((s) => s && typeof s.text === 'string' && STEP_STATES.includes(s.state)) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Checks a checklist an agent reported: at most 20 one-line steps, each pending, in_progress or done. */
+export function checkSteps(steps: unknown): TaskStep[] {
+  if (!Array.isArray(steps)) throw new OrcoError('invalid', 'steps is a list of { text, state }');
+  if (steps.length > MAX_STEPS) throw new OrcoError('invalid', `A checklist has at most ${MAX_STEPS} steps`);
+  return steps.map((step) => {
+    const text = String((step as TaskStep)?.text ?? '').replace(/\s+/g, ' ').trim();
+    const state = (step as TaskStep)?.state;
+    if (!text || text.length > MAX_STEP) throw new OrcoError('invalid', `Each step is one line of 1 to ${MAX_STEP} characters`);
+    if (!STEP_STATES.includes(state)) throw new OrcoError('invalid', 'A step is pending, in_progress or done');
+    return { text, state };
+  });
+}
+
+/** "step 2/4: Fix the race", from a checklist: the step in progress (or the next pending one). */
+export function stepLine(steps: TaskStep[]): string | null {
+  if (!steps.length) return null;
+  const at = steps.findIndex((s) => s.state === 'in_progress');
+  const next = at >= 0 ? at : steps.findIndex((s) => s.state === 'pending');
+  if (next < 0) return `all ${steps.length} steps done`;
+  return `step ${next + 1}/${steps.length}: ${steps[next]!.text}`;
+}
+
 export interface TaskBudget {
   minutes: number | null;
   cents: number | null;
@@ -59,6 +102,8 @@ export interface TaskSummary {
   since: string;
   chain: string[];
   progress: TaskProgress | null;
+  /** The assignee's checklist, ticking as it reports (#94). */
+  steps: TaskStep[];
   stalled: boolean;
   /** When the assignee first looked at the task (read it, listed it, or started on it). */
   seenAt: string | null;
@@ -87,6 +132,8 @@ export interface Feedback {
 export interface TaskResult {
   links?: { title?: string; url: string }[];
   followups?: { title: string; description?: string }[];
+  /** The assignee's checklist, replacing the last one (#94). */
+  steps?: TaskStep[];
 }
 
 export interface CancelNotice {
@@ -133,6 +180,8 @@ export interface Task {
   question: QuestionSummary | null;
   /** The assignee's latest progress line, updated in place. */
   progress: TaskProgress | null;
+  /** The assignee's checklist, ticking as it reports (#94). */
+  steps: TaskStep[];
   /** Accepted, not waiting on a person, and no sign of life from the agent for a while. */
   stalled: boolean;
   seenAt: string | null;
@@ -176,6 +225,7 @@ interface TaskRow {
   progress: string | null;
   progress_pct: number | null;
   progress_at: string | null;
+  steps: string | null;
   heartbeat_at: number | null;
   stall_notified: number;
   seen_at: string | null;
@@ -204,7 +254,7 @@ const TASK_SELECT = `
          t.assignee_id, a.name AS assignee, a.owner_id AS assignee_owner_id, ao.name AS assignee_owner,
          t.parent_id, t.depth, t.request, t.state, t.note, t.approval_id, ap.state AS approval_state,
          (SELECT q.id FROM questions q WHERE q.task_id = t.id AND q.state = 'open') AS open_question,
-         t.progress, t.progress_pct, t.progress_at, t.heartbeat_at, t.stall_notified,
+         t.progress, t.progress_pct, t.progress_at, t.steps, t.heartbeat_at, t.stall_notified,
          t.seen_at, t.accepted_at, t.budget_minutes, t.budget_cents, t.spent_cents, t.spent_tokens,
          t.over_budget_notified, t.links, t.schedule_id, t.checkpoint, t.checkpoint_at,
          (SELECT min(rm.due_at) FROM reminders rm WHERE rm.task_id = t.id AND rm.fired_at IS NULL) AS reminder_due,
@@ -270,7 +320,7 @@ function checkLinks(links: TaskResult['links']): TaskLink[] {
   });
 }
 
-function baseTask(row: TaskRow): Omit<Task, 'chain' | 'question' | 'progress' | 'stalled' | 'seenAt' | 'budget' | 'links' | 'followups' | 'feedback'> {
+function baseTask(row: TaskRow): Omit<Task, 'chain' | 'question' | 'progress' | 'steps' | 'stalled' | 'seenAt' | 'budget' | 'links' | 'followups' | 'feedback'> {
   return {
     id: row.id,
     room: row.project ? `${row.project}/${row.room}` : row.room,
@@ -463,6 +513,8 @@ export class Tasks {
     const trimmedNote = this.store.hideSecrets(actor, note?.trim() ?? '') || null;
     const links = checkLinks(result.links);
     const followups = result.followups ?? [];
+    const steps = result.steps === undefined ? null : checkSteps(result.steps);
+    if (steps && actor.id !== row.assignee_id) throw new OrcoError('forbidden', `Only ${row.assignee} keeps the checklist for task ${id}`);
     if ((links.length || followups.length) && state !== 'done' && state !== 'failed') {
       throw new OrcoError('invalid', 'Links and follow-ups go with a done or failed task');
     }
@@ -489,6 +541,7 @@ export class Tasks {
     }
     if (state === 'cancelled' && row.approval_id !== null) this.store.approvals.withdraw(row.approval_id);
     if (links.length) this.store.db.prepare('UPDATE tasks SET links = ? WHERE id = ?').run(JSON.stringify(links), id);
+    if (steps) this.store.db.prepare('UPDATE tasks SET steps = ? WHERE id = ?').run(JSON.stringify(steps), id);
     for (const f of followups) this.store.suggestions.create(actor, row.id, row.project_id!, f);
     return this.transition(actor, row, state, trimmedNote, {
       ...(links.length ? { links } : {}),
@@ -532,12 +585,15 @@ export class Tasks {
     text: string,
     percent?: number | null,
     usage: { costCents?: number | null; tokens?: number | null } = {},
+    stepsInput?: TaskStep[],
   ): Task {
     const row = this.row(id);
     if (!row || !this.store.canSeeRoomId(actor, row.room_id)) throw new OrcoError('not_found', `No task ${id}`);
     if (row.assignee_id !== actor.id) throw new OrcoError('forbidden', `Only ${row.assignee} can report progress on task ${id}`);
     if (row.state !== 'accepted') throw new OrcoError('conflict', `Task ${id} is ${effectiveState(row)}; accept it first`);
-    const line = text.trim().replace(/\s+/g, ' ');
+    const steps = stepsInput === undefined ? null : checkSteps(stepsInput);
+    // With a checklist, the text may be left out: the step in progress says it.
+    const line = text.trim().replace(/\s+/g, ' ') || (steps ? stepLine(steps) ?? '' : '');
     if (!line) throw new OrcoError('invalid', 'Progress text is empty');
     if (line.length > MAX_PROGRESS) throw new OrcoError('invalid', `Progress can be at most ${MAX_PROGRESS} characters`);
     if (percent !== undefined && percent !== null && (!Number.isInteger(percent) || percent < 0 || percent > 100)) {
@@ -555,6 +611,7 @@ export class Tasks {
            heartbeat_at = ?, stall_notified = 0 WHERE id = ?`,
       )
       .run(line, percent ?? null, this.store.now(), id);
+    if (steps) this.store.db.prepare('UPDATE tasks SET steps = ? WHERE id = ?').run(JSON.stringify(steps), id);
     // A reported total far beyond the task's budget (or $1,500 without one) is held to that ceiling and
     // flagged: one bad report would otherwise push a whole project over budget and hold every new task.
     if (usage.costCents != null) {
@@ -582,7 +639,13 @@ export class Tasks {
     this.store.audit.record(actor, 'task.progress', {
       projectId: row.project_id,
       subject: `task:${id}`,
-      detail: { text: line, percent: percent ?? null, ...(usage.costCents != null ? { costCents: usage.costCents } : {}), ...(usage.tokens != null ? { tokens: usage.tokens } : {}) },
+      detail: {
+        text: line,
+        percent: percent ?? null,
+        ...(steps ? { steps: `${steps.filter((x) => x.state === 'done').length}/${steps.length}` } : {}),
+        ...(usage.costCents != null ? { costCents: usage.costCents } : {}),
+        ...(usage.tokens != null ? { tokens: usage.tokens } : {}),
+      },
     });
     this.checkOverBudget(id);
     const task = this.byId(id)!;
@@ -1089,6 +1152,7 @@ export class Tasks {
       since: row.updated_at,
       chain: this.chainFor(row),
       progress: progressOf(row),
+      steps: stepsOf(row.steps),
       stalled: this.isStalled(row),
       seenAt: row.seen_at,
       budget: this.budgetOf(row),
@@ -1120,6 +1184,7 @@ export class Tasks {
       chain: this.chainFor(row),
       question: this.store.questions.latestForTask(row.id),
       progress: progressOf(row),
+      steps: stepsOf(row.steps),
       stalled: this.isStalled(row),
       seenAt: row.seen_at,
       budget: this.budgetOf(row),

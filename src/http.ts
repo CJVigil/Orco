@@ -15,7 +15,7 @@ import { Presence, type PresenceChange } from './presence.js';
 import { RateLimiter } from './ratelimit.js';
 import { type Message, OrcoError, type Participant, type Store } from './store.js';
 import { parsePolicy } from './policies.js';
-import type { Task, TaskState } from './tasks.js';
+import type { Task, TaskState, TaskStep } from './tasks.js';
 import type { Approval } from './approvals.js';
 import type { Question, QuestionTarget } from './questions.js';
 import { byWorkOrder, type Priority, type StatusCategory, type TicketFilter, type TicketInput } from './tickets.js';
@@ -241,7 +241,8 @@ function taskResult(body: Record<string, unknown> | undefined): TaskResult {
     title: str(f.title, 'followups.title') ?? '',
     description: str(f.description, 'followups.description'),
   }));
-  return { links, followups };
+  const steps = body?.steps === undefined ? undefined : (body.steps as TaskStep[]);
+  return { links, followups, steps };
 }
 
 function scheduleInput(body: Record<string, unknown> | undefined): Partial<ScheduleInput> & { enabled?: boolean } {
@@ -965,10 +966,14 @@ export function createApp(store: Store, options: AppOptions = {}) {
     if (id === undefined) throw new OrcoError('invalid', 'Expected a task id');
     const percent = req.body?.percent === undefined || req.body?.percent === null ? null : optionalInt(req.body.percent);
     res.json(
-      store.tasks.reportProgress(req.participant!, id, str(req.body?.text, 'text') ?? '', percent, {
-        costCents: nullableInt(req.body?.spent_cents, 'spent_cents'),
-        tokens: nullableInt(req.body?.tokens, 'tokens'),
-      }),
+      store.tasks.reportProgress(
+        req.participant!,
+        id,
+        str(req.body?.text, 'text') ?? '',
+        percent,
+        { costCents: nullableInt(req.body?.spent_cents, 'spent_cents'), tokens: nullableInt(req.body?.tokens, 'tokens') },
+        req.body?.steps === undefined ? undefined : (req.body.steps as TaskStep[]),
+      ),
     );
   });
   api.post('/tasks/:id/token', (req, res) => {

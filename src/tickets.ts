@@ -1,6 +1,6 @@
 import { OrcoError } from './errors.js';
 import type { Participant, Project, Store } from './store.js';
-import { OPEN_STATES, type Task, type TaskState } from './tasks.js';
+import { OPEN_STATES, stepsOf, type Task, type TaskState } from './tasks.js';
 
 export type StatusCategory = 'backlog' | 'unstarted' | 'started' | 'completed' | 'canceled';
 export const STATUS_CATEGORIES: readonly StatusCategory[] = ['backlog', 'unstarted', 'started', 'completed', 'canceled'];
@@ -146,7 +146,8 @@ export interface TicketSummary {
   /** The folder it sits in, if any. */
   folder: { id: number; name: string; emoji: string | null } | null;
   parent: string | null;
-  task: { id: number; state: TaskState; since: string } | null;
+  /** Its agent task, with how far the agent's checklist is (#94). */
+  task: { id: number; state: TaskState; since: string; steps: { done: number; total: number } | null } | null;
   /** Unfinished tickets this one waits on. */
   blockedBy: string[];
   /** Something outside the project this ticket waits on, like "waiting on the vendor". */
@@ -320,6 +321,7 @@ interface TicketRow {
   task_id: number | null;
   task_state: TaskState | null;
   task_since: string | null;
+  task_steps: string | null;
   task_approval_state: string | null;
   task_open_question: number | null;
   handoff: string;
@@ -352,7 +354,7 @@ const TICKET_SELECT = `
          t.status_id, s.name AS status_name, s.category, t.priority, t.estimate, t.due_date,
          t.assignee_id, a.name AS assignee, a.kind AS assignee_kind, c.name AS creator,
          t.parent_id, pt.number AS parent_number, t.milestone_id, m.name AS milestone,
-         t.cycle_id, cy.number AS cycle_number, t.task_id, tk.state AS task_state, tk.updated_at AS task_since,
+         t.cycle_id, cy.number AS cycle_number, t.task_id, tk.state AS task_state, tk.updated_at AS task_since, tk.steps AS task_steps,
          ap.state AS task_approval_state,
          (SELECT q.id FROM questions q WHERE q.task_id = t.task_id AND q.state = 'open') AS task_open_question,
          t.handoff, hb.name AS handoff_by, t.handoff_at, t.blocked_reason, t.closed_reason, t.closed_for,
@@ -374,6 +376,12 @@ const TICKET_SELECT = `
   LEFT JOIN participants wo ON wo.id = t.waiting_on
   LEFT JOIN ticket_folders f ON f.id = t.folder_id
 `;
+
+/** How far an agent's checklist is, for the ticket card's bar (#94). */
+function stepCount(json: string | null): { done: number; total: number } | null {
+  const steps = stepsOf(json);
+  return steps.length ? { done: steps.filter((s) => s.state === 'done').length, total: steps.length } : null;
+}
 
 /** One line of at most MAX_LINE characters (newlines become spaces). */
 function oneLine(value: string, what: string): string {
@@ -1755,7 +1763,7 @@ export class Tickets {
         cycle: row.cycle_id === null ? null : { id: row.cycle_id, number: row.cycle_number! },
         folder: row.folder_id === null ? null : { id: row.folder_id, name: row.folder!, emoji: row.folder_emoji },
         parent: row.parent_number === null ? null : `${row.ticket_key}-${row.parent_number}`,
-        task: row.task_id === null || state === null ? null : { id: row.task_id, state, since: row.task_since! },
+        task: row.task_id === null || state === null ? null : { id: row.task_id, state, since: row.task_since!, steps: stepCount(row.task_steps) },
         blockedBy: blockedBy.get(row.id) ?? [],
         blockedReason: row.blocked_reason || null,
         nextStep: row.next_step ? { text: row.next_step, for: row.next_step_for } : null,

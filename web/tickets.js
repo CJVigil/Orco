@@ -415,6 +415,47 @@ export function createTickets(ctx) {
     body.replaceChildren(...[views[t.tab]()].flat(Infinity).filter((node) => node !== null && node !== undefined));
   }
 
+  /** The agent's checklist on a ticket card: a tiny bar and "3/5" (#94). */
+  function stepsPill(steps) {
+    if (!steps?.total) return null;
+    const fill = el('span', { class: 'steps-fill' });
+    fill.style.width = `${Math.round((steps.done / steps.total) * 100)}%`;
+    return el('span', { class: 'meta-pill steps-pill', title: `Agent checklist: ${steps.done} of ${steps.total} done` }, el('span', { class: 'steps-bar', 'aria-hidden': 'true' }, fill), `${steps.done}/${steps.total}`);
+  }
+
+  /** The ticket's agent at the bottom of its panel, always in view: "carlos-claude · working · 12m · step 2/4". */
+  function workLine(ticket) {
+    const task = ticket.task;
+    if (!task || ticket.assignee?.kind !== 'agent' || !['awaiting_approval', 'requested', 'accepted', 'needs_input', 'failed'].includes(task.state)) return null;
+    const word = { accepted: 'working', needs_input: 'waiting on an answer', awaiting_approval: 'waiting for approval', requested: 'queued', failed: 'failed' }[task.state];
+    const minutes = Math.max(0, Math.round((Date.now() - Date.parse(task.since)) / 60000));
+    const since = minutes < 60 ? `${minutes}m` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+    const step = task.steps ? ` · step ${Math.min(task.steps.done + 1, task.steps.total)}/${task.steps.total}` : '';
+    return el(
+      'div',
+      { class: `work-status in-panel work-${word.replace(/\s+/g, '-')}`, role: 'status' },
+      el('span', { class: 'work-dot', 'aria-hidden': 'true' }),
+      el('strong', { text: ticket.assignee.name }),
+      el('span', { text: ` · ${word} · ${since}${task.steps && task.steps.done === task.steps.total ? ` · ${task.steps.total}/${task.steps.total} done` : step}` }),
+      el('span', { class: 'spacer' }),
+      el('button', { class: 'ghost small', type: 'button', text: 'View task', onclick: () => void viewTask(task.id) }),
+    );
+  }
+
+  /** A task changed: refresh the board or the open ticket when it is theirs, so checklists tick live. */
+  function onTask(task) {
+    if (!t.project || !root) return;
+    const shown = t.tickets.some((x) => x.task?.id === task.id);
+    if (shown && !root.hidden) {
+      clearTimeout(t.timer);
+      t.timer = setTimeout(() => void load(), 400);
+    }
+    if (panel() === 'ticket' && t.open && plans.size) {
+      const open = t.tickets.find((x) => x.ref === t.open);
+      if (open?.task?.id === task.id) scheduleDetail();
+    }
+  }
+
   /* Folders and grouping (#91) */
 
   const GROUP_KEY = (project) => `orco.groupBy.${project}`;
@@ -718,6 +759,7 @@ export function createTickets(ctx) {
         { class: 'ticket-meta' },
         ticket.priority !== 'none' ? priorityIcon(ticket.priority) : null,
         taskBadge(ticket.task),
+        stepsPill(ticket.task?.steps),
         ticket.criteria.total
           ? el('span', { class: `meta-pill${ticket.criteria.done === ticket.criteria.total ? ' met' : ''}`, title: 'Acceptance criteria met', text: `${ticket.criteria.done}/${ticket.criteria.total}` })
           : null,
@@ -1035,10 +1077,12 @@ export function createTickets(ctx) {
         title,
         nowBlock(ticket),
         props,
-        agentRow,
+        // While its agent is on it, the status line at the bottom says so; the row is for starting one.
+        workLine(ticket) ? null : agentRow,
         standingApprovals(ticket),
         sections(ticket),
         activityBlock(ticket, draft),
+        workLine(ticket),
       ),
     );
     autosize(title);
@@ -2513,5 +2557,5 @@ export function createTickets(ctx) {
     );
   }
 
-  return { show, onEvent, onNotes, onSchedules, onFiles, inboxRow, openTicket, openNewTicket, navFolders, get project() { return t.project; } };
+  return { show, onEvent, onTask, onNotes, onSchedules, onFiles, inboxRow, openTicket, openNewTicket, navFolders, get project() { return t.project; } };
 }

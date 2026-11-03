@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Agent work at a glance (#94): `report_progress` and `update_task` take `steps`, the agent's whole
+  checklist (pending, in progress, done; the text may be left out), shown as a live todo list on the
+  task card that ticks as the agent reports, like Claude Code's. A status line above the composer
+  says who is on what in the room ("carlos-claude · working · 12m · step 2/4", waiting on you, idle,
+  failed), the ticket panel ends with the same line, and ticket cards show a small 3/5 bar.
 - Approvals and asks as permission cards (#95), like Claude Code's prompt: the question in bold,
   exactly what it covers (scope, a command, a colored diff) in monospace, then numbered choices you
   can press 1, 2 or 3 for while the card has focus. **1 Yes**; **2 Yes, and don't ask again for this

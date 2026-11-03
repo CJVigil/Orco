@@ -4628,3 +4628,175 @@ details.md-work-item[open] > summary .md-work-action::after {
   background: none;
   font: inherit;
 }
+
+/* Agent work at a glance (#94): checklists on task cards, one status line per room or ticket. */
+.task-steps {
+  list-style: none;
+  margin: 0.3rem 0 0;
+  padding: 0 0 0 0.75rem;
+  display: grid;
+  gap: 0.1rem;
+  font-size: 0.86rem;
+}
+
+.task-step {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+}
+
+.task-step-mark {
+  flex: none;
+  width: 0.9rem;
+  text-align: center;
+  font-family: var(--mono);
+}
+
+.task-step-done {
+  color: var(--muted);
+}
+
+.task-step-done .task-step-text {
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--muted) 60%, transparent);
+}
+
+.task-step-done .task-step-mark {
+  color: var(--ok);
+}
+
+.task-step-in_progress {
+  font-weight: 600;
+}
+
+.task-step-in_progress .task-step-mark {
+  color: var(--accent);
+}
+
+.task-step-pending {
+  color: color-mix(in srgb, var(--text) 75%, var(--muted));
+}
+
+.task-steps-done > summary {
+  cursor: pointer;
+  padding-left: 0.75rem;
+  margin-top: 0.2rem;
+}
+
+.work-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 1.9rem;
+  padding: 0.25rem 1rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.82rem;
+  background: var(--bg);
+}
+
+.work-line {
+  display: inline-block;
+  min-width: 0;
+  max-width: 100%;
+  text-overflow: ellipsis;
+  text-align: left;
+  padding: 0.1rem 0.25rem;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.work-line:hover {
+  background: var(--bg-hover);
+}
+
+.work-tail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.work-dot {
+  display: inline-block;
+  vertical-align: middle;
+  flex: none;
+  width: 7px;
+  height: 7px;
+  margin-right: 0.45rem;
+  border-radius: 50%;
+  background: var(--idle);
+}
+
+.work-working .work-dot {
+  background: var(--listen);
+}
+
+.work-waiting-on-you .work-dot {
+  background: var(--accent);
+}
+
+.work-failed .work-dot {
+  background: var(--danger);
+}
+
+.work-more {
+  position: relative;
+  flex: none;
+}
+
+.work-more > summary {
+  list-style: none;
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.work-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.work-list {
+  position: absolute;
+  bottom: calc(100% + 0.35rem);
+  right: 0;
+  z-index: 20;
+  display: grid;
+  min-width: 18rem;
+  max-width: 80vw;
+  padding: 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow);
+}
+
+.work-status.in-panel {
+  position: sticky;
+  bottom: 0;
+  margin: 0.75rem -1rem -1rem;
+  padding: 0.35rem 1rem;
+}
+
+.steps-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.steps-bar {
+  display: inline-block;
+  width: 28px;
+  height: 4px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.steps-fill {
+  display: block;
+  height: 100%;
+  background: var(--ok);
+}

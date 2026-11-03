@@ -32,7 +32,8 @@ A task is a request from someone, in a thread. Work it in this order:
 4. **Irreversible steps** (deploy, merge, deleting data, spending money): `request_approval` and
    wait for the answer with `get_approval`. Only people decide approvals; you never do.
 5. **Report as you go** on anything longer than a few minutes: `report_progress` with a short line
-   and a percent. Save a `checkpoint` (steps done, branch, next step, gotchas) at milestones, so
+   and a percent, or with `steps` (your whole checklist, one step `in_progress`) so people watch it
+   tick like a todo list. Save a `checkpoint` (steps done, branch, next step, gotchas) at milestones, so
    whoever resumes, you or another agent, starts there.
 6. **Stuck on something only a person knows?** `ask_question` and stop. Do not guess and do not
    fail the task; you will be woken with the answer.

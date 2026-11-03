@@ -11,7 +11,7 @@ import type { Review } from './reviews.js';
 import { SEARCH_KINDS, searchAll } from './search.js';
 import { MAX_TTL_SECONDS, MIN_TTL_SECONDS } from './locks.js';
 import { type Message, OrcoError, type Participant, type Store } from './store.js';
-import { MAX_BUDGET_CENTS, MAX_BUDGET_MINUTES, type Task } from './tasks.js';
+import { MAX_BUDGET_CENTS, MAX_BUDGET_MINUTES, MAX_STEP, MAX_STEPS, STEP_STATES, type StepState, type Task } from './tasks.js';
 import { waitFor } from './waits.js';
 import { myWork } from './work.js';
 import { ONYX_NOTE } from './onyx.js';
@@ -56,6 +56,12 @@ function writingNote(text: string | undefined): string | null {
   if (text.length <= 1200 && first.length <= 120) return null;
   return `People see your first line${first.length > 120 ? ` (yours is ${first.length} characters; keep it under 120)` : ''}; put details in a project file. ${text.length > 1200 ? `This was ${text.length} characters.` : ''}`.trim();
 }
+
+/** An agent's checklist for a task, like Claude Code's todo list (#94). */
+const STEPS = z
+  .array(z.object({ text: z.string().max(MAX_STEP), state: z.enum(STEP_STATES as [StepState, ...StepState[]]) }))
+  .max(MAX_STEPS)
+  .describe('Your checklist for the task, all of it each time: pending, in_progress (one at a time) or done. It ticks live on the task card and the ticket.');
 
 const QUESTION_OPTION = z.object({ label: z.string().max(80), description: z.string().max(300).optional() });
 /**
@@ -184,6 +190,7 @@ function formatTask(task: Task) {
     depth: task.depth,
     requested_via: task.chain.join(' → '),
     progress: task.progress,
+    ...(task.steps.length ? { steps: task.steps } : {}),
     stalled: task.stalled,
     seen_at: task.seenAt,
     ...(task.budget
@@ -967,11 +974,12 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
           .max(10)
           .optional()
           .describe('Suggested tickets, for work outside this task'),
+        steps: STEPS.optional(),
       }),
     },
-    async ({ task_id, state, note, links, followups }) =>
+    async ({ task_id, state, note, links, followups, steps }) =>
       run(async () => {
-        const task = store.tasks.update(me, task_id, state, note, { links, followups });
+        const task = store.tasks.update(me, task_id, state, note, { links, followups, steps });
         // On accepting, the agent gets what the company's knowledge base says about the task.
         const knowledge = state === 'accepted' ? await store.onyx.brief(me, task) : null;
         const note_ = writingNote(note);
@@ -1804,18 +1812,20 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
       annotations: annotate('report_progress'),
       description:
         'Update the progress line on a task you are working ("3/5 tests fixed", "running the migration"). It changes the ' +
-        'task card in place and posts nothing, so report as often as is useful. It also tells Orco you are alive.',
+        'task card in place and posts nothing, so report as often as is useful. It also tells Orco you are alive. ' +
+        'Send steps (your whole checklist) to show a live todo list that people watch tick, like Claude Code\'s.',
       inputSchema: z.object({
         task_id: z.number().int(),
-        text: z.string(),
+        text: z.string().optional().describe('The progress line; may be left out when you send steps'),
         percent: z.number().int().min(0).max(100).optional(),
+        steps: STEPS.optional(),
         spent_cents: z.number().int().min(0).optional().describe('What the task has cost so far in total, in US cents, if you know'),
         tokens: z.number().int().min(0).optional().describe('Tokens used on the task so far in total, if you know'),
       }),
     },
-    async ({ task_id, text, percent, spent_cents, tokens }) =>
+    async ({ task_id, text, percent, steps, spent_cents, tokens }) =>
       run(() => {
-        const t = store.tasks.reportProgress(me, task_id, text, percent, { costCents: spent_cents, tokens });
+        const t = store.tasks.reportProgress(me, task_id, text ?? '', percent, { costCents: spent_cents, tokens }, steps);
         const line = `Task #${t.id}: ${t.progress?.text}${t.progress?.percent !== null ? ` (${t.progress?.percent}%)` : ''}`;
         return t.budget?.over ? `${line}\nThis task is over its budget. Stop and check with ${t.requester} (ask_question) before going further.` : line;
       }),

@@ -584,6 +584,82 @@ setInterval(() => {
   for (const node of document.querySelectorAll('[data-since]')) node.textContent = `${node.dataset.prefix}${elapsed(node.dataset.since)}`;
 }, 30_000);
 
+/* Agent work at a glance (#94): a live checklist on each task, and one status line per room. */
+
+const STEP_MARK = { done: '✓', in_progress: '▸', pending: '○' };
+const STEP_WORD = { done: 'done', in_progress: 'in progress', pending: 'to do' };
+
+/** The agent's checklist, like Claude Code's todo list: done struck through, the current step bold. */
+function stepList(steps) {
+  return el(
+    'ol',
+    { class: 'task-steps', 'aria-label': 'Checklist' },
+    steps.map((step) =>
+      el(
+        'li',
+        { class: `task-step task-step-${step.state}`, 'aria-label': `${step.text}: ${STEP_WORD[step.state]}` },
+        el('span', { class: 'task-step-mark', 'aria-hidden': 'true', text: STEP_MARK[step.state] }),
+        el('span', { class: 'task-step-text', text: step.text }),
+      ),
+    ),
+  );
+}
+
+/** "step 2/4": the step in progress, or the next one to do. */
+function stepAt(steps) {
+  if (!steps?.length) return null;
+  const at = steps.findIndex((s) => s.state === 'in_progress');
+  const next = at >= 0 ? at : steps.findIndex((s) => s.state === 'pending');
+  return next < 0 ? `${steps.length}/${steps.length} done` : `step ${next + 1}/${steps.length}`;
+}
+
+/** What an agent's task is doing, in a word: working, idle, waiting on you, waiting for approval, queued, failed. */
+function workWord(task, message) {
+  if (task.state === 'accepted') return task.stalled ? 'idle' : 'working';
+  if (task.state === 'needs_input') return message && (message.author === state.me.name || message.owner === state.me.name) ? 'waiting on you' : 'waiting on an answer';
+  if (task.state === 'awaiting_approval') return 'waiting for approval';
+  if (task.state === 'requested') return 'queued';
+  return task.state;
+}
+
+const WORK_ORDER = ['waiting on you', 'failed', 'working', 'idle', 'waiting on an answer', 'waiting for approval', 'queued'];
+
+/** One status line for the room: the agent task that most needs a look, and how many more there are. */
+function renderWorkStatus() {
+  const box = $('work-status');
+  if (state.view !== 'room') {
+    box.hidden = true;
+    return;
+  }
+  const recent = Date.now() - 2 * 3600_000;
+  const live = state.messages
+    .filter((m) => m.task && (['awaiting_approval', 'requested', 'accepted', 'needs_input'].includes(m.task.state) || (m.task.state === 'failed' && Date.parse(m.task.since) > recent)))
+    .map((m) => ({ message: m, word: workWord(m.task, m) }))
+    .sort((a, b) => WORK_ORDER.indexOf(a.word) - WORK_ORDER.indexOf(b.word));
+  if (!live.length) {
+    box.hidden = true;
+    box.replaceChildren();
+    return;
+  }
+  const line = ({ message, word }) =>
+    el(
+      'button',
+      { class: `work-line work-${word.replace(/\s+/g, '-')}`, type: 'button', title: message.task.progress?.text ?? message.text, onclick: () => void jumpTo({ id: message.id, room: message.room, threadId: null }) },
+      el('span', { class: 'work-dot', 'aria-hidden': 'true' }),
+      el('strong', { text: message.task.assignee }),
+      el('span', { text: ` · ${word} · ` }),
+      liveElapsed('', message.task.since),
+      stepAt(message.task.steps) ? el('span', { text: ` · ${stepAt(message.task.steps)}` }) : null,
+      message.task.progress ? el('span', { class: 'muted work-tail', text: ` · ${message.task.progress.text}` }) : el('span', { class: 'muted work-tail', text: ` · ${(message.text ?? '').replace(/^@[a-z0-9-]+\s*/, '').split('\n')[0]}` }),
+    );
+  const [first, ...rest] = live;
+  box.replaceChildren(
+    line(first),
+    rest.length ? el('details', { class: 'work-more' }, el('summary', { class: 'small', text: `+${rest.length}` }), el('div', { class: 'work-list' }, rest.map(line))) : null,
+  );
+  box.hidden = false;
+}
+
 function taskCard(message) {
   const { id, state: taskState, assignee, since, chain = [], progress = null, stalled = false, seenAt = null, budget = null, links = [], followups = [], feedback = { up: 0, down: 0 } } = message.task;
   const open = ['awaiting_approval', 'requested', 'accepted', 'needs_input'].includes(taskState);
@@ -659,7 +735,14 @@ function taskCard(message) {
   });
   fillHint(hint);
   if (!state.status.has(assignee)) refreshStatus(200);
-  return el('div', { class: 'task-wrap' }, card, hint, followups.length ? followupList(followups) : null);
+  const steps = message.task.steps ?? [];
+  // Open work shows its whole checklist; finished work folds it to a count.
+  const checklist = steps.length
+    ? open
+      ? stepList(steps)
+      : el('details', { class: 'task-steps-done' }, el('summary', { class: 'small muted', text: `${steps.filter((x) => x.state === 'done').length}/${steps.length} steps done` }), stepList(steps))
+    : null;
+  return el('div', { class: 'task-wrap' }, card, checklist, hint, followups.length ? followupList(followups) : null);
 }
 
 const APPROVAL_LABEL = { pending: 'Waiting for a decision', approved: 'Approved', denied: 'Denied', expired: 'Expired' };
@@ -939,6 +1022,7 @@ function onQuestion(question) {
     }
   }
   scheduleInbox();
+  tickets.onTask(task);
   if (!touched) return;
   renderMessages({ keepScroll: true });
   if (state.panel === 'thread') renderThread({ keepScroll: true });
@@ -1245,6 +1329,7 @@ function onTask(task) {
           since: task.updatedAt,
           chain: task.chain,
           progress: task.progress,
+          steps: task.steps ?? [],
           stalled: task.stalled,
           seenAt: task.seenAt,
           budget: task.budget,
@@ -1441,6 +1526,7 @@ function renderMessages({ keepScroll = false } = {}) {
   $('empty').hidden = state.messages.length > 0;
   if (keepScroll) box.scrollTop = box.scrollHeight - fromBottom;
   else box.scrollTop = box.scrollHeight;
+  renderWorkStatus();
 }
 
 function ticketsRoute() {
@@ -1456,6 +1542,7 @@ function setView(view) {
   $('portfolio').classList.toggle('active', view === 'portfolio');
   $('needs-view').hidden = view !== 'needs';
   $('needs').classList.toggle('active', view === 'needs');
+  renderWorkStatus();
 }
 
 function portfolioRoute() {
