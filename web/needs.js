@@ -175,16 +175,21 @@ export function createNeeds(ctx) {
     );
   }
 
-  /** Notification level, quiet hours and the daily digest time, for this person on every device. */
-  function settingsBlock() {
+  /**
+   * Notification level, quiet hours and the daily digest time, for this person on every device. Shown
+   * in the Notifications panel (the bell in the sidebar), so Needs you holds only what to act on.
+   */
+  function settingsFields(onSaved = () => {}) {
     const s = me()?.attention;
     if (!s) return null;
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-    const save = (patch) => act(async () => {
-      const next = await api('/me/settings', { method: 'POST', body: { tz, ...patch } });
-      me().attention = next;
-      notifyConfigure(next);
-    });
+    const save = (patch) =>
+      act(async () => {
+        const next = await api('/me/settings', { method: 'POST', body: { tz, ...patch } });
+        me().attention = next;
+        notifyConfigure(next);
+        onSaved();
+      });
     const time = (value, label, key) => {
       const input = el('input', { type: 'time', value: value ?? '', 'aria-label': label });
       input.addEventListener('change', () => void save({ [key]: input.value || null }));
@@ -205,11 +210,15 @@ export function createNeeds(ctx) {
       ].map(([value, text]) => el('option', { value, text, selected: s.notifyLevel === value })),
     );
     return el(
-      'details',
+      'div',
       { class: 'needs-settings' },
-      el('summary', { class: 'small', text: 'Notifications and daily digest' }),
       el('label', { class: 'small' }, 'Notify me about ', level),
-      el('label', { class: 'small' }, 'Quiet hours from ', quiet(s.quietStart, 'Quiet from', s.quietEnd, 'quiet_start', 'quiet_end'), ' to ', quiet(s.quietEnd, 'Quiet until', s.quietStart, 'quiet_end', 'quiet_start')),
+      el(
+        'label',
+        { class: 'small' },
+        'Quiet hours ',
+        el('span', { class: 'time-range' }, 'from ', quiet(s.quietStart, 'Quiet from', s.quietEnd, 'quiet_start', 'quiet_end'), ' to ', quiet(s.quietEnd, 'Quiet until', s.quietStart, 'quiet_end', 'quiet_start')),
+      ),
       el('label', { class: 'small' }, 'Weekday digest at ', time(s.digestTime, 'Digest time', 'digest_time'), s.digestTime ? el('button', { class: 'link-button small', type: 'button', text: 'Turn off', onclick: () => void save({ digest_time: null }) }) : null),
     );
   }
@@ -237,7 +246,6 @@ export function createNeeds(ctx) {
         list.length > SHOW && !n.all ? el('button', { class: 'ghost small', type: 'button', text: `${list.length - SHOW} more`, onclick: () => ((n.all = true), render(inbox)) }) : null,
         fyi(inbox),
         Object.keys(snoozed).length ? el('p', { class: 'small muted', text: `${Object.keys(snoozed).length} snoozed` }) : null,
-        settingsBlock(),
       ),
     );
   }
@@ -263,6 +271,7 @@ export function createNeeds(ctx) {
   }
 
   return {
+    settings: settingsFields,
     show: async () => {
       n.all = false;
       await reload();

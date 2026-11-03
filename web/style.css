@@ -4073,3 +4073,103 @@ button:disabled {
 .comment-box:not(:focus-within):has(textarea:placeholder-shown) .row-end {
   display: none;
 }
+
+/* Ticket list: no-priority bars and the empty assignee circle show only on the row you point at. */
+.list-row .prio-none i,
+.list-row .avatar-blank {
+  visibility: hidden;
+}
+
+.list-row:hover .prio-none i,
+.list-row:focus-visible .prio-none i,
+.list-row:hover .avatar-blank,
+.list-row:focus-visible .avatar-blank {
+  visibility: visible;
+}
+
+/* Room header: "Set status" waits until you point at the header (a set status always shows). */
+@media (hover: hover) {
+  .room-status.empty {
+    opacity: 0;
+    transition: opacity 0.12s;
+  }
+
+  .room-head:hover .room-status.empty,
+  .room-status.empty:focus-visible {
+    opacity: 1;
+  }
+}
+
+/* Notifications panel (the bell). */
+.notify-panel {
+  display: grid;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+}
+
+.notify-device {
+  display: grid;
+  gap: 0.4rem;
+  justify-items: start;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.notify-device p {
+  margin: 0;
+}
+
+/* Sidebar group names fold their group. */
+.nav-group-head .nav-fold {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.1rem 0.2rem 0.1rem 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.nav-group-head .nav-fold:hover {
+  color: var(--text);
+}
+
+.fold-caret {
+  width: 0.7rem;
+  font-size: 0.65rem;
+}
+
+.fold-count {
+  font-size: 0.7rem;
+  opacity: 0.8;
+}
+
+/* Touch: actions show on a tapped (selected) message, not on a hover that sticks. */
+@media (hover: none) {
+  .msg:hover .msg-actions {
+    display: none;
+  }
+
+  .msg.selected .msg-actions,
+  .msg:focus-within .msg-actions {
+    display: flex;
+  }
+}
+
+.notify-panel .needs-settings {
+  gap: 0.75rem;
+}
+
+.notify-panel .needs-settings input[type='time'] {
+  width: auto;
+  flex: none;
+}
+
+.time-range {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  white-space: nowrap;
+}

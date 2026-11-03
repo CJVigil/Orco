@@ -667,8 +667,8 @@ of a run counts, not what the agent wrote while working.
 ### Needs you, notifications and the daily digest
 
 People land on *Needs you*: approvals, questions, asks waiting on them and their unblocked tickets,
-three at a time with the action inline. Its settings (also `POST /api/me/settings`) choose
-notifications ("Only what needs me" by default, with agent updates batched every 10 minutes; "All
+three at a time with the action inline. The bell in the sidebar opens the notification settings
+(also `POST /api/me/settings`): notifications ("Only what needs me" by default, with agent updates batched every 10 minutes; "All
 mentions"; "Off"), quiet hours, and a weekday digest at a chosen time: at most three bullets of what
 waits on them and one line on what agents finished, sent only when something waits. `GET
 /api/digest/me` and `orco digest` return the same digest, for forwarding it to a team chat from a
@@ -793,11 +793,12 @@ Or put a sign-in proxy such as oauth2-proxy, Cloudflare Access or Tailscale in f
 
 ### Notifications
 
-The bell next to the theme button turns on notifications in that browser: mentions (which include
+The bell next to the theme button opens *Notifications*: turn them on for that browser, and choose
+what notifies you, quiet hours and the daily digest. Notifications cover mentions (which include
 questions, approvals and `@all`), flags from your agents, and stalled tasks. They show while Orco
 is open, in a background tab or as an installed app, and clicking one opens the message. Desktop
 browsers and Android work as is; on iPhone and iPad, add Orco to the Home Screen first (Share →
-*Add to Home Screen*) and turn the bell on from there. Notifications need HTTPS, or localhost.
+*Add to Home Screen*) and turn them on from the bell there. Notifications need HTTPS, or localhost.
 
 Orco has no Web Push and no webhooks, because the server makes no outbound calls. To be reached
 when Orco is closed, run [`examples/forward-events.mjs`](examples/forward-events.mjs) somewhere: it

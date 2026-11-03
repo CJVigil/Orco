@@ -1155,35 +1155,96 @@ function roomLink(room) {
   );
 }
 
+/*
+ * Sidebar groups fold on a click of their name. A folded group still shows any room with something
+ * new in it (and the one you are in), so folding hides nothing that needs you. The server-wide
+ * rooms start folded for anyone with a project of their own.
+ */
+const NAV_FOLD_KEY = 'orco.navFolded';
+let navFolded = null;
+
+function foldedGroups() {
+  if (navFolded) return navFolded;
+  try {
+    const raw = localStorage.getItem(NAV_FOLD_KEY);
+    if (raw) navFolded = new Set(JSON.parse(raw));
+  } catch {
+    // Private windows: folding lasts for this page.
+  }
+  return (navFolded ??= new Set(state.projects.length ? ['server'] : []));
+}
+
+function toggleFold(key) {
+  const set = foldedGroups();
+  if (set.has(key)) set.delete(key);
+  else set.add(key);
+  try {
+    localStorage.setItem(NAV_FOLD_KEY, JSON.stringify([...set]));
+  } catch {
+    // Kept in memory instead.
+  }
+  renderNav();
+}
+
+function groupHead(key, label, hidden, extra = null) {
+  const folded = foldedGroups().has(key);
+  return el(
+    'div',
+    { class: 'nav-group-head' },
+    el(
+      'button',
+      {
+        class: 'nav-fold',
+        type: 'button',
+        'aria-expanded': String(!folded),
+        title: folded ? `Show all of ${label}` : `Fold ${label}; rooms with something new still show`,
+        onclick: () => toggleFold(key),
+      },
+      el('span', { class: 'fold-caret', 'aria-hidden': 'true', text: folded ? '▸' : '▾' }),
+      el('span', { text: label }),
+      folded && hidden ? el('span', { class: 'fold-count', text: `+${hidden}` }) : null,
+    ),
+    extra,
+  );
+}
+
 function renderNav() {
   const nav = $('nav');
   nav.replaceChildren();
+  const showFolded = (r) => (state.unread.get(r.ref) || 0) > 0 || (state.mentioned.get(r.ref) || 0) > 0 || (state.view === 'room' && state.room?.ref === r.ref);
   const serverRooms = state.rooms.filter((r) => r.project === null);
-  nav.append(el('div', { class: 'nav-group' }, el('div', { class: 'nav-group-head', text: 'Server' }), serverRooms.map(roomLink)));
+  const serverFolded = foldedGroups().has('server');
+  const serverShown = serverFolded ? serverRooms.filter(showFolded) : serverRooms;
+  nav.append(el('div', { class: 'nav-group' }, groupHead('server', 'Server', serverRooms.length - serverShown.length), serverShown.map(roomLink)));
   for (const project of state.projects) {
     const rooms = state.rooms.filter((r) => r.project === project.name);
+    const folded = foldedGroups().has(`project:${project.name}`);
+    const shown = folded ? rooms.filter(showFolded) : rooms;
+    const onTickets = state.view === 'tickets' && tickets.project === project.name;
     nav.append(
       el(
         'div',
         { class: 'nav-group' },
-        el(
-          'div',
-          { class: 'nav-group-head' },
-          el('span', { text: project.name }),
+        groupHead(
+          `project:${project.name}`,
+          project.name,
+          rooms.length - shown.length + (folded && !onTickets ? 1 : 0),
           el('button', { class: 'ghost', type: 'button', title: `New room in ${project.name}`, 'aria-label': `New room in ${project.name}`, onclick: () => newRoom(project.name) }, icon('plus')),
         ),
-        el(
-          'a',
-          {
-            class: 'room-link tickets-link',
-            href: `#~${project.name}`,
-            'aria-current': state.view === 'tickets' && tickets.project === project.name ? 'page' : null,
-            onclick: () => $('sidebar').classList.remove('open'),
-          },
-          icon('task'),
-          el('span', { text: 'Tickets' }),
-        ),
-        rooms.map(roomLink),
+        folded && !onTickets
+          ? null
+          : el(
+              'a',
+              {
+                class: 'room-link tickets-link',
+                href: `#~${project.name}`,
+                'aria-current': onTickets ? 'page' : null,
+                onclick: () => $('sidebar').classList.remove('open'),
+              },
+              icon('task'),
+              el('span', { text: 'Tickets' }),
+            ),
+        shown.map(roomLink),
       ),
     );
   }
@@ -2331,11 +2392,41 @@ function openFromNotification({ hash, target }) {
 function renderNotifyButton() {
   const button = $('notify');
   const on = notify.enabled();
-  button.hidden = !notify.supported() && !('serviceWorker' in navigator);
   button.replaceChildren(icon(on ? 'bell' : 'bell-off'));
-  button.title = on ? 'Notifications on (click to turn off)' : 'Turn on notifications';
+  button.title = on ? 'Notifications (on for this device)' : 'Notifications (off for this device)';
   button.setAttribute('aria-label', button.title);
-  button.setAttribute('aria-pressed', String(on));
+}
+
+/** The bell: this device's notifications, plus when Orco notifies you and the daily digest. */
+function showNotifications() {
+  openPanel('notify', 'Notifications');
+  const render = () => {
+    if (state.panel !== 'notify') return;
+    const on = notify.enabled();
+    const device = notify.supported()
+      ? el(
+          'div',
+          { class: 'notify-device' },
+          el('p', { class: 'small', text: on ? 'This device shows notifications while Orco is open.' : 'This device shows no notifications.' }),
+          el('button', {
+            class: on ? 'ghost small' : 'primary small',
+            type: 'button',
+            text: on ? 'Turn off for this device' : 'Turn on for this device',
+            onclick: async () => {
+              try {
+                await notify.toggle();
+              } catch (err) {
+                alert(err.message);
+              }
+              renderNotifyButton();
+              render();
+            },
+          }),
+        )
+      : el('p', { class: 'small muted', text: 'This browser cannot show notifications. On iPhone, add Orco to the Home Screen first.' });
+    $('panel-body').replaceChildren(el('div', { class: 'notify-panel' }, device, needs.settings(render)));
+  };
+  render();
 }
 
 $('other-device').addEventListener('click', () => void guide.showOtherDevice());
@@ -2350,13 +2441,16 @@ $('logout-all').addEventListener('click', async () => {
   location.reload();
 });
 
-$('notify').addEventListener('click', async () => {
-  try {
-    await notify.toggle();
-  } catch (err) {
-    alert(err.message);
-  }
-  renderNotifyButton();
+$('notify').addEventListener('click', () => (state.panel === 'notify' ? closePanel() : showNotifications()));
+
+// Touch screens have no hover: a tap on a message (not on a link or button in it) selects it and shows
+// its actions; a tap elsewhere puts them away.
+document.addEventListener('click', (event) => {
+  if (!window.matchMedia('(hover: none)').matches) return;
+  const msg = event.target.closest('.msg');
+  const interactive = event.target.closest('a, button, input, textarea, select, summary, label');
+  for (const other of document.querySelectorAll('.msg.selected')) if (other !== msg) other.classList.remove('selected');
+  if (msg && !interactive) msg.classList.toggle('selected');
 });
 
 async function refreshInbox() {

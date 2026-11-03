@@ -24,6 +24,13 @@
   progress that nothing else explains. A ticket's "Ask someone" sits on its Next line. The comment
   box is one line until you click in. The working dot pulses a few times when it appears, then
   stays still.
+- The bell in the sidebar opens *Notifications*: turn them on for this device, what notifies you,
+  quiet hours and the daily digest, all in one place (they left the bottom of Needs you, which now
+  holds only what to act on). Sidebar groups fold when you click their name; a folded group still
+  shows any room with something new and the one you are in, and the server-wide rooms start folded
+  once you have a project. Ticket list rows hide the no-priority bars and the empty assignee circle
+  until you point at them, and a room's "Set status" shows when you point at its header. On touch
+  screens, tap a message to show "Reply in thread" instead of it sticking after a scroll.
 - Layout fixes: agent settings no longer spill out of the My agents panel, task cards and their
   progress line fit on phones, board columns keep a readable width on phones, and a folded Backlog
   shows its count at the top of the column. Portfolio totals sit in one even row.
