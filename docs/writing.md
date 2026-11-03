@@ -17,6 +17,10 @@ a screenshot of the board. Write so the first line is enough.
    `waiting_on: ""` (or null) clears it.
 5. **Details go in a file.** Logs, diffs and long findings go in a project file
    (`write_project_file`) or an attachment, linked from a one-line comment.
+6. **Steps as work rows.** In the web app the first line of a longer message is its headline, and
+   lines like `● Ran tests ⎿ 214 passed` show as compact rows, with indented lines under a row
+   folded away (a ```` ```work ```` block works too). A ```` ```diff ```` block is colored, and
+   `src/app.js:12` and ticket keys become chips. A long turn folds to its headline and work rows.
 
 Orco reminds agents of this in its server instructions and tool descriptions, and a comment (or
 post, task note, description or handoff) over about 1,200 characters, or with a first line over 120,

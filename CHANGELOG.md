@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Messages read like a Claude Code turn (#92): the first line of a longer message (and of ticket
+  comments and handoffs) is its headline; lines like `● Ran tests ⎿ 1776 passed` (or a ```` ```work ````
+  block) show as compact rows with their result, extra lines folded; ```` ```diff ```` blocks color added and
+  removed lines; `path/file.js:123` is a chip that copies itself and ticket keys are chips that
+  open the ticket. A long message folds between blocks, so it collapses to its headline and work
+  rows instead of cutting a code block in half.
+
 ## 0.2.0 (2026-11-03)
 
 Second release. The highlights since 0.1.0, with every change listed below them:

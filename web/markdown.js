@@ -5,6 +5,8 @@ const INLINE = [
   { type: 'code', re: /`([^`\n]+)`/ },
   { type: 'link', re: /\[([^\]\n]{1,200})\]\((https?:\/\/[^\s)]+)\)/ },
   { type: 'url', re: /https?:\/\/[^\s<>"]+[^\s<>".,;:!?)\]]/ },
+  // A file path with an extension, and a line number when it has no folder: src/app.js:123, README.md:4.
+  { type: 'path', re: /(?<![\w/.:@-])((?:[\w.-]+\/)+[\w.-]+\.[A-Za-z0-9]{1,8}(?::\d{1,7}(?::\d{1,5})?)?|[\w-][\w.-]*\.[A-Za-z0-9]{1,8}:\d{1,7}(?::\d{1,5})?)(?![\w/])/ },
   { type: 'bold', re: /\*\*([^*\n]+?)\*\*|__([^_\n]+?)__/ },
   { type: 'strike', re: /~~([^~\n]+?)~~/ },
   { type: 'italic', re: /(?<![\w*])\*([^*\s][^*\n]*?)\*(?![\w*])|(?<![\w_])_([^_\s][^_\n]*?)_(?![\w_])/ },
@@ -76,6 +78,9 @@ export function renderInline(text, opts) {
       case 'ticket':
         out.push(opts.ticket?.(m[1], Number(m[2])) ?? m[0]);
         break;
+      case 'path':
+        out.push(opts.path ? opts.path(m[1]) : h('span', { class: 'md-path' }, [m[1]]));
+        break;
     }
     consumed += m.index + m[0].length;
     rest = rest.slice(m.index + m[0].length);
@@ -84,11 +89,59 @@ export function renderInline(text, opts) {
 }
 
 const FENCE = /^\s*```\s*([\w+#.-]*)\s*$/;
+// Claude Code style work rows: "● Ran tests" with its result on a "⎿" line (#92).
+const WORK = /^\s*[●⏺]\s+(.*)$/;
+const RESULT = /^\s*⎿\s?(.*)$/;
+const DETAIL = /^\s{2,}\S/;
 const BULLET = /^\s*[-*+]\s+(.*)$/;
 const NUMBERED = /^\s*(\d{1,9})[.)]\s+(.*)$/;
 const HEADING = /^(#{1,3})\s+(.*)$/;
 const QUOTE = /^\s*>\s?(.*)$/;
 const RULE = /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/;
+
+/** The children of a code block's <code>: a diff gets one span per line, colored by what it does. */
+export function codeChildren(code, lang, h) {
+  if (!/^(diff|patch)$/i.test(lang ?? '')) return [code];
+  const lines = code.split('\n');
+  return lines.map((line) => {
+    const kind = /^(\+\+\+|---)( |$)/.test(line) ? 'meta' : line.startsWith('+') ? 'add' : line.startsWith('-') ? 'del' : line.startsWith('@@') ? 'hunk' : null;
+    // One block per line (no newline inside), so each line can carry its color edge to edge.
+    return h('span', { class: kind ? `md-diff-line md-diff-${kind}` : 'md-diff-line' }, [line || ' ']);
+  });
+}
+
+/**
+ * One work row: the action, its first result on a "⎿" line, and any further lines folded under it.
+ * Collapsed by default, like a finished step in Claude Code.
+ */
+function workItem(item, opts) {
+  const { h } = opts;
+  const head = [h('span', { class: 'md-work-head' }, [h('span', { class: 'md-work-dot', 'aria-hidden': 'true' }, ['●']), h('span', { class: 'md-work-action' }, renderInline(item.action, opts))])];
+  if (item.results.length) head.push(h('span', { class: 'md-work-result' }, ['⎿ ', ...renderInline(item.results[0], opts)]));
+  if (item.results.length <= 1) return h('div', { class: 'md-work-item' }, head);
+  return h('details', { class: 'md-work-item' }, [
+    h('summary', {}, head),
+    h('div', { class: 'md-work-more' }, item.results.slice(1).flatMap((line, n) => (n ? [h('br', {}, []), ...renderInline(line, opts)] : renderInline(line, opts)))),
+  ]);
+}
+
+/** Work rows from lines: an action starts each row, "⎿" and indented lines are its results. */
+function workItems(lines, fenced) {
+  const items = [];
+  for (const raw of lines) {
+    if (!raw.trim()) continue;
+    const work = WORK.exec(raw);
+    const result = RESULT.exec(raw);
+    if (work || (fenced && !result && !DETAIL.test(raw))) {
+      const text = work ? work[1] : raw.trim();
+      const split = text.indexOf('⎿');
+      items.push({ action: (split >= 0 ? text.slice(0, split) : text).trim(), results: split >= 0 ? [text.slice(split + 1).trim()] : [] });
+    } else if (items.length) {
+      items.at(-1).results.push(result ? result[1].trim() : raw.trim());
+    }
+  }
+  return items;
+}
 
 export function renderMarkdown(text, opts) {
   const { h } = opts;
@@ -96,7 +149,16 @@ export function renderMarkdown(text, opts) {
   const blocks = [];
   let i = 0;
   const isBlockStart = (line) =>
-    FENCE.test(line) || BULLET.test(line) || NUMBERED.test(line) || HEADING.test(line) || QUOTE.test(line) || RULE.test(line);
+    FENCE.test(line) || BULLET.test(line) || NUMBERED.test(line) || HEADING.test(line) || QUOTE.test(line) || RULE.test(line) || WORK.test(line);
+  // The first line of a longer message reads as its headline (#92), unless it starts a block itself.
+  if (opts.headline) {
+    const first = lines.findIndex((l) => l.trim());
+    const more = first >= 0 && lines.slice(first + 1).some((l) => l.trim());
+    if (more && !isBlockStart(lines[first])) {
+      blocks.push(h('p', { class: 'md-headline' }, renderInline(lines[first].trim(), opts)));
+      i = first + 1;
+    }
+  }
 
   while (i < lines.length) {
     const line = lines[i];
@@ -110,7 +172,18 @@ export function renderMarkdown(text, opts) {
       i++;
       while (i < lines.length && !FENCE.test(lines[i])) code.push(lines[i++]);
       i++;
-      blocks.push(opts.codeBlock ? opts.codeBlock(code.join('\n'), fence[1]) : h('pre', {}, [h('code', {}, [code.join('\n')])]));
+      if (fence[1].toLowerCase() === 'work') {
+        blocks.push(h('div', { class: 'md-work' }, workItems(code, true).map((item) => workItem(item, opts))));
+        continue;
+      }
+      blocks.push(opts.codeBlock ? opts.codeBlock(code.join('\n'), fence[1]) : h('pre', {}, [h('code', {}, codeChildren(code.join('\n'), fence[1], h))]));
+      continue;
+    }
+    if (WORK.test(line)) {
+      const group = [line];
+      i++;
+      while (i < lines.length && lines[i].trim() && (WORK.test(lines[i]) || RESULT.test(lines[i]) || DETAIL.test(lines[i]))) group.push(lines[i++]);
+      blocks.push(h('div', { class: 'md-work' }, workItems(group, false).map((item) => workItem(item, opts))));
       continue;
     }
     if (RULE.test(line)) {
@@ -127,7 +200,7 @@ export function renderMarkdown(text, opts) {
     if (QUOTE.test(line)) {
       const quoted = [];
       while (i < lines.length && QUOTE.test(lines[i])) quoted.push(QUOTE.exec(lines[i++])[1]);
-      blocks.push(h('blockquote', {}, renderMarkdown(quoted.join('\n'), opts)));
+      blocks.push(h('blockquote', {}, renderMarkdown(quoted.join('\n'), { ...opts, headline: false })));
       continue;
     }
     if (BULLET.test(line) || NUMBERED.test(line)) {

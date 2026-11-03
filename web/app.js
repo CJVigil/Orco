@@ -1,6 +1,6 @@
 import { attachMentionAutocomplete } from './autocomplete.js';
 import { icon } from './icons.js';
-import { renderMarkdown } from './markdown.js';
+import { codeChildren, renderMarkdown } from './markdown.js';
 import * as notify from './notify.js';
 import { createGuide } from './guide.js';
 import { createNeeds } from './needs.js';
@@ -101,14 +101,69 @@ function codeBlock(code, lang) {
       }
     },
   });
-  return el('div', { class: 'code-block' }, el('div', { class: 'code-head' }, el('span', { text: lang || 'text' }), copy), el('pre', {}, el('code', { text: code })));
+  // A diff gets its added and removed lines colored (#92); anything else stays plain text.
+  const code_ = el('code', {}, codeChildren(code, lang, (tag, props, children) => el(tag, props, children)));
+  return el('div', { class: 'code-block' }, el('div', { class: 'code-head' }, el('span', { text: lang || 'text' }), copy), el('pre', {}, code_));
 }
 
-/** A message over about 8 lines shows its first lines, with "Show more" (#84). */
+/** A file path like src/app.js:12 as a chip that copies itself. */
+function pathChip(text) {
+  return el('button', {
+    class: 'path-chip',
+    type: 'button',
+    title: `Copy ${text}`,
+    text,
+    onclick: (event) => {
+      event.stopPropagation();
+      const node = event.currentTarget;
+      void navigator.clipboard
+        ?.writeText(text)
+        .then(() => {
+          node.classList.add('copied');
+          setTimeout(() => node.classList.remove('copied'), 1200);
+        })
+        .catch(() => {});
+    },
+  });
+}
+
+/** About how many lines a rendered block takes, for folding at block boundaries. */
+function blockLines(node) {
+  if (node.matches('.code-block, pre')) return node.querySelector('code')?.textContent.split('\n').length + 1 || 2;
+  if (node.matches('.md-work')) return node.querySelectorAll('.md-work-head, .md-work-result').length;
+  if (node.matches('ul, ol')) return node.children.length;
+  return Math.max(1, Math.ceil(node.textContent.length / 110)) + node.querySelectorAll('br').length;
+}
+
+/**
+ * A message over about 8 lines shows its first lines, with "Show more" (#84). When its first blocks
+ * fit, it folds between blocks, so a Claude Code style turn collapses to its headline and work rows
+ * and a diff or code block shows whole or not at all (#92); one long block is clamped instead.
+ */
 function foldedBody(text) {
-  const body = el('div', { class: 'msg-body md' }, richText(text));
+  const body = el('div', { class: 'msg-body md' }, richText(text, { headline: true }));
   const lines = text.split('\n').length;
   if (lines <= 8 && text.length <= 960) return body;
+  const blocks = [...body.children];
+  let used = 0;
+  const cut = blocks.findIndex((node) => (used += blockLines(node)) > 8);
+  if (cut > 0) {
+    const hidden = blocks.slice(cut);
+    const rest = hidden.reduce((n, node) => n + blockLines(node), 0);
+    const label = `Show more (${rest} line${rest === 1 ? '' : 's'})`;
+    for (const node of hidden) node.hidden = true;
+    const more = el('button', {
+      class: 'link-button small',
+      type: 'button',
+      text: label,
+      onclick: () => {
+        const open = hidden[0].hidden;
+        for (const node of hidden) node.hidden = !open;
+        more.textContent = open ? 'Show less' : label;
+      },
+    });
+    return el('div', { class: 'foldable' }, body, more);
+  }
   body.classList.add('clamped');
   const more = el('button', {
     class: 'link-button small',
@@ -122,10 +177,13 @@ function foldedBody(text) {
   return el('div', { class: 'foldable' }, body, more);
 }
 
-function richText(text) {
+/** Message text as elements; with headline, a longer text's first line reads as its headline (#92). */
+function richText(text, { headline = false } = {}) {
   return renderMarkdown(text, {
     h: (tag, props, children) => el(tag, props, children),
+    headline,
     codeBlock,
+    path: pathChip,
     mention: (name) => {
       const everyone = name === 'all';
       const self = name === state.me.name || (everyone && state.me.kind === 'user');

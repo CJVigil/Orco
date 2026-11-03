@@ -1159,10 +1159,10 @@ export function createTickets(ctx) {
   }
 
   /** Long text folds to its first lines with "Show more"; short text shows as it is. */
-  function folded(text, { lines = 8, firstLineOnly = false } = {}) {
+  function folded(text, { lines = 8, firstLineOnly = false, headline = false } = {}) {
     const count = String(text ?? '').split('\n').length;
     const long = firstLineOnly ? count > 1 || text.length > 160 : count > lines || text.length > lines * 120;
-    const body = el('div', { class: 'md ticket-text' }, richText(text));
+    const body = el('div', { class: 'md ticket-text' }, richText(text, { headline }));
     if (!long) return body;
     const preview = firstLineOnly
       ? el('div', { class: 'ticket-text first-line', text: text.trim().split('\n')[0].slice(0, 200) })
@@ -1209,7 +1209,7 @@ export function createTickets(ctx) {
           el('span', { class: 'spacer' }),
           el('button', { class: 'ghost small', type: 'button', text: h ? 'Edit' : 'Add', onclick: edit }),
         ),
-        h ? folded(h.text) : el('p', { class: 'muted small', text: 'Where the work stands, for whoever picks it up next. Agents keep this current.' }),
+        h ? folded(h.text, { headline: true }) : el('p', { class: 'muted small', text: 'Where the work stands, for whoever picks it up next. Agents keep this current.' }),
       );
     };
     const edit = () => {
@@ -1484,7 +1484,7 @@ export function createTickets(ctx) {
             'div',
             { class: 'comment-main' },
             el('div', { class: 'comment-head' }, el('strong', { text: who }), el('span', { class: `who-chip ${person ? 'person' : 'agent'}`, text: person ? 'Person' : a.actorKind === 'agent' ? 'Agent' : 'Orco' }), el('span', { class: 'muted small', text: ago(a.createdAt) })),
-            person ? el('div', { class: 'md ticket-text' }, richText(a.body)) : folded(a.body, { firstLineOnly: true }),
+            person ? el('div', { class: 'md ticket-text' }, richText(a.body, { headline: true })) : folded(a.body, { firstLineOnly: true, headline: true }),
           ),
         );
       }

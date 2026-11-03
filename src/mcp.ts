@@ -46,7 +46,8 @@ const MAX_WAIT_SECONDS = 300;
 const WRITING =
   'People skim what you write: lead with the point in the first line (at most about 120 characters), put the next ' +
   'step (and who it is for) second, use at most 3 bullets when asking a person, and put long details in a project ' +
-  'file (write_project_file) instead of a comment.';
+  'file (write_project_file) instead of a comment. Show steps as work rows, one per line, like "● Ran tests ⎿ 214 passed" ' +
+  '(more indented lines under a row fold away), and changes as a ```diff block.';
 
 /** A soft note when text is long, or its first line is: it is still posted. */
 function writingNote(text: string | undefined): string | null {
