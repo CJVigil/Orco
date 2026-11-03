@@ -1817,7 +1817,7 @@ button.wide[data-icon] {
   padding: 0 1rem 0 1.25rem;
   min-height: 44px;
   border-bottom: 1px solid var(--border);
-  overflow-x: auto;
+  overflow: visible;
 }
 
 .ticket-tab {
@@ -3770,7 +3770,7 @@ button:disabled {
   gap: 0.1rem;
 }
 
-.board-focus { margin: 0.5rem 1rem 0; }
+.board-focus { margin: 0; white-space: nowrap; }
 .column-more { margin-top: 0.4rem; width: 100%; }
 
 .detail-now {
@@ -3958,6 +3958,42 @@ button:disabled {
 
   .task-card:hover .task-actions,
   .task-card:focus-within .task-actions {
+    opacity: 1;
+  }
+}
+
+/* Ticket tabs: the everyday views, the rest under More. */
+.ticket-more {
+  align-self: stretch;
+  display: flex;
+}
+
+.ticket-more > summary.ticket-tab {
+  padding: 0;
+  border-radius: 0;
+  background: none;
+}
+
+.ticket-more > summary.ticket-tab:hover,
+.ticket-more[open] > summary.ticket-tab {
+  background: none;
+  color: var(--text);
+}
+
+.ticket-more .menu {
+  left: 0;
+  right: auto;
+}
+
+/* Board: a column's "+" shows when the column is pointed at, on devices that hover. */
+@media (hover: hover) {
+  .column-head .ghost.icon {
+    opacity: 0;
+    transition: opacity 0.12s;
+  }
+
+  .board-column:hover .column-head .ghost.icon,
+  .column-head .ghost.icon:focus-visible {
     opacity: 1;
   }
 }

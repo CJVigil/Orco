@@ -12,6 +12,8 @@ const TABS = [
   ['integrations', 'Integrations'],
   ['settings', 'Settings'],
 ];
+/** The views most people use every day; the rest wait behind "More". */
+const MAIN_TABS = ['board', 'list', 'notes', 'files'];
 const CRON_PRESETS = [
   ['0 9 * * 1-5', 'Weekdays at 9:00'],
   ['0 9 * * 1', 'Mondays at 9:00'],
@@ -161,6 +163,8 @@ export function createTickets(ctx) {
       // Private windows: the toggle still works for this page.
     }
     t.focus = on;
+    const box = root.querySelector('.board-focus input');
+    if (box) box.checked = on;
     renderTab();
   };
 
@@ -262,15 +266,36 @@ export function createTickets(ctx) {
     const tabs = el(
       'nav',
       { class: 'ticket-tabs', 'aria-label': 'Ticket views' },
-      TABS.map(([key, label]) =>
+      TABS.filter(([key]) => MAIN_TABS.includes(key) || key === t.tab).map(([key, label]) =>
         el('a', { href: `#~${t.project}/${key}`, class: 'ticket-tab', 'aria-current': key === t.tab ? 'page' : null, text: label }),
       ),
+      moreTabs(),
       el('span', { class: 'spacer' }),
       el('button', { class: 'primary small', type: 'button', onclick: () => openNewTicket() }, icon('plus'), 'New ticket'),
     );
     const body = el('div', { id: 'ticket-body', class: `ticket-body tab-${t.tab}` });
     root.replaceChildren(...[tabs, t.tab === 'board' || t.tab === 'list' ? filterBar() : null, body].filter(Boolean));
     if (!t.plan) body.append(el('p', { class: 'muted empty', text: 'Loading…' }));
+  }
+
+  function moreTabs() {
+    const rest = TABS.filter(([key]) => !MAIN_TABS.includes(key) && key !== t.tab);
+    const menu = el(
+      'details',
+      { class: 'more-menu ticket-more' },
+      el('summary', { class: 'ticket-tab', text: 'More' }),
+      el('div', { class: 'menu' }, rest.map(([key, label]) => el('a', { href: `#~${t.project}/${key}`, class: 'ghost small button-link', text: label, onclick: () => (menu.open = false) }))),
+    );
+    menu.addEventListener('toggle', () => {
+      if (!menu.open) return;
+      const close = (event) => {
+        if (menu.contains(event.target)) return;
+        menu.open = false;
+        document.removeEventListener('click', close);
+      };
+      setTimeout(() => document.addEventListener('click', close));
+    });
+    return menu;
   }
 
   function filterBar() {
@@ -286,6 +311,28 @@ export function createTickets(ctx) {
       timer = setTimeout(() => set('q')(search.value.trim()), 250);
     });
     const plan = t.plan;
+    // Only the search box until someone asks for more, or a filter is already set.
+    const open = t.showFilters || Object.entries(f).some(([key, value]) => key !== 'q' && value);
+    // The board's Focus switch lives on this line instead of a row of its own.
+    const focus =
+      t.tab === 'board'
+        ? el(
+            'label',
+            { class: 'check small board-focus', title: 'Show Done from the last 7 days only, and fold Backlog to a count' },
+            el('input', { type: 'checkbox', checked: (t.focus ??= focusOn()) ? true : null, onchange: (event) => setFocus(event.target.checked) }),
+            'Focus',
+          )
+        : null;
+    if (!open) {
+      return el(
+        'div',
+        { class: 'ticket-filters' },
+        el('span', { class: 'filter-search' }, icon('search'), search),
+        el('button', { class: 'ghost small', type: 'button', text: 'Filters', 'aria-expanded': 'false', onclick: () => ((t.showFilters = true), renderShell(), void refreshTickets()) }),
+        el('span', { class: 'spacer' }),
+        focus,
+      );
+    }
     return el(
       'div',
       { class: 'ticket-filters' },
@@ -304,9 +351,14 @@ export function createTickets(ctx) {
           })
         : null,
       select(f.blocked, [['', 'Blocked or not'], ['1', 'Blocked'], ['0', 'Not blocked']], set('blocked'), { 'aria-label': 'Blocked' }),
-      Object.values(f).some(Boolean)
-        ? el('button', { class: 'ghost small', type: 'button', text: 'Clear', onclick: () => ((t.filters = { ...EMPTY_FILTERS }), renderShell(), void refreshTickets()) })
-        : null,
+      el('button', {
+        class: 'ghost small',
+        type: 'button',
+        text: Object.values(f).some(Boolean) ? 'Clear' : 'Hide',
+        onclick: () => ((t.filters = { ...EMPTY_FILTERS }), (t.showFilters = false), renderShell(), void refreshTickets()),
+      }),
+      el('span', { class: 'spacer' }),
+      focus,
     );
   }
 
@@ -399,12 +451,6 @@ export function createTickets(ctx) {
         }
       }
     }
-    const toggle = el(
-      'label',
-      { class: 'check small board-focus', title: 'Show Done from the last 7 days only, and fold Backlog to a count' },
-      el('input', { type: 'checkbox', checked: t.focus, onchange: (event) => setFocus(event.target.checked) }),
-      'Focus',
-    );
     const canceled = t.tickets.filter((x) => x.status.category === 'canceled').length;
     const board = el(
       'div',
@@ -467,7 +513,7 @@ export function createTickets(ctx) {
         );
       }),
     );
-    return [toggle, board, canceled ? el('p', { class: 'muted small board-note', text: `${canceled} canceled ${canceled === 1 ? 'ticket is' : 'tickets are'} in the List view.` }) : null];
+    return [board, canceled ? el('p', { class: 'muted small board-note', text: `${canceled} canceled ${canceled === 1 ? 'ticket is' : 'tickets are'} in the List view.` }) : null];
   }
 
   /* List */

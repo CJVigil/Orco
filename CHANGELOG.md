@@ -7,6 +7,10 @@
   unset fields. Needs you cards carry one "Later" instead of two snooze buttons, and the reply box
   on an ask opens from "Reply". A task card's Trail and Cancel appear when you point at or tab to
   it, and Add member moved into the room's ⋯ menu.
+- Tickets keep their everyday views in view (Board, List, Notes, Files); Milestones, Cycles,
+  Schedules, Integrations and Settings sit under More. Filters other than search open from one
+  "Filters" button (they stay open while one is set), the board's Focus switch moved onto that
+  line, and a column's "+" shows when you point at the column.
 - Layout fixes: agent settings no longer spill out of the My agents panel, task cards and their
   progress line fit on phones, board columns keep a readable width on phones, and a folded Backlog
   shows its count at the top of the column. Portfolio totals sit in one even row.
