@@ -1036,11 +1036,51 @@ export function createTickets(ctx) {
         nowBlock(ticket),
         props,
         agentRow,
+        standingApprovals(ticket),
         sections(ticket),
         activityBlock(ticket, draft),
       ),
     );
     autosize(title);
+  }
+
+  /** Approvals still in force on the ticket (a standing "don't ask again" among them), each with Stop (#95). */
+  function standingApprovals(ticket) {
+    // Requests approved under a standing approval are covered by it: show the standing one only.
+    const all = (ticket.approvals ?? []).filter((a) => a.inForce && a.validUntil);
+    const standingKinds = new Set(all.filter((a) => a.standing).map((a) => a.actionKind?.toLowerCase()));
+    const live = all.filter((a) => a.standing || !standingKinds.has(a.actionKind?.toLowerCase()));
+    if (!live.length) return null;
+    return el(
+      'div',
+      { class: 'standing-approvals' },
+      live.map((a) =>
+        el(
+          'div',
+          { class: 'standing-row small' },
+          el('span', { class: 'standing-mark', 'aria-hidden': 'true', text: '✓' }),
+          el('span', {
+            text: a.standing
+              ? `"${a.actionKind}" approved without asking until ${shortDate(a.validUntil.slice(0, 10))}`
+              : `Approved until ${shortDate(a.validUntil.slice(0, 10))}: ${a.summary}`,
+            title: a.summary,
+          }),
+          el('span', { class: 'spacer' }),
+          me().kind === 'user'
+            ? el('button', {
+                class: 'ghost small',
+                type: 'button',
+                text: 'Stop',
+                title: 'End it now; the next request asks again',
+                onclick: () =>
+                  void api(`/approvals/${a.id}/revoke`, { method: 'POST', body: {} })
+                    .then(() => openTicket(ticket.ref, { refresh: true, force: true }))
+                    .catch((err) => notify(err.message)),
+              })
+            : null,
+        ),
+      ),
+    );
   }
 
   /**

@@ -671,50 +671,117 @@ function canDecide(message) {
   return message.author !== state.me.name && message.owner !== state.me.name;
 }
 
-async function decideApproval(id, decision, alwaysAllow = false) {
-  let note;
-  if (decision === 'denied') {
+/** Decides an approval. A denial without a note asks for one; options: alwaysAllow, standing, note. */
+async function decideApproval(id, decision, options = {}) {
+  const opts = typeof options === 'boolean' ? { alwaysAllow: options } : options;
+  let note = opts.note;
+  if (decision === 'denied' && note === undefined) {
     note = prompt('Reason (optional, shared with the requester)');
     if (note === null) return;
   }
   try {
-    await api(`/approvals/${id}`, { method: 'POST', body: { decision, note: note || undefined, always_allow: alwaysAllow } });
+    await api(`/approvals/${id}`, { method: 'POST', body: { decision, note: note || undefined, always_allow: Boolean(opts.alwaysAllow), standing: Boolean(opts.standing) } });
   } catch (err) {
     alert(err.message);
   }
 }
 
-function decide(message, decision, alwaysAllow = false) {
-  return decideApproval(message.approval.id, decision, alwaysAllow);
+/**
+ * Numbered choices like Claude Code's permission prompt (#95): each a large button with its number,
+ * and the number keys pick one while the card has focus. A choice with `reply` opens a one-line box
+ * ("No, and tell the agent what to do instead"); Enter sends it, Escape closes it.
+ */
+function numberedChoices(card, choices) {
+  const input = el('input', { class: 'answer-input', maxlength: '4000', 'aria-label': 'Your reply' });
+  const send = el('button', { class: 'primary small', type: 'button', text: 'Send' });
+  const reply = el('div', { class: 'choice-reply', hidden: true }, input, send);
+  let replying = null;
+  const pick = (choice) => {
+    if (choice.reply) {
+      replying = choice;
+      input.placeholder = choice.placeholder ?? 'In a line';
+      reply.hidden = false;
+      input.focus();
+      return;
+    }
+    void choice.run();
+  };
+  const submit = () => replying && void replying.reply(input.value.trim());
+  send.addEventListener('click', submit);
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      submit();
+    } else if (event.key === 'Escape') {
+      event.stopPropagation();
+      reply.hidden = true;
+      card.focus();
+    }
+  });
+  card.tabIndex = 0;
+  card.classList.add('permission-card');
+  card.addEventListener('keydown', (event) => {
+    if (event.target.matches('input, textarea, select') || event.metaKey || event.ctrlKey || event.altKey) return;
+    const n = Number(event.key);
+    if (Number.isInteger(n) && n >= 1 && n <= choices.length) {
+      event.preventDefault();
+      pick(choices[n - 1]);
+    }
+  });
+  return el(
+    'div',
+    { class: 'choices' },
+    el(
+      'div',
+      { class: 'choice-list', role: 'group', 'aria-label': 'Choices (press a number)' },
+      choices.map((choice, i) =>
+        el(
+          'button',
+          { class: `choice${i === 0 ? ' first' : ''}`, type: 'button', title: choice.title ?? null, onclick: () => pick(choice) },
+          el('span', { class: 'choice-key', 'aria-hidden': 'true', text: String(i + 1) }),
+          el('span', { class: 'choice-label', text: choice.label }),
+        ),
+      ),
+    ),
+    reply,
+  );
+}
+
+/** The three choices for an approval: yes; yes and stop asking (this kind on this ticket, or this person's tasks); no, with what to do instead. */
+function approvalChoices({ id, kind, requester, requesterHuman, ticket, actionKind }, onDone = () => {}) {
+  const act = (decision, options) => decideApproval(id, decision, options).then(onDone);
+  return [
+    { label: 'Yes', run: () => act('approved') },
+    kind === 'task'
+      ? { label: `Yes, and always allow ${requesterHuman}`, title: `Tasks from ${requesterHuman} and their agents will reach this agent without asking`, run: () => act('approved', { alwaysAllow: true }) }
+      : ticket && actionKind
+        ? { label: `Yes, and don't ask again for "${actionKind}" on ${ticket}`, title: `${requester}'s later requests of this kind on ${ticket} are approved at once for a week (or the hours it asked for); end it from the ticket`, run: () => act('approved', { standing: true }) }
+        : null,
+    { label: `No, and tell ${requester} what to do instead`, placeholder: `What ${requester} should do instead (optional)`, reply: (text) => act('denied', { note: text }) },
+  ].filter(Boolean);
+}
+
+/** What exactly is being approved, in monospace: fenced Markdown as written, a diff colored. */
+function exactBlock(text) {
+  if (!text) return null;
+  if (/```/.test(text)) return el('div', { class: 'md exact-block' }, richText(text));
+  const diff = /^(@@|\+\+\+ |--- )/m.test(text) || (/^\+/m.test(text) && /^-/m.test(text));
+  return el('pre', { class: 'exact-block' }, el('code', {}, codeChildren(text, diff ? 'diff' : '', (tag, props, children) => el(tag, props, children))));
 }
 
 function approvalCard(message) {
-  const { id, kind, state: approvalState, approver } = message.approval;
+  const { id, kind, state: approvalState, approver, ticket, actionKind } = message.approval;
   const pending = approvalState === 'pending';
   const requesterHuman = message.owner || message.author;
-  const buttons = pending && canDecide(message)
-    ? [
-        el('button', { class: 'primary small', type: 'button', text: 'Approve', onclick: () => void decide(message, 'approved') }),
-        kind === 'task'
-          ? el('button', {
-              class: 'ghost small',
-              type: 'button',
-              text: `Approve & always allow ${requesterHuman}`,
-              title: `Tasks from ${requesterHuman} and their agents will reach this agent without asking`,
-              onclick: () => void decide(message, 'approved', true),
-            })
-          : null,
-        el('button', { class: 'ghost small danger', type: 'button', text: 'Deny', onclick: () => void decide(message, 'denied') }),
-      ]
-    : [];
-  return el(
+  const card = el(
     'div',
     { class: `approval-card approval-${approvalState}` },
     el('span', { class: 'task-id', text: kind === 'task' ? 'Owner approval' : `Approval #${id}` }),
     el('span', { class: 'chip', text: APPROVAL_LABEL[approvalState] }),
     pending && approver && !canDecide(message) ? el('span', { class: 'muted', text: `for ${approver}` }) : null,
-    buttons,
   );
+  if (pending && canDecide(message)) card.append(numberedChoices(card, approvalChoices({ id, kind, requester: message.author, requesterHuman, ticket, actionKind })));
+  return card;
 }
 
 const QUESTION_LABEL = { open: 'Waiting for an answer', answered: 'Answered', resumed: 'Answered', cancelled: 'Closed' };
@@ -3179,6 +3246,9 @@ const needs = createNeeds({
   $,
   answerBox,
   decideApproval,
+  numberedChoices,
+  approvalChoices,
+  exactBlock,
   jumpTo,
   openTicket: (ref) => tickets.openTicket(ref),
   me: () => state.me,

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Approvals and asks as permission cards (#95), like Claude Code's prompt: the question in bold,
+  exactly what it covers (scope, a command, a colored diff) in monospace, then numbered choices you
+  can press 1, 2 or 3 for while the card has focus. **1 Yes**; **2 Yes, and don't ask again for this
+  kind on this ticket** (the agent passes `kind`, like "push to main", to `request_approval`; later
+  requests of that kind on the ticket are approved at once for a week or the hours asked, unless
+  they look like a different risky action, and each one is posted and audited); **3 No, and tell
+  the agent what to do instead**, a one-line reply it receives. Owner approvals for tasks keep
+  "always allow" as their second choice, and waiting-on asks number their replies. The ticket shows
+  standing approvals with **Stop** to end one early (`POST /api/approvals/:id/revoke`).
 - Messages read like a Claude Code turn (#92): the first line of a longer message (and of ticket
   comments and handoffs) is its headline; lines like `● Ran tests ⎿ 1776 passed` (or a ```` ```work ````
   block) show as compact rows with their result, extra lines folded; ```` ```diff ```` blocks color added and

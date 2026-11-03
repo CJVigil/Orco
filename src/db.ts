@@ -967,6 +967,13 @@ export const MIGRATIONS = [
   ALTER TABLE tickets ADD COLUMN folder_id INTEGER REFERENCES ticket_folders(id);
   CREATE INDEX tickets_folder ON tickets (folder_id);
   `,
+  // 36: the kind of action an approval is for, and approvals that stand for that kind on one ticket
+  // ("Yes, and don't ask again", #95).
+  `
+  ALTER TABLE approvals ADD COLUMN action_kind TEXT;
+  ALTER TABLE approvals ADD COLUMN standing INTEGER NOT NULL DEFAULT 0;
+  CREATE INDEX approvals_standing ON approvals (ticket_id, requester_id) WHERE standing = 1;
+  `,
 ];
 
 export interface OpenOptions {

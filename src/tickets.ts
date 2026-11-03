@@ -206,7 +206,17 @@ export interface Ticket extends TicketSummary {
   /** What people decided about it (answers to questions, approvals given), newest first. */
   decisions: { id: number; title: string; decision: string; decidedBy: string; at: string }[];
   /** Approvals asked for on it, with their scope and how long they stay in force. */
-  approvals: { id: number; summary: string; scope: string | null; state: string; decidedBy: string | null; validUntil: string | null; inForce: boolean }[];
+  approvals: {
+    id: number;
+    summary: string;
+    scope: string | null;
+    state: string;
+    decidedBy: string | null;
+    validUntil: string | null;
+    inForce: boolean;
+    actionKind: string | null;
+    standing: boolean;
+  }[];
 }
 
 export interface TicketInput {
@@ -1677,7 +1687,9 @@ export class Tickets {
         reason: r.closed_reason!,
       })),
       decisions: this.store.decisions.forTicket(id).map((d) => ({ id: d.id, title: d.title, decision: d.decision, decidedBy: d.decidedBy, at: d.at })),
-      approvals: this.store.approvals.forTicket(id).map((a) => ({ id: a.id, summary: a.summary, scope: a.scope, state: a.state, decidedBy: a.decidedBy, validUntil: a.validUntil, inForce: a.inForce })),
+      approvals: this.store.approvals
+        .forTicket(id)
+        .map((a) => ({ id: a.id, summary: a.summary, scope: a.scope, state: a.state, decidedBy: a.decidedBy, validUntil: a.validUntil, inForce: a.inForce, actionKind: a.actionKind, standing: a.standing })),
       children: this.summaries(children, actor),
       activity: activity.map((a) => ({
         id: a.id,

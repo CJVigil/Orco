@@ -1664,7 +1664,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
     );
   });
   api.post('/approvals', (req, res) => {
-    const { room, summary, details, ttl_seconds, approver, ticket, scope, valid_for_hours } = req.body ?? {};
+    const { room, summary, details, ttl_seconds, approver, ticket, scope, valid_for_hours, kind } = req.body ?? {};
     res.status(201).json(
       store.approvals.request(req.participant!, {
         room: typeof room === 'string' ? room : undefined,
@@ -1673,10 +1673,16 @@ export function createApp(store: Store, options: AppOptions = {}) {
         details: typeof details === 'string' ? details : undefined,
         scope: typeof scope === 'string' || Array.isArray(scope) ? scope : undefined,
         validForHours: optionalInt(valid_for_hours),
+        kind: typeof kind === 'string' ? kind : undefined,
         approver: approver === 'owner' || approver === 'members' ? approver : undefined,
         ttlSeconds: optionalInt(ttl_seconds),
       }),
     );
+  });
+  api.get('/approvals/:id', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected an approval id');
+    res.json(store.approvals.get(req.participant!, id));
   });
   api.post('/approvals/:id', (req, res) => {
     const id = optionalInt(req.params.id);
@@ -1685,7 +1691,13 @@ export function createApp(store: Store, options: AppOptions = {}) {
       throw new OrcoError('invalid', 'Expected an approval id and decision "approved" or "denied"');
     }
     const note = typeof req.body?.note === 'string' ? req.body.note : undefined;
-    res.json(store.approvals.decide(req.participant!, id, decision, note, { alwaysAllow: req.body?.always_allow === true }));
+    res.json(store.approvals.decide(req.participant!, id, decision, note, { alwaysAllow: req.body?.always_allow === true, standing: req.body?.standing === true }));
+  });
+  // Ends a standing approval ("don't ask again") or any approval still in force (#95).
+  api.post('/approvals/:id/revoke', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected an approval id');
+    res.json(store.approvals.revoke(req.participant!, id));
   });
 
   api.get('/agents', (req, res) => {

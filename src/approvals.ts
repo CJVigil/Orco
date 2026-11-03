@@ -1,4 +1,5 @@
 import { OrcoError } from './errors.js';
+import { riskyKinds } from './safety.js';
 import type { Participant, Room, Store } from './store.js';
 
 export type ApprovalState = 'pending' | 'approved' | 'denied' | 'expired';
@@ -29,6 +30,10 @@ export interface Approval {
   validUntil: string | null;
   /** Approved and not past validUntil. */
   inForce: boolean;
+  /** A short label for the kind of action, like "push to main". */
+  actionKind: string | null;
+  /** Approved as "don't ask again for this kind on this ticket" until validUntil (#95). */
+  standing: boolean;
 }
 
 export interface ApprovalSummary {
@@ -36,6 +41,8 @@ export interface ApprovalSummary {
   kind: ApprovalKind;
   state: ApprovalState;
   approver: string | null;
+  ticket: string | null;
+  actionKind: string | null;
 }
 
 interface ApprovalRow {
@@ -65,6 +72,9 @@ interface ApprovalRow {
   scope: string | null;
   valid_hours: number | null;
   valid_until: number | null;
+  action_kind: string | null;
+  standing: number;
+  decided_by_id: number | null;
 }
 
 const APPROVAL_SELECT = `
@@ -72,7 +82,7 @@ const APPROVAL_SELECT = `
          ap.requester_id, rq.name AS requester, rq.owner_id AS requester_owner_id, rqo.name AS requester_owner,
          ap.approver_id, av.name AS approver, ap.summary, ap.details, ap.state, d.name AS decided_by, ap.note,
          ap.created_at, ap.expires_at, ap.decided_at, ap.ticket_id, tp.ticket_key || '-' || tk.number AS ticket, ap.scope,
-         ap.valid_hours, ap.valid_until
+         ap.valid_hours, ap.valid_until, ap.action_kind, ap.standing, ap.decided_by AS decided_by_id
   FROM approvals ap
   LEFT JOIN tickets tk ON tk.id = ap.ticket_id
   LEFT JOIN projects tp ON tp.id = tk.project_id
@@ -92,6 +102,8 @@ const MAX_DETAILS = 4_000;
 const MAX_SCOPE = 2_000;
 /** The longest an approval stays in force once given ("these prod pushes, until Sunday"). */
 export const MAX_VALID_HOURS = 7 * 24;
+/** A kind of action, like "push to main": one short line. */
+export const MAX_ACTION_KIND = 40;
 
 function iso(ms: number | null): string | null {
   return ms === null ? null : new Date(ms).toISOString();
@@ -119,6 +131,8 @@ function toApproval(row: ApprovalRow, now: number = Date.now()): Approval {
     scope: row.scope,
     validUntil: iso(row.valid_until),
     inForce: row.state === 'approved' && (row.valid_until === null || row.valid_until > now),
+    actionKind: row.action_kind,
+    standing: row.standing === 1 && row.state === 'approved' && row.valid_until !== null && row.valid_until > now,
   };
 }
 
@@ -139,6 +153,8 @@ export class Approvals {
       scope?: string | string[];
       /** Once approved, how long it stays in force, in hours (at most a week). */
       validForHours?: number;
+      /** A short label for the kind of action ("push to main"), so a person can say "don't ask again" for it on the ticket. */
+      kind?: string;
     },
   ): Approval {
     const summary = input.summary.trim();
@@ -164,6 +180,18 @@ export class Approvals {
     if (validHours !== null && !(Number.isInteger(validHours) && validHours >= 1 && validHours <= MAX_VALID_HOURS)) {
       throw new OrcoError('invalid', `valid_for_hours is 1 to ${MAX_VALID_HOURS}`);
     }
+    const actionKind = String(input.kind ?? '').replace(/\s+/g, ' ').trim() || null;
+    if (actionKind && actionKind.length > MAX_ACTION_KIND) throw new OrcoError('invalid', `kind is one line of at most ${MAX_ACTION_KIND} characters`);
+    // Someone already said "don't ask again" for this kind on this ticket: approved at once, on the record.
+    const standing = ticket && actionKind ? this.standingFor(ticket.id, actor.id, actionKind) : null;
+    // The kind is the agent's own label, so a request that looks like any risky action the approved one
+    // (with its label) did not, such as a delete under "push to main", asks again.
+    if (standing) {
+      const approved = new Set(riskyKinds(`${standing.action_kind}\n${standing.summary}\n${standing.details ?? ''}`));
+      if (riskyKinds(`${actionKind}\n${summary}\n${details ?? ''}`).every((risk) => approved.has(risk))) {
+        return this.autoApprove(actor, room, ticket!, actionKind!, summary, details, scope, standing);
+      }
+    }
 
     const approver = mode === 'owner' ? this.store.participantById(actor.ownerId!) : null;
     const notify = approver ? [approver.name] : this.deciders(actor, room).map((p) => p.name);
@@ -178,14 +206,14 @@ export class Approvals {
     this.store.post(actor, room.ref, lines.join('\n'), undefined, {
       onInsert: (messageId) => {
         id = this.insert('action', room, messageId, actor, approver?.id ?? null, summary, details, ttl * 1000);
-        this.store.db.prepare('UPDATE approvals SET ticket_id = ?, scope = ?, valid_hours = ? WHERE id = ?').run(ticket?.id ?? null, scope, validHours, id);
+        this.store.db.prepare('UPDATE approvals SET ticket_id = ?, scope = ?, valid_hours = ?, action_kind = ? WHERE id = ?').run(ticket?.id ?? null, scope, validHours, actionKind, id);
       },
     });
     if (ticket) this.store.tickets.note(ticket.id, actor, 'change', null, { changes: [{ field: 'approval', from: null, to: `requested #${id}: ${summary}` }] });
     this.store.audit.record(actor, 'approval.request', {
       projectId: room.projectId,
       subject: `approval:${id}`,
-      detail: { room: room.ref, summary, approver: approver?.name ?? 'members', expiresInSeconds: ttl, ticket: ticket?.ref ?? null, scope, validForHours: validHours },
+      detail: { room: room.ref, summary, approver: approver?.name ?? 'members', expiresInSeconds: ttl, ticket: ticket?.ref ?? null, scope, validForHours: validHours, kind: actionKind },
     });
     return this.changed(id);
   }
@@ -214,7 +242,7 @@ export class Approvals {
     id: number,
     decision: 'approved' | 'denied',
     note?: string,
-    options: { alwaysAllow?: boolean } = {},
+    options: { alwaysAllow?: boolean; standing?: boolean } = {},
   ): Approval {
     if (actor.kind !== 'user') throw new OrcoError('forbidden', 'Only people can approve or deny');
     this.expireDue();
@@ -225,10 +253,16 @@ export class Approvals {
       throw new OrcoError('forbidden', row.approver ? `Only ${row.approver} can decide this` : 'You cannot decide your own request');
     }
     const trimmedNote = note?.trim().slice(0, MAX_DETAILS) || null;
-    const validUntil = decision === 'approved' && row.valid_hours ? this.store.now() + row.valid_hours * 3600_000 : null;
+    // "Yes, and don't ask again for this kind on this ticket": it stands for its hours, a week at most.
+    const standing = decision === 'approved' && options.standing === true;
+    if (standing && (row.kind !== 'action' || row.ticket_id === null || !row.action_kind)) {
+      throw new OrcoError('invalid', 'Only an approval on a ticket with a kind (like "push to main") can stand for later requests');
+    }
+    const hours = standing ? row.valid_hours ?? MAX_VALID_HOURS : row.valid_hours;
+    const validUntil = decision === 'approved' && hours ? this.store.now() + hours * 3600_000 : null;
     this.store.db
-      .prepare('UPDATE approvals SET state = ?, decided_by = ?, note = ?, decided_at = ?, valid_until = ? WHERE id = ?')
-      .run(decision, actor.id, trimmedNote, this.store.now(), validUntil, id);
+      .prepare('UPDATE approvals SET state = ?, decided_by = ?, note = ?, decided_at = ?, valid_until = ?, standing = ? WHERE id = ?')
+      .run(decision, actor.id, trimmedNote, this.store.now(), validUntil, standing ? 1 : 0, id);
     // On its ticket: the decision in the history, and (approved) a decision record agents can look up.
     if (row.ticket_id !== null) {
       const until = validUntil ? ` until ${new Date(validUntil).toISOString().slice(0, 16).replace('T', ' ')} UTC` : '';
@@ -248,7 +282,7 @@ export class Approvals {
     this.store.audit.record(actor, 'approval.decide', {
       projectId: row.project_id,
       subject: `approval:${id}`,
-      detail: { decision, note: trimmedNote, kind: row.kind },
+      detail: { decision, note: trimmedNote, kind: row.kind, ...(standing ? { standing: { actionKind: row.action_kind, ticket: row.ticket, until: iso(validUntil) } } : {}) },
     });
 
     if (row.kind === 'task') {
@@ -262,16 +296,67 @@ export class Approvals {
       }
     } else {
       const verb = decision === 'approved' ? 'Approved' : 'Denied';
+      const stands = standing
+        ? ` Later requests for "${row.action_kind}" on ${row.ticket} are approved without asking until ${new Date(validUntil!).toISOString().slice(0, 16).replace('T', ' ')} UTC.`
+        : '';
       this.store.post(
         actor,
         toApproval(row).room,
-        `@${row.requester} ${verb} by ${actor.name}.${trimmedNote ? `\n${trimmedNote}` : ''}`,
+        `@${row.requester} ${verb} by ${actor.name}.${stands}${trimmedNote ? `\n${trimmedNote}` : ''}`,
         row.message_id,
       );
       this.store.schedules.onApproval(id, decision, actor);
       this.store.secrets.onApproval(id, decision, actor);
       this.store.safety.onApproval(id, decision, actor);
     }
+    return this.changed(id);
+  }
+
+  /** Ends a standing approval now: the next request of its kind asks again. Its decider or approver only. */
+  revoke(actor: Participant, id: number): Approval {
+    if (actor.kind !== 'user') throw new OrcoError('forbidden', 'Only people can end an approval');
+    const row = this.row(id);
+    if (!row || !this.store.canSeeRoomId(actor, row.room_id)) throw new OrcoError('not_found', `No approval ${id}`);
+    if (row.decided_by_id !== actor.id && row.approver_id !== actor.id) throw new OrcoError('forbidden', `Only ${row.decided_by ?? row.approver ?? 'whoever approved it'} can end approval ${id}`);
+    if (row.state !== 'approved' || row.valid_until === null || row.valid_until <= this.store.now()) throw new OrcoError('conflict', `Approval ${id} is not in force`);
+    this.store.db.prepare('UPDATE approvals SET valid_until = ?, standing = 0 WHERE id = ?').run(this.store.now(), id);
+    this.store.audit.record(actor, 'approval.revoke', { projectId: row.project_id, subject: `approval:${id}`, detail: { kind: row.action_kind, ticket: row.ticket } });
+    if (row.ticket_id !== null) this.store.tickets.note(row.ticket_id, actor, 'change', null, { changes: [{ field: 'approval', from: `#${id}`, to: `ended by ${actor.name}` }] });
+    return this.changed(id);
+  }
+
+  /** The approval standing for this kind of action by this requester on this ticket, if one is in force. */
+  private standingFor(ticketId: number, requesterId: number, actionKind: string): ApprovalRow | null {
+    const row = this.store.db
+      .prepare(`${APPROVAL_SELECT} WHERE ap.ticket_id = ? AND ap.requester_id = ? AND ap.standing = 1 AND ap.state = 'approved' AND ap.valid_until > ? AND lower(ap.action_kind) = lower(?) ORDER BY ap.id DESC LIMIT 1`)
+      .get(ticketId, requesterId, this.store.now(), actionKind) as ApprovalRow | undefined;
+    return row ?? null;
+  }
+
+  /** A request covered by a standing approval: recorded and approved at once, without pinging anyone. */
+  private autoApprove(
+    actor: Participant,
+    room: Room,
+    ticket: { id: number; ref: string },
+    actionKind: string,
+    summary: string,
+    details: string | null,
+    scope: string | null,
+    standing: ApprovalRow,
+  ): Approval {
+    const until = new Date(standing.valid_until!).toISOString().slice(0, 16).replace('T', ' ');
+    const note = `Approved without asking: ${standing.decided_by} said not to ask again for "${actionKind}" on ${ticket.ref} until ${until} UTC (#${standing.id}).`;
+    let id = 0;
+    this.store.post(actor, room.ref, `Approved without asking on ${ticket.ref}: ${summary}\n${note}`, undefined, {
+      onInsert: (messageId) => {
+        id = this.insert('action', room, messageId, actor, standing.approver_id, summary, details, 60_000);
+        this.store.db
+          .prepare('UPDATE approvals SET state = ?, decided_by = ?, note = ?, decided_at = ?, valid_until = ?, ticket_id = ?, scope = ?, action_kind = ? WHERE id = ?')
+          .run('approved', standing.decided_by_id, note, this.store.now(), standing.valid_until, ticket.id, scope, actionKind, id);
+      },
+    });
+    this.store.tickets.note(ticket.id, actor, 'change', null, { changes: [{ field: 'approval', from: null, to: `#${id} approved under #${standing.id}: ${summary}` }] });
+    this.store.audit.record(actor, 'approval.auto', { projectId: room.projectId, subject: `approval:${id}`, detail: { standing: standing.id, kind: actionKind, ticket: ticket.ref, summary } });
     return this.changed(id);
   }
 
@@ -328,14 +413,16 @@ export class Approvals {
   summaryForMessage(messageId: number): ApprovalSummary | null {
     const row = this.store.db
       .prepare(
-        `SELECT ap.id, ap.kind, ap.state, ap.expires_at, av.name AS approver
+        `SELECT ap.id, ap.kind, ap.state, ap.expires_at, av.name AS approver, ap.action_kind,
+                tp.ticket_key || '-' || tk.number AS ticket
          FROM approvals ap LEFT JOIN participants av ON av.id = ap.approver_id
+         LEFT JOIN tickets tk ON tk.id = ap.ticket_id LEFT JOIN projects tp ON tp.id = tk.project_id
          WHERE ap.message_id = ? ORDER BY ap.id DESC LIMIT 1`,
       )
-      .get(messageId) as (ApprovalSummary & { expires_at: number }) | undefined;
+      .get(messageId) as { id: number; kind: ApprovalKind; state: ApprovalState; expires_at: number; approver: string | null; action_kind: string | null; ticket: string | null } | undefined;
     if (!row) return null;
     const state = row.state === 'pending' && row.expires_at <= this.store.now() ? 'expired' : row.state;
-    return { id: row.id, kind: row.kind, state, approver: row.approver };
+    return { id: row.id, kind: row.kind, state, approver: row.approver, ticket: row.ticket, actionKind: row.action_kind };
   }
 
   /**

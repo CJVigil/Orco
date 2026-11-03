@@ -5,24 +5,24 @@
 const SHOW = 3;
 
 export function createNeeds(ctx) {
-  const { api, el, $, answerBox, decideApproval, jumpTo, openTicket, me, notifyConfigure } = ctx;
+  const { api, el, $, answerBox, jumpTo, openTicket, me, notifyConfigure, numberedChoices, approvalChoices, exactBlock } = ctx;
   const root = $('needs-view');
   const n = { all: false, timer: null, loading: null };
 
   /** The things waiting on this person, most urgent first, each with what to show and its action. */
   function items(inbox) {
     const out = [];
+    // Approvals read like a permission prompt (#95): the question, exactly what it covers, then 1 / 2 / 3.
     for (const a of inbox.approvals) {
       out.push({
         key: `approval-${a.id}`,
         kind: 'Approve',
         title: a.summary,
-        detail: `${a.requester} in #${a.room}${a.scope ? ` · scope: ${a.scope.split('\n')[0]}` : ''}`,
-        actions: () => [
-          el('button', { class: 'primary small', type: 'button', text: 'Approve', onclick: () => void act(() => decideApproval(a.id, 'approved')) }),
-          el('button', { class: 'ghost small danger', type: 'button', text: 'Deny', onclick: () => void act(() => decideApproval(a.id, 'denied')) }),
-          el('button', { class: 'ghost small', type: 'button', text: 'Open', onclick: () => void jumpTo({ id: a.messageId, room: a.room, threadId: null }) }),
-        ],
+        detail: `${a.requester} in #${a.room}${a.ticket ? ` · ${a.ticket}` : ''}`,
+        body: () => [a.scope ? exactBlock(`Scope:\n${a.scope}`) : null, exactBlock(a.details)],
+        choices: () =>
+          approvalChoices({ id: a.id, kind: a.kind, requester: a.requester, requesterHuman: a.requesterOwner ?? a.requester, ticket: a.ticket, actionKind: a.actionKind }, () => void reload()),
+        actions: () => [el('button', { class: 'ghost small', type: 'button', text: 'Open', onclick: () => void jumpTo({ id: a.messageId, room: a.room, threadId: null }) })],
       });
     }
     for (const q of inbox.questions) {
@@ -62,15 +62,14 @@ export function createNeeds(ctx) {
               reply.focus();
             },
           });
-          // The ask's own replies: Yes / No for a question, Done otherwise, or what the agent offered.
-          const options = t.waitingOn.options?.length ? t.waitingOn.options : ['Done'];
           return [
-            ...options.map((option) => el('button', { class: options.length === 1 ? 'primary small' : 'small', type: 'button', text: option, onclick: () => void send(option) })),
             el('button', { class: 'ghost small', type: 'button', text: 'Not yet', title: 'Ask me again tomorrow', onclick: () => void send('not_yet') }),
             replyButton,
             el('button', { class: 'ghost small', type: 'button', text: 'Open', onclick: () => void openTicket(t.ref) }),
           ];
         },
+        // The ask's own replies, numbered: Yes / No for a question, Done otherwise, or what the agent offered.
+        choices: () => (t.waitingOn.options?.length ? t.waitingOn.options : ['Done']).map((option) => ({ label: option, run: () => send(option) })),
       });
     }
     for (const r of inbox.reviews) {
@@ -236,15 +235,24 @@ export function createNeeds(ctx) {
         el('h2', { class: 'needs-title', text: list.length ? 'Needs you' : 'Nothing needs you' }),
         digestCard(inbox.digest),
         list.length ? null : el('p', { class: 'muted', text: 'Approvals, questions and asks for you show up here, three at a time.' }),
-        shown.map((item) =>
-          el(
-            'article',
-            { class: 'needs-item', 'data-key': item.key },
+        shown.map((item) => {
+          const article = el('article', { class: 'needs-item', 'data-key': item.key });
+          // append() would print a null as the word "null": leave the missing parts out.
+          const parts = [
             el('div', { class: 'needs-kind', text: item.kind }),
-            el('div', { class: 'needs-main' }, el('strong', { class: 'needs-line', text: item.title }), item.detail ? el('div', { class: 'needs-detail muted small', text: item.detail }) : null),
+            el(
+              'div',
+              { class: 'needs-main' },
+              el('strong', { class: 'needs-line', text: item.title }),
+              item.detail ? el('div', { class: 'needs-detail muted small', text: item.detail }) : null,
+              item.body ? item.body() : null,
+            ),
+            item.choices ? numberedChoices(article, item.choices()) : null,
             el('div', { class: 'needs-actions' }, item.actions(), snoozeButtons(item.key)),
-          ),
-        ),
+          ];
+          article.append(...parts.filter(Boolean));
+          return article;
+        }),
         list.length > SHOW && !n.all ? el('button', { class: 'ghost small', type: 'button', text: `${list.length - SHOW} more`, onclick: () => ((n.all = true), render(inbox)) }) : null,
         fyi(inbox),
         Object.keys(snoozed).length ? el('p', { class: 'small muted', text: `${Object.keys(snoozed).length} snoozed` }) : null,

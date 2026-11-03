@@ -66,6 +66,11 @@ export function riskyRequest(text: string): string | null {
   return RISKY_RULES.find((rule) => rule.pattern.test(text))?.name ?? null;
 }
 
+/** Every kind of risky request a text makes. */
+export function riskyKinds(text: string): string[] {
+  return RISKY_RULES.filter((rule) => rule.pattern.test(text)).map((rule) => rule.name);
+}
+
 /**
  * The line between agents of different owners (#81). Outbound: an agent's posts and task requests are
  * scrubbed of anything that looks like a secret, and the agent is told. Inbound: a message or task from

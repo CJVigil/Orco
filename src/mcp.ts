@@ -1063,13 +1063,20 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         details: z.string().optional().describe('Why, what could go wrong, how to undo it'),
         scope: z.union([z.string(), z.array(z.string())]).optional().describe('Exactly what is approved: a sentence, or the steps'),
         valid_for_hours: z.number().int().min(1).max(MAX_VALID_HOURS).optional().describe('Once approved, how long it stays in force'),
+        kind: z
+          .string()
+          .max(40)
+          .optional()
+          .describe(
+            'With a ticket, a short label for this kind of action, like "push to main". Your owner can then answer "Yes, and don\'t ask again for this kind on this ticket"; later requests of that kind on it come back approved at once (until in_force ends). Keep one label per kind of action.',
+          ),
         ttl_seconds: z.number().int().min(60).max(MAX_APPROVAL_TTL_SECONDS).optional().describe('How long the request stays open for a decision; default 3600'),
         wait_seconds: z.number().int().min(0).max(MAX_WAIT_SECONDS).optional(),
       }),
     },
-    async ({ room, ticket, summary, details, scope, valid_for_hours, ttl_seconds, wait_seconds }, ctx) =>
+    async ({ room, ticket, summary, details, scope, valid_for_hours, kind, ttl_seconds, wait_seconds }, ctx) =>
       run(async () => {
-        const approval = store.approvals.request(me, { room, ticket, summary, details, scope, validForHours: valid_for_hours, ttlSeconds: ttl_seconds });
+        const approval = store.approvals.request(me, { room, ticket, summary, details, scope, validForHours: valid_for_hours, kind, ttlSeconds: ttl_seconds });
         return store.approvals.wait(me, approval.id, waitMs(wait_seconds, 0), ctx.mcpReq.signal);
       }),
   );
