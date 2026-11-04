@@ -55,6 +55,16 @@ describe('sharing images in rooms', () => {
     store.addMember(ana, 'api', 'ben');
   });
 
+  it('a big pasted log is a file with a preview, not text in the message (#126)', () => {
+    const log = Array.from({ length: 4000 }, (_, i) => `2026-11-04 line ${i} something happened`).join('\n');
+    assert.ok(log.length > 150_000);
+    const file = store.attachments.upload(ana, 'api/general', Buffer.from(log), 'paste.txt');
+    const message = store.post(ana, 'api/general', '(pasted 4,000 lines as paste.txt)', undefined, { attachmentIds: [file.id] });
+    const seen = store.read(anaClaude, 'api/general').find((m) => m.id === message.id)!;
+    assert.equal(seen.attachments[0]!.preview, '2026-11-04 line 0 something happened\n2026-11-04 line 1 something happened\n2026-11-04 line 2 something happened');
+    assert.ok(JSON.stringify(seen).length < 2000);
+  });
+
   it('attaches uploads to a message, even without text', () => {
     const image = store.attachments.upload(anaClaude, 'api/general', PNG, 'chart.png');
     const message = store.post(anaClaude, 'api/general', '', undefined, { attachmentIds: [image.id] });

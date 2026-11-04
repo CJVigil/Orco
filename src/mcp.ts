@@ -188,7 +188,7 @@ function formatMessage(message: Message) {
     approval: message.approval,
     ...(message.review ? { review: message.review } : {}),
     images: message.attachments.filter((a) => a.mime !== 'text/plain').map((a) => ({ id: a.id, name: a.name, type: a.mime, bytes: a.size })),
-    files: message.attachments.filter((a) => a.mime === 'text/plain').map((a) => ({ id: a.id, name: a.name, bytes: a.size })),
+    files: message.attachments.filter((a) => a.mime === 'text/plain').map((a) => ({ id: a.id, name: a.name, bytes: a.size, preview: a.preview, read_with: 'read_file' })),
     at: message.createdAt,
   };
 }

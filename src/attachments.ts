@@ -1,3 +1,4 @@
+import { textPreview } from './preview.js';
 import { createHash } from 'node:crypto';
 import { OrcoError } from './errors.js';
 import type { Participant, Room, Store } from './store.js';
@@ -16,6 +17,8 @@ export interface AttachmentInfo {
   name: string;
   mime: AttachmentMime;
   size: number;
+  /** Text files: the first lines (#126). */
+  preview?: string;
 }
 
 const EXTENSIONS: Record<AttachmentMime, string> = {
@@ -104,9 +107,9 @@ export class Attachments {
 
   forMessage(messageId: number): AttachmentInfo[] {
     const rows = this.store.db
-      .prepare('SELECT id, name, mime, size FROM attachments WHERE message_id = ? ORDER BY id')
-      .all(messageId) as unknown as AttachmentInfo[];
-    return rows.map((row) => ({ id: row.id, name: row.name, mime: row.mime, size: row.size }));
+      .prepare("SELECT id, name, mime, size, CASE WHEN mime = 'text/plain' THEN substr(data, 1, 4096) END AS head FROM attachments WHERE message_id = ? ORDER BY id")
+      .all(messageId) as unknown as (AttachmentInfo & { head: Uint8Array | null })[];
+    return rows.map((row) => ({ id: row.id, name: row.name, mime: row.mime, size: row.size, ...(row.head ? { preview: textPreview(row.head) } : {}) }));
   }
 
   get(actor: Participant, id: number): AttachmentInfo & { data: Buffer; sha256: string } {

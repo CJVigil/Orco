@@ -1,3 +1,4 @@
+import { textPreview } from './preview.js';
 import { createHash } from 'node:crypto';
 import { inflateRawSync, inflateSync } from 'node:zlib';
 import { isText, sniffImage } from './attachments.js';
@@ -41,6 +42,8 @@ export interface TicketFile {
   at: string;
   /** The comment it came with, or null when it was attached to the ticket itself. */
   activityId: number | null;
+  /** Text and CSV files: their first lines, so an agent reads the rest only when it needs it (#126). */
+  preview?: string;
 }
 
 /* A small zip reader: the central directory, then stored or deflated entries, with a size cap. */
@@ -335,5 +338,7 @@ export class TicketFiles {
 }
 
 function toFile(row: FileRow): TicketFile {
-  return { id: row.id, name: row.name, mime: row.mime, size: row.size, by: row.by, at: row.created_at, activityId: row.activity_id };
+  const data = (row as { data?: Uint8Array }).data;
+  const text = (row.mime === 'text/plain' || row.mime === 'text/csv') && data;
+  return { id: row.id, name: row.name, mime: row.mime, size: row.size, by: row.by, at: row.created_at, activityId: row.activity_id, ...(text ? { preview: textPreview(data) } : {}) };
 }

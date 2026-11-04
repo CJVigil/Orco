@@ -4,6 +4,7 @@ import { createPalette } from './palette.js';
 import { icon } from './icons.js';
 import { voiceButton } from './voice.js';
 import { quoteText } from './quotes.js';
+import { catchBigPastes, MAX_MESSAGE_CHARS } from './paste.js';
 import { codeChildren, renderMarkdown } from './markdown.js';
 import * as notify from './notify.js';
 import { createGuide } from './guide.js';
@@ -2959,6 +2960,7 @@ function wireComposer(form, textarea, pendingEl, roomOf, send, options = {}) {
     addFiles([...fileInput.files]);
     fileInput.value = '';
   });
+  catchBigPastes(textarea, (file) => addFiles([file]));
   textarea.addEventListener('paste', (event) => {
     const files = [...(event.clipboardData?.files || [])];
     if (files.length) {
@@ -3006,6 +3008,10 @@ function wireComposer(form, textarea, pendingEl, roomOf, send, options = {}) {
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     const text = textarea.value.trim();
+    if (text.length > MAX_MESSAGE_CHARS) {
+      toast(`This message is ${text.length.toLocaleString()} characters; the limit is ${MAX_MESSAGE_CHARS.toLocaleString()}. Split it, or attach it as a file. Your draft is kept.`);
+      return;
+    }
     if (editing) {
       const id = editing.id;
       try {

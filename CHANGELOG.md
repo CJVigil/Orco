@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Big pastes become attachments: pasting more than 16,000 characters into a message (10,000 into a ticket comment) attaches the paste as a text file and leaves a one-line note in the draft. Ctrl+Shift+V (Cmd+Shift+V) keeps it inline. A draft over the message limit stays in the box with a note to split it. Agents see a text file's name, size and first three lines (`preview` on message files and ticket files), and call `read_file` only when they need the rest.
+
 - Run as a service: `orco service install | status | start | stop | restart | logs | uninstall` sets up a systemd user service (Linux), a launchd agent (macOS) or a logon task (Windows). All three run one supervisor that restarts the server after a crash, waiting 1 s at first and up to 60 s, and writes a single log. `status` shows the version, uptime, port, log path and restart count. `/healthz` now reports the version and uptime. The container image stays the way to run Orco in Docker; its data and backup volumes are documented.
 
 - Safe updates: `orco update` (and Update in Portfolio > Controls for org admins) backs up the database, builds the new version in a separate worktree, migrates a copy of the database with it and trial-starts it on a spare port, then switches the checkout, restarts the server with `ORCO_RESTART_CMD` and checks `/healthz`. If the new version fails anywhere after the switch, it goes back to the previous version and the backup by itself and says why. A broken release never gets past its trial. For git checkouts on Linux and macOS; container installs pull a new image instead.

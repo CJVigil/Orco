@@ -3,6 +3,7 @@
 
 import { parseCommand } from './commands.js';
 import { voiceButton } from './voice.js';
+import { catchBigPastes } from './paste.js';
 
 const TABS = [
   ['board', 'Board'],
@@ -1958,6 +1959,7 @@ export function createTickets(ctx) {
     );
     ctx.attachCommands?.(box, 'ticket');
     ctx.attachTicketRefs?.(box);
+    catchBigPastes(box, (file) => void t.addFiles([file]), 10_000);
     return el(
       'section',
       { class: 'detail-section' },
