@@ -1,3 +1,4 @@
+import type { GuestRequest } from './guests.js';
 import type { OrderRule } from './order.js';
 import type { ScopeStatus } from './scope.js';
 import type { TicketCommit } from './commits.js';
@@ -202,6 +203,8 @@ export interface TicketLink {
 export interface Ticket extends TicketSummary {
   /** Files on the ticket and its comments (#98). */
   files: TicketFile[];
+  /** A live guest link and what guests asked (#117). */
+  guest: { active: { expiresAt: string; by: string } | null; requests: GuestRequest[] };
   /** Commits that name it, with their CI result (#107). */
   commits: TicketCommit[];
   /** What agents have spent on it: tokens and cents (#106). */
@@ -1930,6 +1933,7 @@ export class Tickets {
       files: this.store.ticketFiles.forTicket(id),
       spend: this.store.controls.ticketSpend(id),
       commits: this.store.commits.forTicket(id),
+      guest: { active: this.store.guests.active(id), requests: this.store.guests.requests(id) },
       artifacts: this.store.artifacts.forTicket(id).map(({ versions: _v, ...a }) => a),
       activity: activity.map((a) => ({
         id: a.id,

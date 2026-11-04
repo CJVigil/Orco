@@ -1192,6 +1192,30 @@ export const MIGRATIONS = [
     created_by INTEGER NOT NULL REFERENCES participants(id),
     last_run INTEGER
   );
+  `,  // 53: guest links to one ticket, and what guests ask on them (#117).
+  `
+  CREATE TABLE guest_links (
+    id INTEGER PRIMARY KEY,
+    ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    token_hash TEXT NOT NULL UNIQUE,
+    browser_hash TEXT,
+    created_by INTEGER NOT NULL REFERENCES participants(id),
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    revoked_at INTEGER
+  );
+  CREATE TABLE guest_requests (
+    id INTEGER PRIMARY KEY,
+    ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+    link_id INTEGER NOT NULL REFERENCES guest_links(id) ON DELETE CASCADE,
+    text TEXT NOT NULL,
+    photo BLOB,
+    photo_mime TEXT,
+    state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'sent', 'dismissed')),
+    decided_by INTEGER REFERENCES participants(id),
+    created_at INTEGER NOT NULL
+  );
   `,
 ];
 

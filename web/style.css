@@ -5636,3 +5636,54 @@ button.recent-link {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
+
+/* Guest page (#117) */
+.guest {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 1.25rem 1rem 3rem;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.guest-title {
+  margin: 0;
+  font-size: 1.3rem;
+}
+
+.guest-comments {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.guest-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.guest-ask {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.75rem;
+}
+
+.guest-requests {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.guest-request {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: 6px;
+  background: var(--bg-raised);
+}
+
+.guest-request img {
+  max-width: 12rem;
+  border-radius: 4px;
+}

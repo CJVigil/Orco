@@ -785,6 +785,27 @@ export function createTickets(ctx) {
     return el('a', { class: 'session-link small', href: url, target: '_blank', rel: 'noopener noreferrer', title: url, text: 'Open session' });
   }
 
+  /** What guests asked on a shared ticket (#117): Send passes it on to the ticket and its agent; Dismiss drops it. */
+  function guestRequests(ticket) {
+    const pending = (ticket.guest?.requests ?? []).filter((r) => r.state === 'pending');
+    if (!pending.length) return null;
+    const decide = (r, send) => void api(`/guest-requests/${r.id}`, { method: 'POST', body: { send } }).then(() => openTicket(ticket.ref, { refresh: true, force: true }), (err) => notify(err.message));
+    return el(
+      'div',
+      { class: 'files-strip guest-requests' },
+      el('div', { class: 'small muted files-head', text: `Guest requests (${pending.length})` }),
+      pending.map((r) =>
+        el(
+          'div',
+          { class: 'guest-request' },
+          el('div', { class: 'small', text: r.text || '(a photo)' }),
+          r.hasPhoto ? el('img', { src: `/api/guest-requests/${r.id}/photo`, alt: 'Photo from the guest', loading: 'lazy' }) : null,
+          el('div', { class: 'row-end' }, el('button', { class: 'ghost small', type: 'button', text: 'Dismiss', onclick: () => decide(r, false) }), el('button', { class: 'primary small', type: 'button', text: 'Send', onclick: () => decide(r, true) })),
+        ),
+      ),
+    );
+  }
+
   /** Commits that name the ticket, with their CI result and whether they are deployed (#107). */
   function commitsStrip(ticket) {
     if (!ticket.commits?.length) return null;
@@ -902,9 +923,32 @@ export function createTickets(ctx) {
           others.map((p) => el('option', { value: p, text: p })),
         )
       : null;
+    const guest = ticket.guest?.active
+      ? el('button', { class: 'ghost small', type: 'button', title: `Shared by ${ticket.guest.active.by} until ${new Date(ticket.guest.active.expiresAt).toLocaleString()}`, text: 'Guest link live · Stop sharing', onclick: () => void api(`/tickets/${encodeURIComponent(ticket.ref)}/guest-link`, { method: 'DELETE' }).then(() => openTicket(ticket.ref, { refresh: true, force: true }), (err) => notify(err.message)) })
+      : el('button', {
+          class: 'ghost small',
+          type: 'button',
+          title: 'One link for one person without an account: this ticket only, one browser, 24 hours',
+          text: 'Share with guest',
+          onclick: async () => {
+            try {
+              const link = await api(`/tickets/${encodeURIComponent(ticket.ref)}/guest-link`, { method: 'POST', body: {} });
+              try {
+                await navigator.clipboard.writeText(link.url);
+                notify('Guest link copied: it works for one person, in one browser, for 24 hours');
+              } catch {
+                prompt('Send this link to your guest (shown once):', link.url);
+              }
+              void openTicket(ticket.ref, { refresh: true, force: true });
+            } catch (err) {
+              notify(err.message);
+            }
+          },
+        });
     return el(
       'div',
       { class: 'detail-access small' },
+      guest,
       el('button', {
         class: 'ghost small',
         type: 'button',
@@ -1898,6 +1942,7 @@ export function createTickets(ctx) {
         el('span', { class: 'spacer' }),
         el('label', { class: 'check small' }, el('input', { type: 'checkbox', checked: peopleOnly, onchange: (event) => (setPeopleOnly(event.target.checked), renderDetail(ticket)) }), 'People only'),
       ),
+      guestRequests(ticket),
       filesStrip(ticket),
       commitsStrip(ticket),
       ticket.artifacts?.length ? el('div', { class: 'files-strip' }, el('div', { class: 'small muted files-head', text: `Artifacts (${ticket.artifacts.length})` }), ticket.artifacts.map(artifactRow)) : null,

@@ -1682,6 +1682,30 @@ export function createApp(store: Store, options: AppOptions = {}) {
   api.get('/projects/:name/spend', (req, res) => {
     res.json(store.controls.projectSpend(req.participant!, String(req.params.name), optionalInt(req.query.days) ?? 7));
   });
+  // Guest links (#117), for people in the project: share, stop, and send or dismiss what guests ask.
+  api.post('/tickets/:ref/guest-link', (req, res) => {
+    const origin = (options.publicUrl ?? process.env.ORCO_PUBLIC_URL ?? `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
+    res.status(201).json(store.guests.share(req.participant!, String(req.params.ref), origin));
+  });
+  api.delete('/tickets/:ref/guest-link', (req, res) => {
+    store.guests.stop(req.participant!, String(req.params.ref));
+    res.status(204).end();
+  });
+  api.post('/guest-requests/:id', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a request id');
+    res.json(store.guests.decide(req.participant!, id, req.body?.send === true));
+  });
+  api.get('/guest-requests/:id/photo', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a request id');
+    const photo = store.guests.photo(req.participant!, null, id);
+    res.set({ 'Content-Type': photo.mime, 'Content-Security-Policy': "default-src 'none'; sandbox", 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'private, max-age=3600' }).send(photo.data);
+  });
+  api.post('/guest-settings', (req, res) => {
+    store.guests.setEnabled(req.participant!, req.body?.on !== false);
+    res.json({ on: store.guests.enabled() });
+  });
   // "What got done" (#116): JSON, or Markdown with format=md; and a schedule that posts it.
   api.get('/projects/:name/report', (req, res) => {
     const to = str(req.query.to, 'to') ?? new Date(store.now()).toISOString();
@@ -2315,6 +2339,41 @@ export function createApp(store: Store, options: AppOptions = {}) {
   );
 
   // Incoming webhooks: no session, the secret in the URL is the credential. Bodies are kept small.
+  // Guests (#117): the link's token is the credential, bound to the first browser by a cookie.
+  const guestLink = (req: Request, res: Response) => {
+    const cookieName = (id: number) => `orco_guest_${id}`;
+    const token = String(req.params.token);
+    const row = store.db.prepare('SELECT id FROM guest_links WHERE token_hash = ?').get(createHash('sha256').update(token).digest('hex')) as { id: number } | undefined;
+    const { link, newKey } = store.guests.open(token, row ? readCookie(req.headers.cookie, cookieName(row.id)) : undefined);
+    if (newKey) res.cookie(cookieName(link.id), newKey, { httpOnly: true, sameSite: 'strict', secure: secureCookies(req, options.publicUrl), path: '/guest-api/', maxAge: 24 * 3600_000 });
+    res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' });
+    return link;
+  };
+  app.get('/guest-api/:token', (req, res, next) => {
+    try {
+      res.json(store.guests.view(guestLink(req, res)));
+    } catch (err) {
+      next(err);
+    }
+  });
+  app.post('/guest-api/:token/requests', rejectCrossSite, express.json({ limit: '8mb' }), (req, res, next) => {
+    try {
+      const link = guestLink(req, res);
+      const dataUrl = typeof req.body?.photo === 'string' ? /^data:image\/[a-z+]+;base64,(.+)$/.exec(req.body.photo) : null;
+      res.status(201).json(store.guests.request(link, String(req.body?.text ?? ''), dataUrl ? { data: Buffer.from(dataUrl[1]!, 'base64') } : null));
+    } catch (err) {
+      next(err);
+    }
+  });
+  app.get('/guest-api/:token/photos/:id', (req, res, next) => {
+    try {
+      const photo = store.guests.photo(null, guestLink(req, res), Number(req.params.id));
+      res.set({ 'Content-Type': photo.mime, 'Content-Security-Policy': "default-src 'none'; sandbox", 'X-Content-Type-Options': 'nosniff' }).send(photo.data);
+    } catch (err) {
+      next(err);
+    }
+  });
+
   app.post('/hooks/:token', express.raw({ type: () => true, limit: '256kb' }), (req, res) => {
     const headers = Object.fromEntries(Object.entries(req.headers).map(([k, v]) => [k, Array.isArray(v) ? v.join(', ') : v]));
     const result = store.hooks.deliver(String(req.params.token), Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0), headers);
