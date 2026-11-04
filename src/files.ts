@@ -120,6 +120,7 @@ export class Files {
     }
     this.store.audit.record(actor, 'file.write', { projectId: proj.id, subject: `file:${project}/${clean}`, detail: { version: latest + 1, size: data.length, note } });
     this.store.events.emit('files', { projectId: proj.id, path: clean });
+    this.store.scope.onFileWritten(proj.id, clean, latest + 1);
     return this.list(actor, project).find((f) => f.path === clean)!;
   }
 

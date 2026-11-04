@@ -420,7 +420,49 @@ export function createTickets(ctx) {
     }
     t.pendingTab = false;
     const views = { board: renderBoard, list: renderList, milestones: renderMilestones, cycles: renderCycles, notes: renderNotes, files: renderFiles, artifacts: renderArtifacts, spend: renderSpend, schedules: renderSchedules, integrations: renderIntegrations, settings: renderSettings };
-    body.replaceChildren(...[views[t.tab]()].flat(Infinity).filter((node) => node !== null && node !== undefined));
+    const banner = t.tab === 'board' || t.tab === 'list' || t.tab === 'files' ? scopeBanner() : null;
+    body.replaceChildren(...[banner, views[t.tab]()].flat(Infinity).filter((node) => node !== null && node !== undefined));
+  }
+
+  /**
+   * The scope gate (#108): while a project is in Scope, one line above the board says what SCOPE.md
+   * still needs, with the way to start it, open it, and (for admins) approve it.
+   */
+  function scopeBanner() {
+    const scope = t.plan?.scope;
+    if (!scope || scope.state !== 'scoping') return null;
+    const p = encodeURIComponent(t.project);
+    const act = async (path, done) => {
+      try {
+        t.plan.scope = await api(`/projects/${p}/scope/${path}`, { method: 'POST', body: {} });
+        if (done) done();
+        renderTab();
+      } catch (err) {
+        notify(err.message);
+      }
+    };
+    const open = () => {
+      t.openFile = scope.path;
+      location.hash = `#~${t.project}/files`;
+    };
+    const exists = scope.missing.length < scope.sections.length || scope.approvedVersion !== null;
+    return el(
+      'div',
+      { class: 'scope-banner' },
+      el('strong', { text: 'Scope not approved yet.' }),
+      el('span', {
+        class: 'small',
+        text: scope.missing.length
+          ? ` Build tickets stay in Backlog until ${scope.path} covers ${scope.missing.length === scope.sections.length ? 'every section' : scope.missing.join('; ')} and an admin approves it. Tickets labelled "scope" move freely.`
+          : ` ${scope.path} is complete: an admin approves it to let build work start.`,
+      }),
+      el(
+        'span',
+        { class: 'scope-actions' },
+        exists ? el('button', { class: 'ghost small', type: 'button', text: 'Open SCOPE.md', onclick: open }) : el('button', { class: 'small', type: 'button', text: 'Start from the template', onclick: () => void act('start', open) }),
+        scope.missing.length ? null : el('button', { class: 'primary small', type: 'button', text: 'Approve the scope', onclick: () => confirm(`Approve ${scope.path} as the scope of ${t.project}? Build work can start; changing it later needs approval again.`) && void act('approve') }),
+      ),
+    );
   }
 
   /** The agent's checklist on a ticket card: a tiny bar and "3/5" (#94). */

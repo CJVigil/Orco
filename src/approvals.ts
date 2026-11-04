@@ -173,6 +173,11 @@ export class Approvals {
     if (mode === 'owner' && actor.ownerId === null) throw new OrcoError('invalid', 'People have no owner; use approver "members"');
     const ticket = input.ticket ? this.store.tickets.get(actor, input.ticket) : null;
     if (!input.room && !ticket) throw new OrcoError('invalid', 'Give a room or a ticket');
+    // No repos, stacks or deploys for a project whose scope is not approved yet (#108).
+    if (actor.kind === 'agent') {
+      const projectId = ticket ? ticket.projectId : input.room ? this.store.room(actor, input.room).projectId : null;
+      this.store.scope.assertActionAllowed(projectId, `${input.kind ?? ''}\n${summary}\n${details ?? ''}`);
+    }
     const room = this.store.room(actor, input.room || this.store.tickets.workRoom(ticket!.projectId));
     const scope = (Array.isArray(input.scope) ? input.scope.map((s) => `- ${String(s).trim()}`).join('\n') : String(input.scope ?? '')).trim() || null;
     if (scope && scope.length > MAX_SCOPE) throw new OrcoError('invalid', `The scope is over ${MAX_SCOPE} characters`);

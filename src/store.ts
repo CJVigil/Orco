@@ -1,3 +1,4 @@
+import { Scope } from './scope.js';
 import { Commits } from './commits.js';
 import { ToolUsage } from './toolusage.js';
 import { Artifacts } from './artifacts.js';
@@ -260,6 +261,7 @@ export class Store {
   readonly artifacts: Artifacts;
   readonly toolUsage: ToolUsage;
   readonly commits: Commits;
+  readonly scope: Scope;
   readonly questions: Questions;
   readonly notes: Notes;
   readonly flags: Flags;
@@ -307,6 +309,7 @@ export class Store {
     this.artifacts = new Artifacts(this);
     this.toolUsage = new ToolUsage(this);
     this.commits = new Commits(this);
+    this.scope = new Scope(this);
     this.questions = new Questions(this);
     this.notes = new Notes(this);
     this.flags = new Flags(this);
@@ -728,6 +731,8 @@ export class Store {
         .prepare("INSERT INTO rooms (project_id, name, created_by) VALUES (?, 'general', ?)")
         .run(projectId, actor.id);
       this.tickets.setup(projectId);
+      // New projects start in Scope when the org has the gate on (#108).
+      if (this.scope.gateNewProjects()) this.db.prepare("UPDATE projects SET scope_state = 'scoping' WHERE id = ?").run(projectId);
       this.commit();
       this.audit.record(actor, 'project.create', { projectId, subject: `project:${name}` });
       this.events.emit('structure');

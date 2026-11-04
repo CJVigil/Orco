@@ -1,3 +1,4 @@
+import type { ScopeStatus } from './scope.js';
 import type { TicketCommit } from './commits.js';
 import type { Artifact } from './artifacts.js';
 import type { TicketFile } from './ticketfiles.js';
@@ -311,6 +312,8 @@ export interface TicketFilter {
 }
 
 export interface ProjectPlan {
+  /** The scope gate (#108): where the project stands, and what SCOPE.md still needs. */
+  scope: ScopeStatus;
   project: string;
   key: string;
   statuses: TicketStatus[];
@@ -542,6 +545,7 @@ export class Tickets {
     const title = this.title(input.title);
     const description = this.description(input.description ?? '');
     const status = input.status ? this.statusByName(proj.id, input.status) : this.statuses(proj.id).find((s) => s.category === 'backlog' || s.category === 'unstarted')!;
+    if (input.status) this.store.scope.assertBuildAllowed(proj.id, input.labels ?? [], status.category);
     const assignee = input.assignee ? this.assignable(proj.id, input.assignee) : null;
     const labels = this.labelIds(proj.id, input.labels ?? []);
     const milestoneId = input.milestone ? this.milestoneByName(proj.id, input.milestone).id : null;
@@ -733,6 +737,9 @@ export class Tickets {
     if (input.status !== undefined) {
       const status = this.statusByName(row.project_id, input.status);
       if (status.id !== row.status_id) {
+        // Build work waits for an approved scope (#108); "scope" tickets are the scoping itself.
+        const labels = input.labels ?? (this.labelsFor([row.id]).get(row.id) ?? []).map((l) => l.name);
+        this.store.scope.assertBuildAllowed(row.project_id, labels, status.category);
         newStatus = status;
         changes.push({ field: 'status', from: row.status_name, to: status.name });
       }
@@ -1104,6 +1111,7 @@ export class Tickets {
     if (current.category === 'completed' || current.category === 'canceled') throw new OrcoError('conflict', `${refOf(row)} is ${current.name}`);
     const started = statuses.find((s) => s.category === 'started');
     const move = options.start !== false && started && (current.category === 'backlog' || current.category === 'unstarted') ? started : null;
+    if (move) this.store.scope.assertBuildAllowed(row.project_id, (this.labelsFor([row.id]).get(row.id) ?? []).map((l) => l.name), move.category);
     const claimed = this.store.db
       .prepare(
         `UPDATE tickets SET assignee_id = ?, updated_at = ${NOW_SQL},
@@ -1268,6 +1276,7 @@ export class Tickets {
     return {
       project: proj.name,
       key,
+      scope: this.store.scope.statusOf(proj.id),
       statuses: this.statuses(proj.id),
       labels: this.labels(proj.id),
       milestones: this.milestones(proj.id),

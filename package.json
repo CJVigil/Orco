@@ -36,7 +36,7 @@
     "dev": "tsx src/cli.ts serve",
     "orco": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --disable-warning=ExperimentalWarning --import tsx --test --test-reporter=spec \"test/**/*.test.ts\"",
+    "test": "node --disable-warning=ExperimentalWarning --import tsx --import ./test/setup.ts --test --test-reporter=spec \"test/**/*.test.ts\"",
     "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {

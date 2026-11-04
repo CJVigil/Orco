@@ -52,6 +52,8 @@ Never leave a task accepted and silent: close it, ask, or set a reminder.
 
 ## Tickets
 
+- A project in Scope (project_plan's `scope.state` is "scoping") takes no build work, repos, stacks or deploys: help
+  write `scoping/SCOPE.md` on a ticket labelled `scope`, then a person approves it.
 - `list_tickets` / `get_ticket` to read. The list is one line per ticket; ask for `fields` only when you need more.
   `get_ticket` shows the last 10 activity entries (`activity_limit` for more); with `since`, only what changed.
 - `start_ticket` to begin one in a single call (claims it, sets In Progress, returns the handoff and project notes).

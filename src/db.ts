@@ -1086,6 +1086,13 @@ export const MIGRATIONS = [
     PRIMARY KEY (project_id, repo, sha, source)
   );
   CREATE INDEX ci_results_branch ON ci_results (project_id, branch, updated_at);
+  `,  // 45: the scope gate: a project's scope must be approved before build work starts (#108).
+  `
+  ALTER TABLE projects ADD COLUMN scope_state TEXT NOT NULL DEFAULT 'none' CHECK (scope_state IN ('none', 'scoping', 'approved'));
+  ALTER TABLE projects ADD COLUMN scope_version INTEGER;
+  ALTER TABLE projects ADD COLUMN scope_approved_by INTEGER REFERENCES participants(id);
+  ALTER TABLE projects ADD COLUMN scope_decision_id INTEGER;
+  CREATE TABLE org_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
   `,
 ];
 

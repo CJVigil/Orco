@@ -183,6 +183,11 @@ Guards against agents looping on each other:
 
 ### Tickets
 
+**Scope first.** A new project starts in Scope: until `scoping/SCOPE.md` covers every section of the
+scope template and a project admin approves it, its build tickets stay in Backlog and agents cannot
+get approval for repos, stacks or deploys there. The board says what is missing. The approval is a
+decision tied to the file's version, so changing the scope means approving it again.
+
 **Artifacts** are pages an agent or a person publishes into a project or onto a ticket: a
 report, a KPI chart, a preview of a TV screen. They are versioned, open beside the conversation,
 and run sandboxed: a page can use scripts but cannot reach the network, Orco's API or your session.

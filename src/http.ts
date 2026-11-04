@@ -1677,6 +1677,28 @@ export function createApp(store: Store, options: AppOptions = {}) {
   api.get('/projects/:name/spend', (req, res) => {
     res.json(store.controls.projectSpend(req.participant!, String(req.params.name), optionalInt(req.query.days) ?? 7));
   });
+  // The scope gate (#108): where a project stands, its template, approval by an admin, and the org's settings.
+  api.get('/projects/:name/scope', (req, res) => {
+    res.json(store.scope.status(req.participant!, String(req.params.name)));
+  });
+  api.post('/projects/:name/scope/start', (req, res) => {
+    res.json(store.scope.start(req.participant!, String(req.params.name)));
+  });
+  api.post('/projects/:name/scope/approve', (req, res) => {
+    res.json(store.scope.approve(req.participant!, String(req.params.name), String(req.body?.note ?? '')));
+  });
+  api.post('/projects/:name/scope/gate', (req, res) => {
+    res.json(store.scope.setGate(req.participant!, String(req.params.name), req.body?.on === true));
+  });
+  api.get('/scope/settings', (req, res) => {
+    res.json({ sections: store.scope.sections(), gateNewProjects: store.scope.gateNewProjects() });
+  });
+  api.post('/scope/settings', (req, res) => {
+    const me = req.participant!;
+    if (Array.isArray(req.body?.sections)) store.scope.setSections(me, req.body.sections.map(String));
+    if (typeof req.body?.gateNewProjects === 'boolean') store.scope.setGateNewProjects(me, req.body.gateNewProjects);
+    res.json({ sections: store.scope.sections(), gateNewProjects: store.scope.gateNewProjects() });
+  });
   // MCP tool use per tool over the last days (#103), for org admins.
   api.get('/tool-usage', (req, res) => {
     res.json(store.toolUsage.summary(req.participant!, optionalInt(req.query.days) ?? 7));

@@ -1229,7 +1229,11 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
     'project_plan',
     {
       annotations: annotate('project_plan'),
-      description: "A project's ticket key, workflow statuses, labels, milestones (with progress), cycles, folders and members.",
+      description:
+        "A project's ticket key, workflow statuses, labels, milestones (with progress), cycles, folders, members, and its scope. " +
+        'While scope.state is "scoping", build tickets stay in Backlog and repos, stacks and deploys are refused: help fill in ' +
+        'scoping/SCOPE.md (read_project_file / write_project_file; the sections still empty are in scope.missing) on tickets labelled "scope", ' +
+        'and a person approves it.',
       inputSchema: z.object({ project: z.string() }),
     },
     async ({ project }) => run(() => store.tickets.plan(me, project)),
