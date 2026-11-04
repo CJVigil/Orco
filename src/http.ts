@@ -1225,7 +1225,8 @@ export function createApp(store: Store, options: AppOptions = {}) {
     if (id === undefined || (verdict !== 'approved' && verdict !== 'changes_requested')) {
       throw new OrcoError('invalid', 'Expected a review id and verdict "approved" or "changes_requested"');
     }
-    res.json(store.reviews.submit(req.participant!, id, verdict, str(req.body?.note, 'note')));
+    const checked = Array.isArray(req.body?.checked) ? (req.body.checked as unknown[]).filter((n): n is number => Number.isInteger(n)) : [];
+    res.json(store.reviews.submit(req.participant!, id, verdict, str(req.body?.note, 'note'), checked));
   });
   api.post('/reviews/:id/withdraw', (req, res) => {
     const id = optionalInt(req.params.id);
@@ -1678,6 +1679,27 @@ export function createApp(store: Store, options: AppOptions = {}) {
   });
   api.get('/projects/:name/spend', (req, res) => {
     res.json(store.controls.projectSpend(req.participant!, String(req.params.name), optionalInt(req.query.days) ?? 7));
+  });
+  // Area owners (#111): who reviews a folder or label before Done or a deploy, and their delegates.
+  api.get('/projects/:name/owners', (req, res) => {
+    res.json(store.owners.list(req.participant!, String(req.params.name)));
+  });
+  api.post('/projects/:name/owners', (req, res) => {
+    const b = req.body ?? {};
+    res.status(201).json(store.owners.add(req.participant!, String(req.params.name), b.kind === 'label' ? 'label' : 'folder', String(b.area ?? ''), String(b.owner ?? '')));
+  });
+  api.delete('/owners/:id', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected an owner entry id');
+    store.owners.remove(req.participant!, id);
+    res.status(204).end();
+  });
+  api.get('/delegations', (req, res) => {
+    res.json(store.owners.delegations(req.participant!));
+  });
+  api.post('/delegations', (req, res) => {
+    const b = req.body ?? {};
+    res.status(201).json(store.owners.delegate(req.participant!, String(b.delegate ?? ''), String(b.from ?? ''), String(b.until ?? '')));
   });
   // Definition of Done templates (#110), and a new numbered plan file.
   api.get('/checklists', (req, res) => {

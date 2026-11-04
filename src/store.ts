@@ -1,3 +1,4 @@
+import { Owners } from './owners.js';
 import { Checklists } from './checklists.js';
 import { OrderRules } from './order.js';
 import { Scope } from './scope.js';
@@ -266,6 +267,7 @@ export class Store {
   readonly scope: Scope;
   readonly order: OrderRules;
   readonly checklists: Checklists;
+  readonly owners: Owners;
   readonly questions: Questions;
   readonly notes: Notes;
   readonly flags: Flags;
@@ -316,6 +318,7 @@ export class Store {
     this.scope = new Scope(this);
     this.order = new OrderRules(this);
     this.checklists = new Checklists(this);
+    this.owners = new Owners(this);
     this.questions = new Questions(this);
     this.notes = new Notes(this);
     this.flags = new Flags(this);

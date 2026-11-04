@@ -941,6 +941,7 @@ export function createTickets(ctx) {
       stateLine(ticket),
       el('div', { class: 'ticket-card-top' }, el('span', { class: 'ticket-ref', text: ticket.ref }), ticket.private ? el('span', { class: 'private-mark', title: 'Private: only the people on it and project admins see it', 'aria-label': 'Private' }, icon('lock')) : null, ticket.assignee ? avatar(ticket.assignee.name, ticket.assignee.kind) : null),
       el('div', { class: 'ticket-title', text: ticket.title }),
+      ticket.needsReviewFrom?.length ? el('div', { class: 'waits-on small', title: 'An owned area: Done and deploys wait for an approving review', text: `Needs review from ${ticket.needsReviewFrom.join(' and ')}` }) : null,
       ticket.waitsOn?.length ? el('div', { class: 'waits-on small', title: 'Build order rule: it starts once this is done', text: `Waits on ${ticket.waitsOn.join(' and ')}` }) : null,
       nextStepLine(ticket),
       el(
@@ -2844,7 +2845,51 @@ export function createTickets(ctx) {
       ),
       buildOrderSection(base),
       checklistSection(),
+      ownersSection(),
     ];
+  }
+
+  /** Area owners (#111): people who review a folder's or label's tickets before Done or a deploy. */
+  function ownersSection() {
+    const p = encodeURIComponent(t.project);
+    if (!t.ownersLoaded) {
+      t.ownersLoaded = true;
+      void api(`/projects/${p}/owners`).then((list) => {
+        t.owners = list;
+        renderTab();
+      });
+    }
+    const owners = t.owners ?? [];
+    const area = el('input', { placeholder: 'Infrastructure, or label:security', maxlength: '80', 'aria-label': 'Folder or label', required: true });
+    const owner = el('input', { placeholder: 'ana', maxlength: '32', 'aria-label': 'Owner', required: true });
+    const form = el(
+      'form',
+      {
+        class: 'inline-form',
+        onsubmit: (event) => {
+          event.preventDefault();
+          const label = /^label:/i.test(area.value.trim());
+          void act(async () => {
+            await api(`/projects/${p}/owners`, { method: 'POST', body: { kind: label ? 'label' : 'folder', area: label ? area.value.trim().slice(6) : area.value.trim(), owner: owner.value } });
+            t.ownersLoaded = false;
+          });
+        },
+      },
+      area,
+      el('span', { class: 'muted small', text: 'is owned by' }),
+      owner,
+      el('button', { class: 'small', type: 'submit', text: 'Add owner' }),
+    );
+    return el(
+      'section',
+      { class: 'settings-section' },
+      el('h3', { text: 'Area owners' }),
+      el('p', { class: 'muted small', text: 'A ticket in an owned folder or label needs an approving review from an owner before it goes Done, and deploy or push approvals on it wait for that review. Owners can hand this to someone for a while (POST /api/delegations).' }),
+      owners.length
+        ? el('div', { class: 'status-list' }, owners.map((o) => el('div', { class: 'order-rule small' }, el('span', { text: `${o.kind === 'label' ? `label ${o.area}` : o.area}: ${o.owner}` }), el('button', { class: 'ghost small', type: 'button', text: 'Remove', onclick: () => void act(async () => { await api(`/owners/${o.id}`, { method: 'DELETE' }); t.ownersLoaded = false; }) }))))
+        : el('p', { class: 'muted small', text: 'No owners yet.' }),
+      form,
+    );
   }
 
   /** Definition of Done templates (#110): a label's checklist, added as criteria when the label is set. */

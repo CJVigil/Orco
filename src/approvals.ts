@@ -194,6 +194,7 @@ export class Approvals {
     if (standing) {
       const approved = new Set(riskyKinds(`${standing.action_kind}\n${standing.summary}\n${standing.details ?? ''}`));
       if (riskyKinds(`${actionKind}\n${summary}\n${details ?? ''}`).every((risk) => approved.has(risk))) {
+        this.store.owners.assertMayApprove(ticket!.id, `${actionKind}\n${summary}\n${details ?? ''}`, ticket!.ref);
         return this.autoApprove(actor, room, ticket!, actionKind!, summary, details, scope, standing);
       }
     }
@@ -258,6 +259,7 @@ export class Approvals {
       throw new OrcoError('forbidden', row.approver ? `Only ${row.approver} can decide this` : 'You cannot decide your own request');
     }
     const trimmedNote = note?.trim().slice(0, MAX_DETAILS) || null;
+    if (decision === 'approved' && row.ticket_id !== null) this.store.owners.assertMayApprove(row.ticket_id, `${row.action_kind ?? ''}\n${row.summary}\n${row.details ?? ''}`, row.ticket ?? 'This ticket');
     // "Yes, and don't ask again for this kind on this ticket": it stands for its hours, a week at most.
     const standing = decision === 'approved' && options.standing === true;
     if (standing && (row.kind !== 'action' || row.ticket_id === null || !row.action_kind)) {

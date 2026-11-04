@@ -550,30 +550,73 @@ function followupList(followups) {
 
 const REVIEW_LABEL = { pending: 'Waiting for review', approved: 'Approved', changes_requested: 'Changes requested', withdrawn: 'Withdrawn' };
 
-async function submitReview(id, verdict) {
+async function submitReview(id, verdict, checked = []) {
   let note;
   if (verdict === 'changes_requested') {
     note = prompt('What needs to change? (shared with the author)');
     if (!note) return;
   }
   try {
-    await api(`/reviews/${id}`, { method: 'POST', body: { verdict, note } });
+    await api(`/reviews/${id}`, { method: 'POST', body: { verdict, note, checked } });
     scheduleInbox();
   } catch (err) {
     alert(err.message);
   }
 }
 
-function reviewButtons(id) {
-  return [
-    el('button', { class: 'ghost small danger', type: 'button', text: 'Request changes', onclick: () => void submitReview(id, 'changes_requested') }),
-    el('button', { class: 'primary small', type: 'button', text: 'Approve', onclick: () => void submitReview(id, 'approved') }),
-  ];
+function reviewButtons(id, guide = null, checked = null) {
+  const approve = el('button', { class: 'primary small', type: 'button', text: 'Approve', onclick: () => void submitReview(id, 'approved', checked ? [...checked] : []) });
+  // A guided review (#111): Approve waits until every look-closely item is ticked.
+  if (guide?.lookClosely?.length && checked) {
+    const sync = () => {
+      approve.disabled = checked.size < guide.lookClosely.length;
+      approve.title = approve.disabled ? 'Tick each look-closely item first' : '';
+    };
+    sync();
+    approve.addEventListener('sync', sync);
+  }
+  return [el('button', { class: 'ghost small danger', type: 'button', text: 'Request changes', onclick: () => void submitReview(id, 'changes_requested') }), approve];
+}
+
+/** The stops and look-closely items of a guided review, with a box to tick for each look-closely item. */
+function reviewGuide(r, checked, onTick) {
+  const g = r.guide;
+  if (!g) return null;
+  return el(
+    'div',
+    { class: 'review-guide' },
+    g.stops.length
+      ? el(
+          'ol',
+          { class: 'review-stops' },
+          g.stops.map((s) => el('li', {}, el('strong', { text: s.title }), s.path ? pathChip(s.path) : null, s.detail ? el('div', { class: 'small' }, richText(s.detail)) : null)),
+        )
+      : null,
+    g.lookClosely.length
+      ? el(
+          'div',
+          { class: 'look-closely' },
+          el('div', { class: 'small muted', text: 'Look closely' }),
+          g.lookClosely.map((text, i) => {
+            const box = el('input', { type: 'checkbox', disabled: !checked, checked: checked?.has(i) ?? false });
+            box.addEventListener('change', () => {
+              if (box.checked) checked.add(i);
+              else checked.delete(i);
+              onTick();
+            });
+            return el('label', { class: 'check small' }, box, el('span', { text: text }));
+          }),
+        )
+      : null,
+  );
 }
 
 function reviewCard(message) {
   const r = message.review;
   const mine = r.state === 'pending' && r.reviewer === state.me.name;
+  const checked = mine && r.guide?.lookClosely?.length ? new Set() : null;
+  const buttons = mine ? reviewButtons(r.id, r.guide, checked) : null;
+  const guide = reviewGuide(r, checked, () => buttons?.[1].dispatchEvent(new Event('sync')));
   return el(
     'div',
     { class: `review-card review-${r.state}` },
@@ -584,8 +627,9 @@ function reviewCard(message) {
       el('span', { class: 'chip', text: REVIEW_LABEL[r.state] }),
       el('span', { class: 'muted small', text: r.state === 'pending' ? `by ${r.reviewer}` : `${r.reviewer}` }),
       mine ? el('span', { class: 'spacer' }) : null,
-      mine ? reviewButtons(r.id) : null,
+      buttons,
     ),
+    guide,
     r.note ? el('div', { class: 'question-answer', text: r.note }) : null,
   );
 }
@@ -597,7 +641,7 @@ function onReview(review) {
       if (message.review && message.review.id === review.id) {
         touched = true;
         void api(`/reviews/${review.id}`).then((full) => {
-          message.review = { ...message.review, state: full.state, note: full.note };
+          message.review = { ...message.review, state: full.state, note: full.note, guide: full.guide };
           renderMessages({ keepScroll: true });
           if (state.panel === 'thread') renderThread({ keepScroll: true });
         }, () => {});

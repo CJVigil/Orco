@@ -5472,3 +5472,22 @@ button.recent-link {
   margin: 0.2rem 0 0.4rem;
   padding-left: 1.2rem;
 }
+
+/* Guided reviews (#111) */
+.review-guide {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+}
+
+.review-stops {
+  margin: 0;
+  padding-left: 1.2rem;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.look-closely {
+  display: grid;
+  gap: 0.2rem;
+}

@@ -20,6 +20,13 @@ export interface ReviewSummary {
   summary: string;
   note: string | null;
   reviewTaskId: number | null;
+  /** A guided review (#111): ordered stops, and look-closely items the reviewer must tick before approving. */
+  guide: ReviewGuide | null;
+}
+
+export interface ReviewGuide {
+  stops: { title: string; detail: string; path: string | null }[];
+  lookClosely: string[];
 }
 
 export interface Review extends ReviewSummary {
@@ -52,13 +59,14 @@ interface ReviewRow {
   review_task_id: number | null;
   created_at: string;
   decided_at: string | null;
+  guide: string | null;
 }
 
 const SELECT = `
   SELECT v.id, v.room_id, r.name AS room, p.name AS project, r.project_id, v.message_id, v.ticket_id,
          CASE WHEN tk.id IS NULL THEN NULL ELSE tp.ticket_key || '-' || tk.number END AS ticket,
          v.task_id, v.requester_id, rq.name AS requester, rq.owner_id AS requester_owner_id,
-         v.reviewer_id, rv.name AS reviewer, rv.kind AS reviewer_kind, v.summary, v.state, v.note, v.review_task_id,
+         v.reviewer_id, rv.name AS reviewer, rv.kind AS reviewer_kind, v.summary, v.state, v.note, v.review_task_id, v.guide,
          v.created_at, v.decided_at
   FROM reviews v
   JOIN rooms r ON r.id = v.room_id
@@ -82,6 +90,7 @@ function toReview(row: ReviewRow): Review {
     summary: row.summary,
     note: row.note,
     reviewTaskId: row.review_task_id,
+    guide: row.guide ? (JSON.parse(row.guide) as ReviewGuide) : null,
     room: row.project ? `${row.project}/${row.room}` : row.room,
     messageId: row.message_id,
     projectId: row.project_id,
@@ -98,7 +107,8 @@ function toReview(row: ReviewRow): Review {
 export class Reviews {
   constructor(private readonly store: Store) {}
 
-  request(actor: Participant, input: { ticket?: string; taskId?: number; reviewer: string; summary: string }): Review {
+  request(actor: Participant, input: { ticket?: string; taskId?: number; reviewer: string; summary: string; guide?: ReviewGuide | null }): Review {
+    const guide = checkGuide(input.guide);
     if ((input.ticket === undefined) === (input.taskId === undefined)) throw new OrcoError('invalid', 'Ask for a review of a ticket or of a task, not both');
     const summary = input.summary.trim();
     if (!summary) throw new OrcoError('invalid', 'Say what to review and what you want checked');
@@ -135,8 +145,8 @@ export class Reviews {
     let id = 0;
     const insert = (messageId: number, roomId: number, reviewTaskId: number | null) => {
       const { lastInsertRowid } = this.store.db
-        .prepare('INSERT INTO reviews (room_id, message_id, ticket_id, task_id, requester_id, reviewer_id, summary, review_task_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(roomId, messageId, ticketId, input.taskId ?? null, actor.id, reviewer.id, summary, reviewTaskId);
+        .prepare('INSERT INTO reviews (room_id, message_id, ticket_id, task_id, requester_id, reviewer_id, summary, review_task_id, guide) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(roomId, messageId, ticketId, input.taskId ?? null, actor.id, reviewer.id, summary, reviewTaskId, guide ? JSON.stringify(guide) : null);
       id = Number(lastInsertRowid);
     };
     if (reviewer.kind === 'agent') {
@@ -157,7 +167,7 @@ export class Reviews {
     return review;
   }
 
-  submit(actor: Participant, id: number, verdict: 'approved' | 'changes_requested', note?: string): Review {
+  submit(actor: Participant, id: number, verdict: 'approved' | 'changes_requested', note?: string, checked: number[] = []): Review {
     const row = this.row(id);
     if (!row || !this.store.canSee(actor, row.project_id)) throw new OrcoError('not_found', `No review ${id}`);
     if (row.reviewer_id !== actor.id) throw new OrcoError('forbidden', `Review ${id} is ${row.reviewer}'s to give`);
@@ -166,6 +176,12 @@ export class Reviews {
     const text = note?.trim() || null;
     if (verdict === 'changes_requested' && !text) throw new OrcoError('invalid', 'Say what needs to change');
     if (text && text.length > MAX_NOTE) throw new OrcoError('invalid', `Keep the note under ${MAX_NOTE} characters`);
+    // A guided review is approved only once every look-closely item is ticked (#111).
+    const guide = row.guide ? (JSON.parse(row.guide) as ReviewGuide) : null;
+    if (verdict === 'approved' && guide) {
+      const open = guide.lookClosely.filter((_, i) => !checked.includes(i));
+      if (open.length) throw new OrcoError('conflict', `Tick each look-closely item before approving (checked: their numbers from 0), or request changes. Still open: ${open.join('; ')}`);
+    }
     const review = toReview(row);
     const words = verdict === 'approved' ? 'approved' : 'asks for changes';
     this.store.post(actor, review.room, `@${row.requester} ${actor.name} ${words} on ${review.target}.${text ? `\n${text}` : ''}`, row.message_id, {
@@ -252,4 +268,16 @@ export class Reviews {
     const row = this.row(id);
     return row ? toReview(row) : null;
   }
+}
+
+/** Checks a review guide: at most 20 stops and 10 look-closely items, each one short. */
+function checkGuide(guide: ReviewGuide | null | undefined): ReviewGuide | null {
+  if (!guide) return null;
+  const stops = (guide.stops ?? []).map((s) => ({ title: String(s.title ?? '').trim(), detail: String(s.detail ?? '').trim(), path: s.path ? String(s.path).trim().slice(0, 300) : null }));
+  const lookClosely = (guide.lookClosely ?? []).map((l) => String(l).trim()).filter(Boolean);
+  if (stops.length > 20 || lookClosely.length > 10) throw new OrcoError('invalid', 'A guide has at most 20 stops and 10 look-closely items');
+  if (stops.some((s) => !s.title || s.title.length > 200 || s.detail.length > 2000) || lookClosely.some((l) => l.length > 300)) {
+    throw new OrcoError('invalid', 'Each stop needs a title (200 characters) and at most 2,000 characters of detail; look-closely items at most 300');
+  }
+  return stops.length || lookClosely.length ? { stops, lookClosely } : null;
 }

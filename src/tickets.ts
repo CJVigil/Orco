@@ -139,6 +139,8 @@ export interface TicketSummary {
   private: boolean;
   /** What a not-yet-started ticket waits on under the build order rules (#109), like ["Skeleton"]. */
   waitsOn: string[];
+  /** Owners whose approving review an open ticket in an owned area still needs (#111), like ["ana (Infrastructure)"]. */
+  needsReviewFrom: string[];
   ref: string;
   project: string;
   projectId: number;
@@ -947,6 +949,9 @@ export class Tickets {
         throw err;
       }
     }
+
+    // Area owners (#111): Done waits for an approving review from the owner of each owned folder or label.
+    if (newStatus?.category === 'completed') this.store.owners.assertMayFinish(actor, row.id, refOf(row));
 
     this.store.begin();
     try {
@@ -1962,6 +1967,12 @@ export class Tickets {
     const criteria = this.criteriaCounts(ids);
     const blockedBy = this.openBlockers(ids, actor);
     const rulesByProject = new Map<number, ReturnType<Store['order']['forProject']>>();
+    const projectIds = [...new Set(rows.map((r) => r.project_id))];
+    const ownedProjects = new Set(
+      projectIds.length
+        ? (this.store.db.prepare(`SELECT DISTINCT project_id FROM area_owners WHERE project_id IN (${projectIds.map(() => '?').join(', ')})`).all(...projectIds) as { project_id: number }[]).map((r) => r.project_id)
+        : [],
+    );
     const waitsOn = (row: TicketRow): string[] => {
       if (row.category !== 'backlog' && row.category !== 'unstarted') return [];
       if (!rulesByProject.has(row.project_id)) rulesByProject.set(row.project_id, this.store.order.forProject(row.project_id));
@@ -1988,6 +1999,7 @@ export class Tickets {
         cycle: row.cycle_id === null ? null : { id: row.cycle_id, number: row.cycle_number! },
         private: row.private === 1,
         waitsOn: waitsOn(row),
+        needsReviewFrom: ownedProjects.has(row.project_id) && row.category !== 'completed' && row.category !== 'canceled' ? this.store.owners.waitingFor(row.id) : [],
         folder: row.folder_id === null ? null : { id: row.folder_id, name: row.folder!, emoji: row.folder_emoji },
         parent: row.parent_number === null ? null : `${row.ticket_key}-${row.parent_number}`,
         task: row.task_id === null || state === null ? null : { id: row.task_id, state, since: row.task_since!, steps: stepCount(row.task_steps) },

@@ -1118,6 +1118,24 @@ export const MIGRATIONS = [
   ALTER TABLE ticket_criteria ADD COLUMN template TEXT;
   INSERT INTO checklist_templates (project_id, label, items) VALUES (NULL, 'service', '[{"text": "Names follow the platform naming rules", "required": true}, {"text": "No host ports published; traffic goes through the proxy", "required": true}, {"text": "Memory and CPU limits set", "required": true}, {"text": "A healthcheck", "required": true}, {"text": "Log rotation configured", "required": true}, {"text": "The env example is updated", "required": true}, {"text": "A dev branch and its workflow", "required": true}]');
   INSERT INTO checklist_templates (project_id, label, items) VALUES (NULL, 'ui', '[{"text": "Works at phone width (390 px)", "required": true}]');
+  `,  // 48: area owners and their delegates, and guided reviews (#111).
+  `
+  CREATE TABLE area_owners (
+    id INTEGER PRIMARY KEY,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('folder', 'label')),
+    area TEXT NOT NULL,
+    user_id INTEGER NOT NULL REFERENCES participants(id) ON DELETE CASCADE,
+    UNIQUE (project_id, kind, area, user_id)
+  );
+  CREATE TABLE area_delegations (
+    id INTEGER PRIMARY KEY,
+    owner_id INTEGER NOT NULL REFERENCES participants(id) ON DELETE CASCADE,
+    delegate_id INTEGER NOT NULL REFERENCES participants(id) ON DELETE CASCADE,
+    from_day TEXT NOT NULL,
+    until_day TEXT NOT NULL
+  );
+  ALTER TABLE reviews ADD COLUMN guide TEXT;
   `,
 ];
 

@@ -160,6 +160,7 @@ function compactTicket(t: TicketSummary) {
     ...(t.folder ? { folder: t.folder.name } : {}),
     ...(t.blocked ? { blocked: true } : {}),
     ...(t.waitsOn.length ? { waits_on: t.waitsOn.join(', ') } : {}),
+    ...(t.needsReviewFrom.length ? { needs_review_from: t.needsReviewFrom.join(', ') } : {}),
     ...(t.waitingOn ? { waiting_on: t.waitingOn.person } : {}),
   };
 }
@@ -211,6 +212,7 @@ function formatReview(r: Review) {
     state: r.state,
     summary: r.summary,
     note: r.note,
+    ...(r.guide ? { guide: { stops: r.guide.stops, look_closely: r.guide.lookClosely.map((text, i) => ({ number: i, text })) } } : {}),
     room: r.room,
     thread_id: r.messageId,
   };
@@ -286,6 +288,7 @@ function formatTicketSummary(t: TicketSummary) {
     blocked_by: t.blockedBy,
     blocked_reason: t.blockedReason,
     ...(t.waitsOn.length ? { waits_on: t.waitsOn } : {}),
+    ...(t.needsReviewFrom.length ? { needs_review_from: t.needsReviewFrom, note_on_review: 'Ask an owner with request_review (stops and look_closely help them); Done and deploy approvals wait for it.' } : {}),
     criteria: t.criteria.total ? `${t.criteria.done}/${t.criteria.total}` : null,
     ...(t.nextStep ? { next_step: t.nextStep.for ? `${t.nextStep.text} (for ${t.nextStep.for})` : t.nextStep.text } : {}),
     ...(t.waitingOn
@@ -843,10 +846,26 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         ticket: z.string().optional().describe('Like API-12'),
         task_id: z.number().int().optional().describe('Instead of a ticket'),
         summary: z.string().describe('What changed, where to look (PR, branch, file), and what you want checked'),
+        stops: z
+          .array(z.object({ title: z.string(), detail: z.string().optional().describe('What changed and why; a short diff excerpt is fine'), path: z.string().optional() }))
+          .max(20)
+          .optional()
+          .describe('A guided review: the places to look, in order'),
+        look_closely: z.array(z.string()).max(10).optional().describe('Decisions the reviewer must make; each must be ticked before Approve'),
       }),
     },
-    async ({ reviewer, ticket, task_id, summary }) =>
-      run(() => formatReview(store.reviews.request(me, { reviewer, ticket, taskId: task_id, summary }))),
+    async ({ reviewer, ticket, task_id, summary, stops, look_closely }) =>
+      run(() =>
+        formatReview(
+          store.reviews.request(me, {
+            reviewer,
+            ticket,
+            taskId: task_id,
+            summary,
+            guide: stops || look_closely ? { stops: (stops ?? []).map((s) => ({ title: s.title, detail: s.detail ?? '', path: s.path ?? null })), lookClosely: look_closely ?? [] } : null,
+          }),
+        ),
+      ),
   );
 
   server.registerTool(
@@ -868,9 +887,10 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         review_id: z.number().int(),
         verdict: z.enum(['approved', 'changes_requested']),
         note: z.string().optional().describe('Required for changes_requested'),
+        checked: z.array(z.number().int()).optional().describe('For a guided review: the look-closely items you checked, by number from 0'),
       }),
     },
-    async ({ review_id, verdict, note }) => run(() => formatReview(store.reviews.submit(me, review_id, verdict, note))),
+    async ({ review_id, verdict, note, checked }) => run(() => formatReview(store.reviews.submit(me, review_id, verdict, note, checked ?? []))),
   );
 
   server.registerTool(
