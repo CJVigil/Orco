@@ -5320,3 +5320,30 @@ button.recent-link {
   margin: 0.3rem 0 0;
   font-size: 0.76rem;
 }
+
+/* Tool use (#103) */
+.pf-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.84rem;
+}
+
+.pf-table th,
+.pf-table td {
+  padding: 0.3rem 0.6rem;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.pf-table th {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.pf-table tbody tr:nth-child(odd) {
+  background: var(--bg-raised);
+}
+
+.portfolio-body:has(.pf-table) {
+  overflow-x: auto;
+}

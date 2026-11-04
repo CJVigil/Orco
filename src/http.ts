@@ -1668,6 +1668,10 @@ export function createApp(store: Store, options: AppOptions = {}) {
     res.status(204).end();
   });
 
+  // MCP tool use per tool over the last days (#103), for org admins.
+  api.get('/tool-usage', (req, res) => {
+    res.json(store.toolUsage.summary(req.participant!, optionalInt(req.query.days) ?? 7));
+  });
   api.get('/my-work', (req, res) => {
     const work = myWork(store, req.participant!);
     // format=brief: a few lines for a session's opening context (the Claude Code plugin's hook, #102).

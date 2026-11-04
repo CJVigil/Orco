@@ -66,4 +66,16 @@ describe('compact MCP replies (#103)', () => {
     assert.match(t.earlier_activity, new RegExp(`^${all - 10} earlier entries`));
     assert.deepEqual(Object.keys(JSON.parse(await text('get_ticket', { ticket: 'SHO-1', fields: 'ref,handoff' })).ticket), ['ref', 'handoff']);
   });
+
+  it('counts tool use per tool locally, for org admins', async () => {
+    await text('get_ticket', { ticket: 'NOPE-1' });
+    const carlos = store.participantByName('carlos')!;
+    const rows = store.toolUsage.summary(carlos, 7);
+    const get = rows.find((r) => r.tool === 'get_ticket')!;
+    assert.ok(get.calls >= 4);
+    assert.equal(get.errorCodes.not_found, 1);
+    assert.ok(rows.find((r) => r.tool === 'list_tickets')!.maxBytes > 1000);
+    const bot = store.participantByName('carlos-bot')!;
+    assert.throws(() => store.toolUsage.summary(bot), /org admins/);
+  });
 });

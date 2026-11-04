@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Tool use: every MCP call is counted per agent, tool and day (calls, errors by code, reply size, time), kept on this server for 90 days and never sent anywhere. Org admins see it in Portfolio > Tool use (`GET /api/tool-usage`), biggest replies first. Migration 42.
+
 - Smaller MCP replies: `list_tickets` returns one line per ticket by default (ref, status, title, assignee, folder, blocked, waiting on, next step; 90 tickets in under 10 KB) and JSON rows with `fields` (`"ref,priority,labels"` or `"all"`). `get_ticket` returns the last 10 activity entries unless `activity_limit` asks for more, and takes `fields`; `list_tasks` and `search` take `fields`. Long replies are no longer indented.
 
 - Claude Code plugin hooks: a session opens (and reopens after resume or compaction) with what waits on the agent and the handoff of each ticket it has in progress; between turns one line says when new mentions or answers arrived, silent otherwise and quiet when Orco is down. `orco watch --max-hours N --text` blocks until a real mention, for a background watcher instead of a 280-second loop. New `GET /api/activity?after=` and `GET /api/my-work?format=brief`.

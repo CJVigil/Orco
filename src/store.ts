@@ -1,3 +1,4 @@
+import { ToolUsage } from './toolusage.js';
 import { Artifacts } from './artifacts.js';
 import { TicketFiles } from './ticketfiles.js';
 import { EventEmitter } from 'node:events';
@@ -256,6 +257,7 @@ export class Store {
   readonly tickets: Tickets;
   readonly ticketFiles: TicketFiles;
   readonly artifacts: Artifacts;
+  readonly toolUsage: ToolUsage;
   readonly questions: Questions;
   readonly notes: Notes;
   readonly flags: Flags;
@@ -301,6 +303,7 @@ export class Store {
     this.tickets = new Tickets(this);
     this.ticketFiles = new TicketFiles(this);
     this.artifacts = new Artifacts(this);
+    this.toolUsage = new ToolUsage(this);
     this.questions = new Questions(this);
     this.notes = new Notes(this);
     this.flags = new Flags(this);

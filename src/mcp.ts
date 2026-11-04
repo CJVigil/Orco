@@ -496,7 +496,15 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
   // Every tool's arguments pass through maskInput first: an agent never writes a leased secret into Orco.
   const register = server.registerTool.bind(server) as (name: string, config: { inputSchema?: unknown }, handler: (...args: unknown[]) => unknown) => unknown;
   (server as unknown as { registerTool: typeof register }).registerTool = (name, config, handler) =>
-    register(name, config, config.inputSchema === undefined ? handler : (args: unknown, ...rest: unknown[]) => handler(store.maskInput(me, args), ...rest));
+    register(name, config, async (...callArgs: unknown[]) => {
+      const started = performance.now();
+      const result = (await (config.inputSchema === undefined ? handler(...callArgs) : handler(store.maskInput(me, callArgs[0]), ...callArgs.slice(1)))) as ToolResult;
+      // Counted locally per agent, tool and day (#103): calls, errors by code, reply size, time. Never sent anywhere.
+      const text = result?.content?.map((c) => c.text ?? '').join('') ?? '';
+      const code = result?.isError ? (/^([a-z_]+):/.exec(text)?.[1] ?? 'error') : null;
+      store.toolUsage.record(me, name, { bytes: Buffer.byteLength(text), ms: performance.now() - started, error: code });
+      return result;
+    });
 
   server.registerTool(
     'whoami',

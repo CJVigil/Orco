@@ -1029,6 +1029,20 @@ export const MIGRATIONS = [
     created_at TEXT NOT NULL,
     PRIMARY KEY (artifact_id, version)
   );
+  `,  // 42: MCP tool use per agent, tool and day, kept locally (#103).
+  `
+  CREATE TABLE tool_usage (
+    day TEXT NOT NULL,
+    participant_id INTEGER NOT NULL REFERENCES participants(id) ON DELETE CASCADE,
+    tool TEXT NOT NULL,
+    calls INTEGER NOT NULL DEFAULT 0,
+    errors INTEGER NOT NULL DEFAULT 0,
+    error_codes TEXT NOT NULL DEFAULT '{}',
+    bytes INTEGER NOT NULL DEFAULT 0,
+    max_bytes INTEGER NOT NULL DEFAULT 0,
+    ms INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, participant_id, tool)
+  );
   `,
 ];
 

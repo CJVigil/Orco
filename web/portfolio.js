@@ -7,6 +7,7 @@ const TABS = [
   ['decisions', 'Decisions'],
   ['digest', 'Digest'],
   ['controls', 'Controls'],
+  ['tools', 'Tool use'],
 ];
 
 const HEALTH_TEXT = { red: 'Needs attention', amber: 'Watch', green: 'On track' };
@@ -66,11 +67,44 @@ export function createPortfolio(ctx) {
     const body = $('portfolio-body');
     if (!body) return;
     try {
-      const view = await { overview, roadmap, decisions, digest, controls }[p.tab]();
+      const view = await { overview, roadmap, decisions, digest, controls, tools }[p.tab]();
       body.replaceChildren(...[view].flat(3).filter(Boolean));
     } catch (err) {
       body.replaceChildren(el('p', { class: 'error', text: err.message }));
     }
+  }
+
+  /* Tool use (#103): which MCP replies are big, which tools fail, which go unused. Org admins only. */
+
+  async function tools() {
+    const rows = await api('/tool-usage?days=7');
+    if (!rows.length) return el('p', { class: 'muted empty', text: 'No tool calls in the last 7 days.' });
+    const kb = (n) => (n < 1024 ? `${n} B` : `${(n / 1024).toFixed(1)} KB`);
+    return [
+      el('p', { class: 'muted small', text: 'MCP calls by agents in the last 7 days, the biggest total replies first. Counted on this server only.' }),
+      el(
+        'table',
+        { class: 'pf-table' },
+        el('thead', {}, el('tr', {}, ['Tool', 'Calls', 'Agents', 'Avg reply', 'Largest', 'Avg time', 'Errors'].map((h) => el('th', { text: h })))),
+        el(
+          'tbody',
+          {},
+          rows.map((r) =>
+            el(
+              'tr',
+              {},
+              el('td', { class: 'mono', text: r.tool }),
+              el('td', { text: String(r.calls) }),
+              el('td', { text: String(r.agents) }),
+              el('td', { text: kb(r.avgBytes) }),
+              el('td', { text: kb(r.maxBytes) }),
+              el('td', { text: `${r.avgMs} ms` }),
+              el('td', { text: r.errors ? `${r.errors} (${Object.entries(r.errorCodes).map(([k, v]) => `${k} ${v}`).join(', ')})` : '' }),
+            ),
+          ),
+        ),
+      ),
+    ];
   }
 
   /* Overview */
