@@ -975,7 +975,13 @@ function approvalCard(message) {
     el('span', { class: 'chip', text: APPROVAL_LABEL[approvalState] }),
     pending && approver && !canDecide(message) ? el('span', { class: 'muted', text: `for ${approver}` }) : null,
   );
-  if (pending && canDecide(message)) card.append(numberedChoices(card, approvalChoices({ id, kind, requester: message.author, requesterHuman, ticket, actionKind })));
+  if (pending && canDecide(message)) {
+    card.append(
+      numberedChoices(card, approvalChoices({ id, kind, requester: message.author, requesterHuman, ticket, actionKind })),
+      // An agent's own safety check may still ask in its session (#100).
+      el('p', { class: 'approve-again muted small', text: 'Approving this in Orco may need approval again in the agent.' }),
+    );
+  }
   return card;
 }
 

@@ -5,6 +5,8 @@
 const SHOW = 3;
 
 export function createNeeds(ctx) {
+  // Claude Code treats a yes that comes through a tool as information, not the person's own (#100).
+  const AGAIN = 'Approving this in Orco may need approval again in the agent.';
   const { api, el, $, answerBox, jumpTo, openTicket, me, notifyConfigure, numberedChoices, approvalChoices, exactBlock } = ctx;
   const root = $('needs-view');
   const n = { all: false, timer: null, loading: null };
@@ -22,6 +24,7 @@ export function createNeeds(ctx) {
         body: () => [a.scope ? exactBlock(`Scope:\n${a.scope}`) : null, exactBlock(a.details)],
         choices: () =>
           approvalChoices({ id: a.id, kind: a.kind, requester: a.requester, requesterHuman: a.requesterOwner ?? a.requester, ticket: a.ticket, actionKind: a.actionKind }, () => void reload()),
+        note: AGAIN,
         actions: () => [el('button', { class: 'ghost small', type: 'button', text: 'Open', onclick: () => void jumpTo({ id: a.messageId, room: a.room, threadId: null }) })],
       });
     }
@@ -70,6 +73,7 @@ export function createNeeds(ctx) {
         },
         // The ask's own replies, numbered: Yes / No for a question, Done otherwise, or what the agent offered.
         choices: () => (t.waitingOn.options?.length ? t.waitingOn.options : ['Done']).map((option) => ({ label: option, run: () => send(option) })),
+        note: AGAIN,
       });
     }
     for (const r of inbox.reviews) {
@@ -248,6 +252,7 @@ export function createNeeds(ctx) {
               item.body ? item.body() : null,
             ),
             item.choices ? numberedChoices(article, item.choices()) : null,
+            item.note ? el('p', { class: 'approve-again muted small', text: item.note }) : null,
             el('div', { class: 'needs-actions' }, item.actions(), snoozeButtons(item.key)),
           ];
           article.append(...parts.filter(Boolean));
