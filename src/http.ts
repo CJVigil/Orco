@@ -35,6 +35,7 @@ import type { TaskResult } from './tasks.js';
 import { briefWork, myWork } from './work.js';
 import { newPlan } from './plans.js';
 import { adminDigest } from './admindigest.js';
+import { dayReport, reportMarkdown, runReports, scheduleReport } from './report.js';
 
 declare module 'express-serve-static-core' {
   interface Request {
@@ -1681,6 +1682,18 @@ export function createApp(store: Store, options: AppOptions = {}) {
   api.get('/projects/:name/spend', (req, res) => {
     res.json(store.controls.projectSpend(req.participant!, String(req.params.name), optionalInt(req.query.days) ?? 7));
   });
+  // "What got done" (#116): JSON, or Markdown with format=md; and a schedule that posts it.
+  api.get('/projects/:name/report', (req, res) => {
+    const to = str(req.query.to, 'to') ?? new Date(store.now()).toISOString();
+    const from = str(req.query.from, 'from') ?? new Date(Date.parse(to) - 86_400_000).toISOString();
+    const report = dayReport(store, req.participant!, { project: String(req.params.name), from, to, folder: str(req.query.folder, 'folder'), person: str(req.query.person, 'person') });
+    if (req.query.format === 'md') res.type('text/markdown').send(reportMarkdown(report));
+    else res.json(report);
+  });
+  api.post('/projects/:name/report-schedules', (req, res) => {
+    const b = req.body ?? {};
+    res.status(201).json(scheduleReport(store, req.participant!, String(req.params.name), { cron: String(b.cron ?? ''), tz: str(b.tz, 'tz'), days: optionalInt(b.days), people: Array.isArray(b.people) ? b.people.map(String) : [] }));
+  });
   // The admin digest (#115): any date range, for the org (org admins) or a project (its admins); and past weekly ones.
   api.get('/admin-digest', (req, res) => {
     const to = str(req.query.to, 'to') ?? new Date(store.now()).toISOString();
@@ -2395,6 +2408,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
       store.approvals.remindDue();
       store.runs.pruneLogs(store.limits.runLogDays);
       store.portfolios.runDue(store.digestSchedule);
+      runReports(store);
       store.roomStatus.sweep();
       store.attention.sendDue();
     } catch (err) {

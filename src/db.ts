@@ -1180,6 +1180,18 @@ export const MIGRATIONS = [
     body TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
+  `,  // 52: "what got done" reports posted on a schedule (#116).
+  `
+  CREATE TABLE report_schedules (
+    id INTEGER PRIMARY KEY,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    cron TEXT NOT NULL,
+    tz TEXT NOT NULL DEFAULT 'UTC',
+    days INTEGER NOT NULL DEFAULT 7,
+    people TEXT NOT NULL DEFAULT '',
+    created_by INTEGER NOT NULL REFERENCES participants(id),
+    last_run INTEGER
+  );
   `,
 ];
 

@@ -12,6 +12,7 @@ const TABS = [
   ['files', 'Files'],
   ['artifacts', 'Artifacts'],
   ['spend', 'Spend'],
+  ['report', 'Report'],
   ['schedules', 'Schedules'],
   ['integrations', 'Integrations'],
   ['settings', 'Settings'],
@@ -199,7 +200,7 @@ export function createTickets(ctx) {
   async function load() {
     const project = t.project;
     const p = encodeURIComponent(project);
-    const [plan, tickets, notes, schedules, files, artifacts, spend, integrations] = await Promise.all([
+    const [plan, tickets, notes, schedules, files, artifacts, spend, report, integrations] = await Promise.all([
       api(`/projects/${p}/plan`),
       fetchTickets(),
       t.tab === 'notes' ? api(`/projects/${p}/notes`) : Promise.resolve(t.notes ?? []),
@@ -207,6 +208,7 @@ export function createTickets(ctx) {
       t.tab === 'files' ? api(`/projects/${p}/files`) : Promise.resolve(t.files ?? []),
       t.tab === 'artifacts' ? api(`/artifacts?project=${p}`) : Promise.resolve(t.artifacts ?? []),
       t.tab === 'spend' ? api(`/projects/${p}/spend?days=7`) : Promise.resolve(t.spend ?? null),
+      t.tab === 'report' ? api(`/projects/${p}/report?${reportQuery()}`) : Promise.resolve(t.report ?? null),
       t.tab === 'integrations'
         ? Promise.all([api(`/hooks?project=${p}`), api(`/projects/${p}/secrets`), api(`/leases?project=${p}`)]).then(([hooks, secrets, leases]) => ({ hooks, secrets, leases }))
         : Promise.resolve(t.integrations ?? null),
@@ -218,6 +220,7 @@ export function createTickets(ctx) {
     t.files = files;
     t.artifacts = artifacts;
     t.spend = spend;
+    t.report = report;
     t.integrations = integrations;
     plans.set(project, plan);
     // A filter on a folder that was removed or renamed would show nothing; drop it.
@@ -419,7 +422,7 @@ export function createTickets(ctx) {
       return;
     }
     t.pendingTab = false;
-    const views = { board: renderBoard, list: renderList, milestones: renderMilestones, cycles: renderCycles, notes: renderNotes, files: renderFiles, artifacts: renderArtifacts, spend: renderSpend, schedules: renderSchedules, integrations: renderIntegrations, settings: renderSettings };
+    const views = { board: renderBoard, list: renderList, milestones: renderMilestones, cycles: renderCycles, notes: renderNotes, files: renderFiles, artifacts: renderArtifacts, spend: renderSpend, report: renderReport, schedules: renderSchedules, integrations: renderIntegrations, settings: renderSettings };
     const banner = t.tab === 'board' || t.tab === 'list' || t.tab === 'files' ? scopeBanner() : null;
     body.replaceChildren(...[banner, views[t.tab]()].flat(Infinity).filter((node) => node !== null && node !== undefined));
   }
@@ -2341,6 +2344,72 @@ export function createTickets(ctx) {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  /* "What got done" (#116): a one-page report for a day or a week, that prints as a landscape PDF. */
+
+  function reportQuery() {
+    const range = t.reportRange ?? 'today';
+    const now = new Date();
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    if (range === 'week') start.setDate(start.getDate() - 6);
+    const q = new URLSearchParams({ from: start.toISOString(), to: now.toISOString() });
+    if (t.reportFolder) q.set('folder', t.reportFolder);
+    return q.toString();
+  }
+
+  function renderReport() {
+    const r = t.report;
+    if (!r) return el('p', { class: 'muted plan-intro', text: 'Loading…' });
+    const pick = (range, label) =>
+      el('button', { class: `ghost small${(t.reportRange ?? 'today') === range ? ' active' : ''}`, type: 'button', text: label, onclick: () => ((t.reportRange = range), void load()) });
+    const folder = el(
+      'select',
+      { 'aria-label': 'Folder', onchange: (event) => ((t.reportFolder = event.target.value || null), void load()) },
+      el('option', { value: '', text: 'Every folder' }),
+      (t.plan.folders ?? []).map((f) => el('option', { value: f.name, text: f.name, selected: f.name === t.reportFolder ? true : null })),
+    );
+    const tile = (value, label) => el('div', { class: 'report-tile' }, el('strong', { text: String(value) }), el('span', { class: 'small muted', text: label }));
+    const time = (iso) => new Date(iso).toLocaleString([], (t.reportRange ?? 'today') === 'today' ? { hour: '2-digit', minute: '2-digit' } : { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+    const max = Math.max(1, ...r.openByFolder.map((f) => f.open));
+    const bars = el(
+      'div',
+      { class: 'report-bars' },
+      r.openByFolder.map((f) => {
+        const fill = el('span', { class: 'report-bar-fill' });
+        fill.style.width = `${Math.round((f.open / max) * 100)}%`;
+        return el('div', { class: 'report-bar' }, el('span', { class: 'small', text: f.folder }), el('span', { class: 'report-bar-track' }, fill), el('span', { class: 'small muted', text: String(f.open) }));
+      }),
+    );
+    const list = (items, line) => (items.length ? el('ul', { class: 'report-list small' }, items.slice(0, 12).map((i) => el('li', {}, line(i)))) : el('p', { class: 'small muted', text: 'Nothing.' }));
+    const md = `/api/projects/${encodeURIComponent(t.project)}/report?${reportQuery()}&format=md`;
+    return el(
+      'div',
+      { class: 'report' },
+      el(
+        'div',
+        { class: 'report-bar-top no-print' },
+        pick('today', 'Today'),
+        pick('week', 'This week'),
+        folder,
+        el('span', { class: 'spacer' }),
+        el('a', { class: 'ghost small button-link', href: md, download: `${t.project}-report.md`, text: 'Markdown' }),
+        el('button', { class: 'primary small', type: 'button', text: 'Print or save as PDF', onclick: () => window.print() }),
+      ),
+      el('h2', { class: 'report-title', text: `What got done · ${t.project}${r.folder ? ` · ${r.folder}` : ''} · ${(t.reportRange ?? 'today') === 'today' ? 'today' : 'this week'}` }),
+      el('div', { class: 'report-tiles' }, tile(r.counts.done, 'done'), tile(r.counts.goingLive, 'going live next'), tile(r.counts.waiting, 'waiting on a person'), tile(r.counts.newRequests, 'new requests')),
+      el(
+        'div',
+        { class: 'report-grid' },
+        el('section', {}, el('h3', { text: 'Timeline' }), list(r.timeline, (e) => [el('span', { class: 'muted', text: `${time(e.at)} ` }), e.text])),
+        el('section', {}, el('h3', { text: 'Open work by folder' }), r.openByFolder.length ? bars : el('p', { class: 'small muted', text: 'Nothing open.' })),
+        el('section', {}, el('h3', { text: 'Going live next' }), list(r.goingLive, (g) => [el('strong', { text: g.title }), ` · ${g.approval}`])),
+        el('section', {}, el('h3', { text: 'Waiting on whom' }), list(r.waiting, (w) => [el('strong', { text: w.on }), `: ${w.ask} `, el('span', { class: 'muted', text: `(${w.title})` })])),
+        el('section', {}, el('h3', { text: 'Done' }), list(r.done, (d) => [d.title, el('span', { class: 'muted report-ref', text: ` ${d.ref}` })])),
+        el('section', {}, el('h3', { text: 'New requests' }), list(r.newRequests, (n) => [n.title, el('span', { class: 'muted report-ref', text: ` ${n.ref}` })])),
       ),
     );
   }

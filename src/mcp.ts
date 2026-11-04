@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module';
 import { sessionLink } from './tickets.js';
+import { dayReport } from './report.js';
 import { McpServer, ResourceTemplate, type ToolAnnotations } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import type { Presence } from './presence.js';
@@ -84,6 +85,7 @@ const UNTRUSTED_NOTE =
 
 const READ_ONLY_TOOLS = new Set([
   'whoami',
+  'day_report',
   'list_incidents',
   'list_artifacts',
   'read_artifact',
@@ -1529,6 +1531,23 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
       const ref = decodeURIComponent(String(Array.isArray(variables.ref) ? variables.ref[0] : variables.ref));
       return { contents: [{ uri: uri.href, mimeType: 'text/markdown', text: ticketMarkdown(ref) }] };
     },
+  );
+
+  server.registerTool(
+    'day_report',
+    {
+      annotations: annotate('day_report'),
+      description:
+        'What got done in a project over a period (default the last day): counts (done, going live next, waiting on a person, new requests), ' +
+        'the tickets behind each, a timeline of real events (created, status changes, approvals; not folder sorts or relabels), and open work ' +
+        'by folder. Narrow it to a folder, or to a person and their agents. Use it to write a summary in your own words.',
+      inputSchema: z.object({ project: z.string(), from: z.string().optional(), to: z.string().optional(), folder: z.string().optional(), person: z.string().optional() }),
+    },
+    async ({ project, from, to, folder, person }) =>
+      run(() => {
+        const end = to ?? new Date(store.now()).toISOString();
+        return { note: UNTRUSTED_NOTE, ...dayReport(store, me, { project, from: from ?? new Date(Date.parse(end) - 86_400_000).toISOString(), to: end, folder, person }) };
+      }),
   );
 
   server.registerTool(

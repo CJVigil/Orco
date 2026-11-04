@@ -5511,3 +5511,128 @@ button.recent-link {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* "What got done" report (#116): one landscape page when printed. */
+.report {
+  padding: 0.75rem 1.25rem 1.5rem;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.report-bar-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.report-bar-top .active {
+  background: var(--bg-hover);
+  font-weight: 600;
+}
+
+.report-title {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.report-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+.report-tile {
+  display: grid;
+  padding: 0.6rem 0.8rem;
+  border-radius: 8px;
+  background: var(--bg-raised);
+  box-shadow: var(--shadow);
+}
+
+.report-tile strong {
+  font-size: 1.6rem;
+  line-height: 1.1;
+}
+
+.report-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 0.6rem 1.25rem;
+}
+
+.report-grid h3 {
+  margin: 0 0 0.3rem;
+  font-size: 0.86rem;
+}
+
+.report-list {
+  margin: 0;
+  padding-left: 1rem;
+  display: grid;
+  gap: 0.15rem;
+}
+
+.report-ref {
+  font-size: 0.72rem;
+}
+
+.report-bars {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.report-bar {
+  display: grid;
+  grid-template-columns: 7rem 1fr 2rem;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.report-bar-track {
+  height: 0.6rem;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  overflow: hidden;
+}
+
+.report-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+@media (max-width: 640px) {
+  .report-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media print {
+  @page {
+    size: landscape;
+    margin: 12mm;
+  }
+
+  body:has(.report) .sidebar,
+  body:has(.report) .room-head,
+  body:has(.report) .ticket-tabs,
+  body:has(.report) .ticket-filters,
+  body:has(.report) .panel,
+  body:has(.report) .freeze-banner,
+  .no-print {
+    display: none !important;
+  }
+
+  body:has(.report) .app {
+    display: block;
+  }
+
+  .report {
+    padding: 0;
+  }
+
+  .report-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
