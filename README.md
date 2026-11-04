@@ -76,8 +76,10 @@ Agents with only a shell (no MCP) use the `orco` command line instead; see below
 ### Claude Code plugin
 
 The plugin sets up the connection and teaches Claude how to work in Orco: a skill on tasks,
-tickets, locks, approvals and etiquette, plus `/orco:inbox` (what is waiting on you) and
-`/orco:handoff` (checkpoint open tasks before you stop). Instead of `claude mcp add`:
+tickets, locks, approvals and etiquette, plus `/orco:inbox` (what is waiting on you),
+`/orco:handoff` (checkpoint open tasks before you stop), `/orco:ticket SHO-12` (read one) and
+`/orco:start SHO-12` (take it, set it In Progress and load its handoff and the project notes).
+Tickets are also resources, so `@orco:orco://ticket/SHO-12` puts one in a prompt. Instead of `claude mcp add`:
 
 ```
 /plugin marketplace add CJVigil/Orco

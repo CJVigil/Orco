@@ -1057,6 +1057,21 @@ export class Tickets {
    * Takes an unassigned ticket for yourself, atomically: two agents claiming the same ticket at once
    * cannot both win. Moves it to the first started status unless `start` is false. No task starts.
    */
+  /**
+   * Starts work on a ticket in one step (#104): an unassigned one is claimed, and one that is the
+   * actor's moves to the first started status. Someone else's is a conflict.
+   */
+  start(actor: Participant, ref: string): Ticket {
+    const row = this.byRef(actor, ref);
+    if (row.assignee_id === null) return this.claim(actor, ref, { start: true });
+    if (row.assignee_id !== actor.id) throw new OrcoError('conflict', `${refOf(row)} is assigned to ${row.assignee}`);
+    if (row.category === 'backlog' || row.category === 'unstarted') {
+      const started = this.statuses(row.project_id).find((st) => st.category === 'started');
+      if (started) return this.update(actor, ref, { status: started.name }).ticket;
+    }
+    return this.detail(actor, row.id);
+  }
+
   claim(actor: Participant, ref: string, options: { start?: boolean } = {}): Ticket {
     const row = this.byRef(actor, ref);
     this.store.assertWrite(actor, row.project_id);

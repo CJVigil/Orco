@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module';
-import { McpServer, type ToolAnnotations } from '@modelcontextprotocol/server';
+import { McpServer, ResourceTemplate, type ToolAnnotations } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import type { Presence } from './presence.js';
 import { MAX_APPROVAL_TTL_SECONDS, MAX_VALID_HOURS } from './approvals.js';
@@ -1441,6 +1441,76 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
       inputSchema: z.object({ id: z.number().int(), version: z.number().int().optional() }),
     },
     async ({ id, version }) => run(() => store.artifacts.content(me, id, version)),
+  );
+
+  /*
+   * Tickets as resources (#104): orco://ticket/SHO-12 is the ticket as Markdown (description, handoff,
+   * criteria, the last comments), so a person can @-mention it in Claude Code. The list is the agent's
+   * own open tickets and those it can see that changed lately.
+   */
+  const ticketMarkdown = (ref: string) => {
+    const t = store.tickets.get(me, ref);
+    const comments = t.activity.filter((a) => a.kind === 'comment' && a.body).slice(-5);
+    return [
+      `# ${t.ref} ${t.title}`,
+      `${t.project} · ${t.status.name}${t.assignee ? ` · assigned to ${t.assignee.name}` : ''}${t.private ? ' · private: do not quote in shared rooms' : ''}`,
+      t.nextStep ? `Next step: ${t.nextStep.text}` : '',
+      t.waitingOn ? `Waiting on ${t.waitingOn.person}: ${t.waitingOn.ask}` : '',
+      t.blockedBy.length || t.blockedReason ? `Blocked by: ${[...t.blockedBy, t.blockedReason].filter(Boolean).join(', ')}` : '',
+      '',
+      '## Description',
+      t.description || '(none)',
+      t.handoff ? `\n## Handoff (${t.handoff.by ?? ''})\n${t.handoff.text}` : '',
+      t.criteriaItems.length ? `\n## Acceptance criteria\n${t.criteriaItems.map((c) => `- [${c.done ? 'x' : ' '}] ${c.text}`).join('\n')}` : '',
+      t.files.length ? `\n## Files\n${t.files.map((f) => `- ${f.name} (id ${f.id}, read_ticket_file)`).join('\n')}` : '',
+      comments.length ? `\n## Latest comments\n${comments.map((a) => `- ${a.actor ?? 'Orco'}: ${a.body!.replace(/\s+/g, ' ').slice(0, 500)}`).join('\n')}` : '',
+      `\n${UNTRUSTED_NOTE}`,
+    ]
+      .filter((line) => line !== '')
+      .join('\n');
+  };
+  server.registerResource(
+    'ticket',
+    new ResourceTemplate('orco://ticket/{ref}', {
+      list: () => {
+        const mine = store.tickets.list(me, { assignee: 'me', open: true, limit: 50 });
+        return { resources: mine.map((t) => ({ uri: `orco://ticket/${t.ref}`, name: `${t.ref} ${t.title}`, mimeType: 'text/markdown' })) };
+      },
+      complete: {
+        ref: (value) =>
+          store.tickets
+            .list(me, { open: true, query: value || undefined, limit: 20 })
+            .map((t) => t.ref)
+            .filter((r) => r.toLowerCase().startsWith(value.toLowerCase())),
+      },
+    }),
+    { title: 'Orco ticket', description: 'A ticket: description, handoff, criteria and the latest comments', mimeType: 'text/markdown' },
+    (uri, variables) => {
+      const ref = decodeURIComponent(String(Array.isArray(variables.ref) ? variables.ref[0] : variables.ref));
+      return { contents: [{ uri: uri.href, mimeType: 'text/markdown', text: ticketMarkdown(ref) }] };
+    },
+  );
+
+  server.registerTool(
+    'start_ticket',
+    {
+      annotations: annotate('start_ticket'),
+      description:
+        'Start work on a ticket in one call: claims it if it is unassigned (or keeps it if it is yours), moves it to In Progress, ' +
+        'and returns the ticket (handoff, criteria, latest activity) with its project notes. Posts nothing else. ' +
+        'Someone else\'s ticket is refused: ask them, or pick another.',
+      inputSchema: z.object({ ticket: z.string().describe('Like SHO-12') }),
+    },
+    async ({ ticket }) =>
+      run(() => {
+        const t = store.tickets.start(me, ticket);
+        const full = formatTicket(t);
+        return {
+          note: UNTRUSTED_NOTE,
+          ticket: { ...full, activity: full.activity.slice(-10) },
+          project_notes: store.notes.list(me, t.project).map((n) => ({ title: n.title, body: n.body })),
+        };
+      }),
   );
 
   server.registerTool(

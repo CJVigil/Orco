@@ -79,3 +79,20 @@ describe('compact MCP replies (#103)', () => {
     assert.throws(() => store.toolUsage.summary(bot), /org admins/);
   });
 });
+
+describe('tickets as resources and start_ticket (#104)', () => {
+  it('reads a ticket as an orco:// resource and starts one in one call', async () => {
+    const res = await client.readResource({ uri: 'orco://ticket/SHO-2' });
+    const text = (res.contents[0] as { text: string }).text;
+    assert.match(text, /^# SHO-2 Restock shelf 2/);
+    assert.match(text, /## Description/);
+    const started = JSON.parse(await text2('start_ticket', { ticket: 'SHO-2' }));
+    assert.equal(started.ticket.status, 'In Progress');
+    assert.equal(started.ticket.assignee, 'carlos-bot');
+    const listed = await client.listResources();
+    assert.ok(listed.resources.some((r) => r.uri === 'orco://ticket/SHO-2'), 'its own tickets are listed');
+    assert.match(await text2('start_ticket', { ticket: 'SHO-2' }), /In Progress/, 'starting again is harmless');
+  });
+});
+
+const text2 = async (name: string, args: Record<string, unknown>) => ((await client.callTool({ name, arguments: args })).content as { text: string }[])[0]!.text;

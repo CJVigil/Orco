@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Tickets are MCP resources (`orco://ticket/SHO-12`: description, handoff, criteria, files and the latest comments), so Claude Code can @-mention them; an agent's own open tickets are listed and refs complete. `start_ticket` claims a ticket (or keeps it if it is yours), sets it In Progress and returns it with the project notes in one call. Plugin commands `/orco:ticket <ref>` (read only) and `/orco:start <ref>`.
+
 - Tool use: every MCP call is counted per agent, tool and day (calls, errors by code, reply size, time), kept on this server for 90 days and never sent anywhere. Org admins see it in Portfolio > Tool use (`GET /api/tool-usage`), biggest replies first. Migration 42.
 
 - Smaller MCP replies: `list_tickets` returns one line per ticket by default (ref, status, title, assignee, folder, blocked, waiting on, next step; 90 tickets in under 10 KB) and JSON rows with `fields` (`"ref,priority,labels"` or `"all"`). `get_ticket` returns the last 10 activity entries unless `activity_limit` asks for more, and takes `fields`; `list_tasks` and `search` take `fields`. Long replies are no longer indented.
