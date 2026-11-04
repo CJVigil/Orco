@@ -366,7 +366,33 @@ export function createPortfolio(ctx) {
     const [state, agents, groups, setup, models, onyx] = await Promise.all([api('/controls'), api('/agents'), admin ? api('/groups') : Promise.resolve([]), admin ? api('/setup') : Promise.resolve({}), admin ? api('/models') : Promise.resolve(null), admin ? api('/onyx') : Promise.resolve(null)]);
     if (!p.policyProject && administered[0] && !admin) p.policyProject = administered[0];
     const policy = p.policyProject || admin ? await api(`/policy${p.policyProject ? `?project=${encodeURIComponent(p.policyProject)}` : ''}`) : null;
-    return [pausesCard(state.pauses, administered, agents), budgetsCard(state.budgets, administered, agents), admin ? peopleCard(setup.proxy ?? (setup.oidc ? { label: setup.oidc.label } : null)) : null, admin ? modelsCard(models) : null, admin ? onyxCard(onyx) : null, policy ? policyCard(policy, administered) : null, admin ? groupsCard(groups) : null];
+    const scope = admin ? await api('/scope/settings') : null;
+    return [pausesCard(state.pauses, administered, agents), budgetsCard(state.budgets, administered, agents), scope ? scopeCard(scope) : null, admin ? peopleCard(setup.proxy ?? (setup.oidc ? { label: setup.oidc.label } : null)) : null, admin ? modelsCard(models) : null, admin ? onyxCard(onyx) : null, policy ? policyCard(policy, administered) : null, admin ? groupsCard(groups) : null];
+  }
+
+  /** The scope gate (#108): whether new projects start in Scope, and the template's sections. Org admins. */
+  function scopeCard(scope) {
+    const gate = el('input', { type: 'checkbox', checked: scope.gateNewProjects });
+    const sections = el('textarea', { rows: String(Math.min(scope.sections.length + 1, 12)), 'aria-label': 'Scope sections, one per line' });
+    sections.value = scope.sections.join('\n');
+    const save = async () => {
+      try {
+        await api('/scope/settings', { method: 'POST', body: { gateNewProjects: gate.checked, sections: sections.value.split('\n') } });
+        notify('Scope settings saved');
+        void load();
+      } catch (err) {
+        notify(err.message);
+      }
+    };
+    return el(
+      'section',
+      { class: 'plan-card' },
+      el('h3', { text: 'Scope before build' }),
+      el('p', { class: 'small muted', text: 'A project in Scope keeps build tickets in Backlog, and refuses repos, stacks and deploys, until scoping/SCOPE.md covers every section below and a project admin approves it.' }),
+      el('label', { class: 'check small' }, gate, 'New projects start in Scope'),
+      el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Sections of SCOPE.md, one per line (empty: the built-in ones)' }), sections),
+      el('div', { class: 'row-end' }, el('button', { class: 'primary small', type: 'button', text: 'Save', onclick: () => void save() })),
+    );
   }
 
   /**

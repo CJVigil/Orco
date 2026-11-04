@@ -61,6 +61,6 @@ describe('the scope gate (#108)', () => {
   });
 
   it('reads headings with or without numbers and ignores comment hints', () => {
-    assert.deepEqual(missingSections('## Why this exists\n<!-- hint -->\n\n## 2. What already exists (do not rebuild)\nThe old app.', ['Why this exists', 'What already exists (do not rebuild)']), ['Why this exists']);
+    assert.deepEqual(missingSections('## Why this exists\n<!-- hint -->\n> Covers: a hint\n\n## 2. What already exists (do not rebuild)\nThe old app.', ['Why this exists', 'What already exists (do not rebuild)']), ['Why this exists']);
   });
 });

@@ -40,6 +40,8 @@ export interface ScopeStatus {
   approvedBy: string | null;
   decisionId: number | null;
   path: string;
+  /** Whether SCOPE.md has been written yet. */
+  exists: boolean;
 }
 
 /** A SCOPE.md to start from, with every section of the template. */
@@ -50,7 +52,7 @@ export function scopeTemplate(project: string, sections: string[]): string {
     'Decisions only; keep the facts they rest on in scoping/reference/, and one scoping/<component>.md per surface',
     '(why it exists, principles, auth, endpoints, what is not here yet, operating it).',
     '',
-    ...sections.flatMap((title, i) => [`## ${i + 1}. ${title}`, '', ...(SECTION_HINTS[title] ? [`<!-- ${SECTION_HINTS[title]} -->`, ''] : [])]),
+    ...sections.flatMap((title, i) => [`## ${i + 1}. ${title}`, '', ...(SECTION_HINTS[title] ? [`> Covers: ${SECTION_HINTS[title]}`, ''] : [])]),
   ].join('\n');
 }
 
@@ -66,7 +68,8 @@ export function missingSections(text: string, sections: string[]): string[] {
       if (/^#{1,3}\s/.test(line)) break;
       body.push(line);
     }
-    return !body.join('\n').replace(/<!--[\s\S]*?-->/g, '').trim();
+    // Comments and the template's own "> Covers:" hints are not content.
+    return !body.filter((l) => !/^>\s*Covers:/.test(l)).join('\n').replace(/<!--[\s\S]*?-->/g, '').trim();
   });
 }
 
@@ -123,6 +126,7 @@ export class Scope {
       approvedBy: row.approver,
       decisionId: row.scope_decision_id,
       path: SCOPE_PATH,
+      exists: text !== null,
     };
   }
 

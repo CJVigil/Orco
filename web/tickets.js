@@ -445,7 +445,7 @@ export function createTickets(ctx) {
       t.openFile = scope.path;
       location.hash = `#~${t.project}/files`;
     };
-    const exists = scope.missing.length < scope.sections.length || scope.approvedVersion !== null;
+    const exists = scope.exists;
     return el(
       'div',
       { class: 'scope-banner' },
