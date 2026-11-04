@@ -17,7 +17,7 @@ self.addEventListener('notificationclick', (event) => {
         await open.focus();
         open.postMessage({ type: 'open', hash, target });
       } else {
-        await self.clients.openWindow(`/${hash}`);
+        await self.clients.openWindow(new URL(hash || '.', self.registration.scope).href);
       }
     })(),
   );

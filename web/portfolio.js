@@ -663,7 +663,7 @@ export function createPortfolio(ctx) {
     const showLink = (who, code, intro) =>
       result.replaceChildren(
         el('p', { class: 'small', text: intro }),
-        copyRow(`${location.origin}/#signin=${code}`, 'Copy link'),
+        copyRow(`${new URL('.', location.href).href}#signin=${code}`, 'Copy link'),
         el('p', { class: 'small muted', text: `It works once, within 7 days. Send it to ${who} privately: whoever opens it first is signed in as ${who}.` }),
       );
     const add = async () => {
@@ -672,7 +672,7 @@ export function createPortfolio(ctx) {
         name.value = '';
         if (email?.value.trim()) {
           result.replaceChildren(
-            el('p', { class: 'small', text: `${person.name} can now open ${location.origin} and sign in with ${proxy.label} as ${email.value.trim()}. Nothing to send but the address.` }),
+            el('p', { class: 'small', text: `${person.name} can now open ${new URL('.', location.href).href} and sign in with ${proxy.label} as ${email.value.trim()}. Nothing to send but the address.` }),
           );
           email.value = '';
           return;

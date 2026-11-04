@@ -1,3 +1,4 @@
+import { at, basePath } from './basepath.js';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -473,12 +474,12 @@ export function createApp(store: Store, options: AppOptions = {}) {
   app.get('/auth/oidc/start', async (_req, res) => {
     if (!oidc) throw new OrcoError('not_found', 'Sign-in with an OpenID provider is not set up on this Orco');
     const { url, cookie } = await oidc.start();
-    res.cookie(OIDC_COOKIE, cookie, { httpOnly: true, sameSite: 'lax', secure: secureCookies(_req, options.publicUrl), path: '/auth/oidc', maxAge: 10 * 60_000 });
+    res.cookie(OIDC_COOKIE, cookie, { httpOnly: true, sameSite: 'lax', secure: secureCookies(_req, options.publicUrl), path: at('auth/oidc'), maxAge: 10 * 60_000 });
     res.redirect(302, url);
   });
   app.get('/auth/oidc/callback', async (req, res) => {
     if (!oidc) throw new OrcoError('not_found', 'Sign-in with an OpenID provider is not set up on this Orco');
-    res.clearCookie(OIDC_COOKIE, { path: '/auth/oidc' });
+    res.clearCookie(OIDC_COOKIE, { path: at('auth/oidc') });
     const ip = req.ip ?? 'unknown';
     try {
       if (logins.blocked(ip)) throw new OidcError('provider', 'Too many failed sign-ins. Wait 15 minutes and try again.', false);
@@ -496,13 +497,13 @@ export function createApp(store: Store, options: AppOptions = {}) {
         if (oidcPending.size >= 1000) oidcPending.delete(oidcPending.keys().next().value!);
         const id = randomBytes(24).toString('base64url');
         oidcPending.set(id, { identity, issuer, subject, expiresAt: now() + 10 * 60_000 });
-        res.cookie(OIDC_PENDING_COOKIE, id, { httpOnly: true, sameSite: 'lax', secure: secureCookies(req, options.publicUrl), path: '/', maxAge: 10 * 60_000 });
-        res.redirect(302, '/#!signin=unlinked');
+        res.cookie(OIDC_PENDING_COOKIE, id, { httpOnly: true, sameSite: 'lax', secure: secureCookies(req, options.publicUrl), path: basePath(), maxAge: 10 * 60_000 });
+        res.redirect(302, at('#!signin=unlinked'));
         return;
       }
-      res.cookie(COOKIE, store.signins.startSession(user!), { httpOnly: true, sameSite: 'strict', secure: secureCookies(req, options.publicUrl), path: '/', maxAge: SESSION_TTL_MS });
+      res.cookie(COOKIE, store.signins.startSession(user!), { httpOnly: true, sameSite: 'strict', secure: secureCookies(req, options.publicUrl), path: basePath(), maxAge: SESSION_TTL_MS });
       store.audit.record(user!, 'signin.oidc', { subject: `user:${user!.name}`, detail: { identity, issuer: oidc.config.issuer } });
-      res.redirect(302, '/');
+      res.redirect(302, basePath());
     } catch (err) {
       // Only a sign-in that really came back to this browser counts against it: stray callbacks
       // (no state, someone else's) cannot lock everyone behind a shared address out.
@@ -511,7 +512,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
       const reason = err instanceof OidcError ? err.reason : 'provider';
       store.audit.record(null, 'signin.oidc_failed', { detail: { reason, error: (err as Error).message.slice(0, 200) } });
       // The page shows its own words for the reason: nothing the provider (or a crafted link) wrote.
-      res.redirect(302, `/#!signin-error=${reason}`);
+      res.redirect(302, at(`#!signin-error=${reason}`));
     }
   });
   app.post('/api/signin/proxy', express.json({ limit: '1kb' }), (req, res) => {
@@ -520,7 +521,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
     if (!identity) throw new OrcoError('forbidden', `${proxyAuth.label} did not say who you are; open Orco through its sign-in page`);
     const user = store.identities.userFor(identity);
     if (!user) throw new OrcoError('forbidden', `${identity} is not linked to anyone on this Orco yet. Ask an org admin to add you with it, or sign in another way once and link it.`);
-    res.cookie(COOKIE, store.signins.startSession(user), { httpOnly: true, sameSite: 'strict', secure: secureCookies(req, options.publicUrl), path: '/', maxAge: SESSION_TTL_MS });
+    res.cookie(COOKIE, store.signins.startSession(user), { httpOnly: true, sameSite: 'strict', secure: secureCookies(req, options.publicUrl), path: basePath(), maxAge: SESSION_TTL_MS });
     store.audit.record(user, 'signin.proxy', { subject: `user:${user.name}`, detail: { identity } });
     res.json({ name: user.name });
   });
@@ -536,7 +537,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
       const identity = vouchedLogin(req)?.identity;
       const pending = proxyIdentity(req) ? null : pendingEntry(req);
       if (identity) store.identities.link(participant, participant.name, identity, pending ? { account: { issuer: pending.issuer, subject: pending.subject } } : {});
-      res.cookie(COOKIE, store.signins.startSession(participant), { httpOnly: true, sameSite: 'strict', secure: secureCookies(req, options.publicUrl), path: '/', maxAge: SESSION_TTL_MS });
+      res.cookie(COOKIE, store.signins.startSession(participant), { httpOnly: true, sameSite: 'strict', secure: secureCookies(req, options.publicUrl), path: basePath(), maxAge: SESSION_TTL_MS });
       res.status(201).json({ name: participant.name, token });
     } catch (err) {
       if (err instanceof OrcoError && err.code === 'forbidden') logins.hit(ip);
@@ -579,7 +580,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
       httpOnly: true,
       sameSite: 'strict',
       secure: secureCookies(req, options.publicUrl),
-      path: '/',
+      path: basePath(),
       maxAge: SESSION_TTL_MS,
     });
     res.json({ name: participant.name });
@@ -602,7 +603,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
       logins.hit(ip);
       throw err;
     }
-    res.cookie(COOKIE, used.session, { httpOnly: true, sameSite: 'strict', secure: secureCookies(req, options.publicUrl), path: '/', maxAge: SESSION_TTL_MS });
+    res.cookie(COOKIE, used.session, { httpOnly: true, sameSite: 'strict', secure: secureCookies(req, options.publicUrl), path: basePath(), maxAge: SESSION_TTL_MS });
     res.json({ name: used.participant.name, firstTime: used.firstTime });
   });
 
@@ -626,14 +627,14 @@ export function createApp(store: Store, options: AppOptions = {}) {
     if (me.kind !== 'user' || me.scope) throw new OrcoError('forbidden', 'Only people have browser sessions');
     const ended = store.signins.endAll(me.id);
     store.audit.record(me, 'session.end_all', { subject: `user:${me.name}`, detail: { ended } });
-    res.clearCookie(COOKIE, { path: '/' });
+    res.clearCookie(COOKIE, { path: basePath() });
     res.json({ ended });
   });
 
   app.delete('/api/session', (req, res) => {
     const token = readCookie(req.headers.cookie, COOKIE);
     if (token && store.signins.isSession(token)) store.signins.end(token);
-    res.clearCookie(COOKIE, { path: '/' });
+    res.clearCookie(COOKIE, { path: basePath() });
     res.status(204).end();
   });
 
@@ -1684,7 +1685,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
   });
   // Guest links (#117), for people in the project: share, stop, and send or dismiss what guests ask.
   api.post('/tickets/:ref/guest-link', (req, res) => {
-    const origin = (options.publicUrl ?? process.env.ORCO_PUBLIC_URL ?? `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
+    const origin = (options.publicUrl ?? process.env.ORCO_PUBLIC_URL ?? `${req.protocol}://${req.get('host')}${basePath()}`).replace(/\/+$/, '');
     res.status(201).json(store.guests.share(req.participant!, String(req.params.ref), origin));
   });
   api.delete('/tickets/:ref/guest-link', (req, res) => {
@@ -2344,7 +2345,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
     app.get(`/${kind}`, (req, res) => {
       const keys = kind === 'new' ? ['project', 'title', 'body', 'folder', 'assignee'] : ['agent', 'prompt', 'ticket'];
       const query = new URLSearchParams(Object.entries(req.query).filter((e): e is [string, string] => keys.includes(e[0]) && typeof e[1] === 'string')).toString().slice(0, 6000);
-      res.redirect(302, `/#!${kind}?${query}`);
+      res.redirect(302, at(`#!${kind}?${query}`));
     });
   }
 
@@ -2354,7 +2355,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
     const token = String(req.params.token);
     const row = store.db.prepare('SELECT id FROM guest_links WHERE token_hash = ?').get(createHash('sha256').update(token).digest('hex')) as { id: number } | undefined;
     const { link, newKey } = store.guests.open(token, row ? readCookie(req.headers.cookie, cookieName(row.id)) : undefined);
-    if (newKey) res.cookie(cookieName(link.id), newKey, { httpOnly: true, sameSite: 'strict', secure: secureCookies(req, options.publicUrl), path: '/guest-api/', maxAge: 24 * 3600_000 });
+    if (newKey) res.cookie(cookieName(link.id), newKey, { httpOnly: true, sameSite: 'strict', secure: secureCookies(req, options.publicUrl), path: at('guest-api/'), maxAge: 24 * 3600_000 });
     res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' });
     return link;
   };

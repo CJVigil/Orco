@@ -1,3 +1,4 @@
+import { basePath } from './basepath.js';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { OrcoError } from './errors.js';
 import type { Participant, Store } from './store.js';
@@ -79,10 +80,12 @@ export function validPublicUrl(raw: string): string {
   if (url.protocol !== 'https:' && !(url.protocol === 'http:' && isLoopback(url.hostname))) {
     throw new OrcoError('invalid', 'ORCO_PUBLIC_URL must use https (http is allowed only for localhost)');
   }
-  if ((url.pathname !== '/' && url.pathname !== '') || url.search || url.hash) {
-    throw new OrcoError('invalid', 'ORCO_PUBLIC_URL must be just the origin, like https://orco.example.com');
+  // Under a sub-path (#142) the public address carries the prefix: https://host/orco.
+  const path = url.pathname.replace(/\/+$/, '');
+  if ((path !== '' && `${path}/` !== basePath()) || url.search || url.hash) {
+    throw new OrcoError('invalid', `ORCO_PUBLIC_URL must be the origin${basePath() === '/' ? '' : ` plus ORCO_BASE_PATH (${basePath()})`}, like https://orco.example.com`);
   }
-  return url.origin;
+  return `${url.origin}${path}`;
 }
 
 function validRedirectUri(raw: unknown): string {

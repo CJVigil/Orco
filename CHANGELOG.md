@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Serve Orco under a sub-path: `ORCO_BASE_PATH=/orco/` behind a proxy that strips the prefix (like nginx `location /orco/ { proxy_pass http://orco:7420/; }`). The web app uses relative URLs, so it loads, signs in and gets live updates there; redirects, cookie paths, the OAuth pages, guest links and install snippets carry the prefix, and agents connect to `https://host/orco/mcp`. Set `ORCO_PUBLIC_URL` to the address with the prefix (`https://host/orco`).
+
 - Prompt links: `/new?project=&title=&body=&folder=&assignee=` opens a new-ticket draft, and `/ask?agent=&prompt=&ticket=` puts a task for an agent in the composer. Nothing is created or sent until the reader presses Create or Send, unknown parameters are dropped, and the reader's own access applies. Copy as link on a new-ticket draft makes one.
 
 - Guest links: Share with guest on a ticket gives one link for one person with no account: it opens that ticket only (title, status, next step, comments, refreshed live), in the first browser that opens it, for 24 hours, until Stop sharing, a new link, the ticket closing, or an org admin turning guest links off (`POST /api/guest-settings`). A guest's question (with a photo, from the phone camera) waits on the ticket as a request until someone in the project presses Send, which comments it on the ticket with the photo and tells the ticket's agent, or Dismiss. Guest activity is audited; tokens are stored hashed. Migration 53.

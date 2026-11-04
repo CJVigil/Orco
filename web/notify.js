@@ -37,7 +37,7 @@ let registration = null;
 export async function registerWorker(onOpen) {
   if (!('serviceWorker' in navigator)) return;
   try {
-    registration = await navigator.serviceWorker.register('/sw.js');
+    registration = await navigator.serviceWorker.register('sw.js');
     navigator.serviceWorker.addEventListener('message', (event) => {
       if (event.data?.type === 'open') onOpen(event.data);
     });

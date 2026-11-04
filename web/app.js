@@ -38,7 +38,7 @@ class ApiError extends Error {
 }
 
 async function api(path, options = {}) {
-  const res = await fetch(`/api${path}`, {
+  const res = await fetch(`api${path}`, {
     ...options,
     headers: options.body ? { 'Content-Type': 'application/json' } : undefined,
     body: options.body ? JSON.stringify(options.body) : undefined,
@@ -270,7 +270,7 @@ function renderMessage(message, previous, { inThread = false } = {}) {
             el(
               'a',
               {
-                href: `/api/attachments/${image.id}`,
+                href: `api/attachments/${image.id}`,
                 target: '_blank',
                 rel: 'noopener',
                 title: image.name,
@@ -280,7 +280,7 @@ function renderMessage(message, previous, { inThread = false } = {}) {
                   void openViewer({ kind: 'image', file: image });
                 },
               },
-              el('img', { src: `/api/attachments/${image.id}`, alt: image.name, loading: 'lazy' }),
+              el('img', { src: `api/attachments/${image.id}`, alt: image.name, loading: 'lazy' }),
             ),
           ),
         )
@@ -370,7 +370,7 @@ async function startIncident(message) {
 /** A text attachment's contents as text, with a diff coloured line by line. */
 async function fileText(file) {
   try {
-    const res = await fetch(`/api/attachments/${file.id}`, { credentials: 'same-origin' });
+    const res = await fetch(`api/attachments/${file.id}`, { credentials: 'same-origin' });
     if (!res.ok) throw new Error(res.statusText);
     const text = (await res.text()).replace(ANSI, '');
     const lines = text.split('\n');
@@ -419,7 +419,7 @@ function fileChip(file) {
       el('button', { class: 'file-name', type: 'button', title: 'Open beside the conversation', text: file.name, onclick: () => void openViewer({ kind: 'file', file }) }),
       el('span', { class: 'muted small', text: formatBytes(file.size) }),
       toggle,
-      el('a', { class: 'ghost small button-link', href: `/api/attachments/${file.id}`, download: file.name, text: 'Download' }),
+      el('a', { class: 'ghost small button-link', href: `api/attachments/${file.id}`, download: file.name, text: 'Download' }),
     ),
     body,
   );
@@ -442,7 +442,7 @@ async function openArtifact(id, version) {
   if (mine !== viewerSeq) return;
   openPanel('view', artifact.title);
   const v = version ?? artifact.version;
-  const src = `/api/artifacts/${id}/render?v=${v}`;
+  const src = `api/artifacts/${id}/render?v=${v}`;
   const versions = el(
     'select',
     { class: 'ghost small', 'aria-label': 'Version', onchange: (event) => void openArtifact(id, Number(event.target.value)) },
@@ -501,7 +501,7 @@ let viewerSeq = 0;
 async function openViewer({ kind, file }) {
   const mine = ++viewerSeq;
   openPanel('view', file.name);
-  const url = `/api/attachments/${file.id}`;
+  const url = `api/attachments/${file.id}`;
   const body = $('panel-body');
   const actions = el(
     'div',
@@ -1796,7 +1796,7 @@ function renderRoomTitle() {
   $('more').hidden = !state.room.project;
   const audit = $('audit-log');
   audit.hidden = !state.room.project;
-  if (state.room.project) audit.href = `/api/audit?project=${encodeURIComponent(state.room.project)}&format=jsonl`;
+  if (state.room.project) audit.href = `api/audit?project=${encodeURIComponent(state.room.project)}&format=jsonl`;
   document.title = `${isHome(state.room) ? 'Home' : `#${state.room.name}`} · Orco`;
   $('empty-title').textContent = isHome(state.room) ? 'This is Home, the room everyone on this server shares' : `This is the start of #${state.room.name}`;
 }
@@ -2597,7 +2597,7 @@ async function loadFreezes() {
 }
 
 function connect() {
-  const events = new EventSource('/api/events');
+  const events = new EventSource('api/events');
   void loadFreezes();
   events.addEventListener('controls', () => void loadFreezes());
   const dot = $('connection');
@@ -2786,7 +2786,7 @@ function isTextFile(file) {
 }
 
 async function uploadImage(file, room) {
-  const res = await fetch(`/api/attachments?room=${encodeURIComponent(room)}&name=${encodeURIComponent(file.name || 'file')}`, {
+  const res = await fetch(`api/attachments?room=${encodeURIComponent(room)}&name=${encodeURIComponent(file.name || 'file')}`, {
     method: 'POST',
     headers: { 'Content-Type': file.type || 'application/octet-stream' },
     body: file,
@@ -3636,7 +3636,7 @@ async function showLogin() {
   const oidc = setup.oidc;
   if (oidc) {
     const parts = [
-      el('button', { class: 'primary', type: 'button', text: `Sign in with ${oidc.label}`, onclick: () => location.assign('/auth/oidc/start') }),
+      el('button', { class: 'primary', type: 'button', text: `Sign in with ${oidc.label}`, onclick: () => location.assign('auth/oidc/start') }),
     ];
     if (oidc.pending) {
       parts.push(

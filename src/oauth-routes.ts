@@ -1,3 +1,4 @@
+import { at, basePath } from './basepath.js';
 import express, { type NextFunction, type Request, type Response, type Router } from 'express';
 import { OAuth, OAuthError, type PendingRequest } from './oauth.js';
 import type { RateLimiter } from './ratelimit.js';
@@ -13,7 +14,7 @@ function page(title: string, body: string): string {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark light"><title>${escape(title)} · Orco</title>
-<link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/style.css"></head>
+<link rel="icon" href="${at('favicon.svg')}" type="image/svg+xml"><link rel="stylesheet" href="${at('style.css')}"></head>
 <body><main class="login"><div class="login-card oauth-card">
 <div class="brand"><span class="logo" aria-hidden="true"></span>Orco</div>
 ${body}
@@ -98,7 +99,7 @@ export function oauthRouter(store: Store, oauth: OAuth, logins: RateLimiter, reg
     }
     try {
       const id = oauth.startAuthorization(params, checked.client, checked.redirectUri);
-      res.redirect(303, `/oauth/consent?request=${encodeURIComponent(id)}`);
+      res.redirect(303, `${at('oauth/consent')}?request=${encodeURIComponent(id)}`);
     } catch (err) {
       if (!(err instanceof OAuthError)) throw err;
       const redirect = new URL(checked.redirectUri);
@@ -149,8 +150,8 @@ export function oauthRouter(store: Store, oauth: OAuth, logins: RateLimiter, reg
       res.status(401).type('html').send(loginPage(pending, 'That is not a valid user token.'));
       return;
     }
-    res.cookie(COOKIE, token, { httpOnly: true, sameSite: 'strict', secure: req.secure || publicUrlIsHttps(), path: '/', maxAge: 30 * 24 * 3600 * 1000 });
-    res.redirect(303, `/oauth/consent?request=${encodeURIComponent(requestId)}`);
+    res.cookie(COOKIE, token, { httpOnly: true, sameSite: 'strict', secure: req.secure || publicUrlIsHttps(), path: basePath(), maxAge: 30 * 24 * 3600 * 1000 });
+    res.redirect(303, `${at('oauth/consent')}?request=${encodeURIComponent(requestId)}`);
   });
 
   router.post('/oauth/consent', form, (req, res) => {
@@ -212,7 +213,7 @@ function loginPage(pending: PendingRequest, error?: string): string {
     'Sign in',
     `<h1 class="oauth-title">Sign in to connect an app</h1>
 ${clientSummary(pending)}
-<form method="post" action="/oauth/login" class="oauth-form">
+<form method="post" action="${at('oauth/login')}" class="oauth-form">
 <input type="hidden" name="request" value="${escape(pending.id)}">
 <label for="token">Your user token</label>
 <input id="token" name="token" type="password" autocomplete="current-password" required placeholder="orco_u_…">
@@ -237,7 +238,7 @@ ${clientSummary(pending)}
     'Connect an app',
     `<h1 class="oauth-title">Connect an app</h1>
 ${clientSummary(pending)}
-<form method="post" action="/oauth/consent" class="oauth-form">
+<form method="post" action="${at('oauth/consent')}" class="oauth-form">
 <input type="hidden" name="request" value="${escape(pending.id)}">
 <input type="hidden" name="nonce" value="${escape(nonce)}">
 <label for="agent">Act as</label>

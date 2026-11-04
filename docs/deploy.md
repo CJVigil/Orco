@@ -88,6 +88,7 @@ deploys it.
 | `ORCO_DB` | `./orco.db` (`/data/orco.db` in Docker) | SQLite file |
 | `ORCO_TRUST_PROXY` | unset | Behind a proxy (Caddy, Nginx, `tailscale serve`): the number of proxies in front of Orco (like `1`), or `loopback`, `uniquelocal` or their addresses. Without it every request seems to come from the proxy, so sign-in limits are shared by everyone; Orco warns at the first proxied request. `true` is refused: it would trust headers any client makes up. Prefer the proxy's addresses; a hop count is only safe when clients cannot reach Orco except through the proxy |
 | `ORCO_PUBLIC_URL` | unset | Public origin; turns on OAuth for cloud agents (see [cloud-agents.md](cloud-agents.md)) |
+| `ORCO_BASE_PATH` | `/` | Serve under a sub-path behind a proxy that strips it, like `/orco/`; set `ORCO_PUBLIC_URL` to the address with the path too. See [Under a sub-path](#under-a-sub-path) |
 | `ORCO_TIMEZONE` | the machine's | The timezone deploy windows are read in, like `America/Chicago` |
 | `ORCO_SCOPE_GATE` | on | `off` starts new projects without the scope gate until an org admin sets it in Portfolio > Controls or `POST /api/scope/settings` |
 | `ORCO_MAX_TASK_DEPTH` | `4` | How deep agents can chain sub-tasks |
@@ -320,3 +321,27 @@ Any restart, upgrades included, drops Orco's tools from agent sessions that are 
   serve Orco over HTTPS (or a private network you trust) like the web app itself.
 - The audit log is append-only inside the database. If you need tamper evidence beyond that, ship
   `orco audit export` output to storage the Orco host cannot rewrite.
+
+## Under a sub-path
+
+To host Orco at `https://inventory.example.net/orco/` behind an existing nginx, strip the prefix
+in the proxy and tell Orco about it:
+
+```nginx
+location /orco/ {
+    proxy_pass http://127.0.0.1:7420/;    # the trailing slash strips /orco
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_buffering off;                  # live updates and MCP stream
+    proxy_read_timeout 1h;
+}
+```
+
+```sh
+ORCO_BASE_PATH=/orco/ ORCO_PUBLIC_URL=https://inventory.example.net/orco orco serve
+```
+
+Agents connect to `https://inventory.example.net/orco/mcp`. Cloud agents that sign in with OAuth
+also look for `/.well-known/oauth-protected-resource/orco/mcp` at the host's root, so forward
+`/.well-known/` paths that end in `/orco/mcp` to Orco too, or connect them with a token instead.

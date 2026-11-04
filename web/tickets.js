@@ -799,7 +799,7 @@ export function createTickets(ctx) {
           'div',
           { class: 'guest-request' },
           el('div', { class: 'small', text: r.text || '(a photo)' }),
-          r.hasPhoto ? el('img', { src: `/api/guest-requests/${r.id}/photo`, alt: 'Photo from the guest', loading: 'lazy' }) : null,
+          r.hasPhoto ? el('img', { src: `api/guest-requests/${r.id}/photo`, alt: 'Photo from the guest', loading: 'lazy' }) : null,
           el('div', { class: 'row-end' }, el('button', { class: 'ghost small', type: 'button', text: 'Dismiss', onclick: () => decide(r, false) }), el('button', { class: 'primary small', type: 'button', text: 'Send', onclick: () => decide(r, true) })),
         ),
       ),
@@ -838,11 +838,11 @@ export function createTickets(ctx) {
   function commentFiles(ticket, a) {
     const files = (ticket.files ?? []).filter((f) => f.activityId === a.id);
     if (!files.length) return null;
-    return el('div', { class: 'comment-files' }, files.map((f) => el('a', { class: 'pending-chip', href: `/api/ticket-files/${f.id}`, target: '_blank', rel: 'noopener' }, icon('file'), el('span', { text: f.name }))));
+    return el('div', { class: 'comment-files' }, files.map((f) => el('a', { class: 'pending-chip', href: `api/ticket-files/${f.id}`, target: '_blank', rel: 'noopener' }, icon('file'), el('span', { text: f.name }))));
   }
 
   async function uploadTicketFile(project, file) {
-    const res = await fetch(`/api/ticket-files?project=${encodeURIComponent(project)}&name=${encodeURIComponent(file.name || 'file')}`, {
+    const res = await fetch(`api/ticket-files?project=${encodeURIComponent(project)}&name=${encodeURIComponent(file.name || 'file')}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/octet-stream' },
       body: file,
@@ -863,7 +863,7 @@ export function createTickets(ctx) {
       { class: 'files-strip' },
       el('div', { class: 'small muted files-head', text: `Files (${ticket.files.length})` }),
       ticket.files.map((f) => {
-        const url = `/api/ticket-files/${f.id}`;
+        const url = `api/ticket-files/${f.id}`;
         const previewable = f.mime.startsWith('image/') || f.mime === 'application/pdf';
         const preview = el('div', { class: 'file-preview', hidden: true });
         return el(
@@ -2004,7 +2004,7 @@ export function createTickets(ctx) {
   /** A prompt link (#118): /new or /ask with the draft in the query, empty fields left out. */
   function promptLink(kind, params) {
     const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v));
-    return `${location.origin}/${kind}?${q}`;
+    return `${new URL('.', location.href).href}${kind}?${q}`;
   }
 
   async function openNewTicket(defaults = {}) {
@@ -2452,7 +2452,7 @@ export function createTickets(ctx) {
       }),
     );
     const list = (items, line) => (items.length ? el('ul', { class: 'report-list small' }, items.slice(0, 12).map((i) => el('li', {}, line(i)))) : el('p', { class: 'small muted', text: 'Nothing.' }));
-    const md = `/api/projects/${encodeURIComponent(t.project)}/report?${reportQuery()}&format=md`;
+    const md = `api/projects/${encodeURIComponent(t.project)}/report?${reportQuery()}&format=md`;
     return el(
       'div',
       { class: 'report' },
@@ -2594,7 +2594,7 @@ export function createTickets(ctx) {
           try {
             const created = await api('/hooks', { method: 'POST', body: { room: hookRoom.value, name: hookName.value, wakeAgent: hookAgent.value || null, wakeMatch: hookMatch.value, confirmTasks: hookConfirm.checked } });
             await load();
-            const url = `${location.origin}${created.path}`;
+            const url = `${new URL('.', location.href).href.replace(/\/$/, '')}${created.path}`;
             const box = root.querySelector('.hook-reveal');
             box?.replaceChildren(
               el('p', { class: 'small', text: `POST to this URL from ${created.hook.name}. It is shown once; anyone with it can post into #${hookRoom.selectedOptions[0]?.textContent?.slice(1) ?? ''}.` }),

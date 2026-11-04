@@ -6,7 +6,7 @@ const token = location.hash.slice(1);
 // Keep the token out of the address bar and history once read.
 history.replaceState(null, '', location.pathname);
 const root = document.getElementById('guest');
-const base = `/guest-api/${encodeURIComponent(token)}`;
+const base = `guest-api/${encodeURIComponent(token)}`;
 let photo = null;
 let draft = '';
 

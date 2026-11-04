@@ -44,7 +44,8 @@ const GLOSSARY = [
 
 export function createGuide(ctx) {
   const { api, el, $, me, room, projects, openPanel, panel, loadStructure, newProject, showMyAgents } = ctx;
-  const origin = location.origin;
+  // The address Orco is served at, its prefix included (ORCO_BASE_PATH, #142).
+  const origin = new URL('.', location.href).href.replace(/\/$/, '');
 
   /** The one command that joins a computer: through npx when this server hands out Orco, so nothing needs installing. */
   let client;
