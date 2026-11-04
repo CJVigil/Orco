@@ -268,7 +268,17 @@ function renderMessage(message, previous, { inThread = false } = {}) {
           images.map((image) =>
             el(
               'a',
-              { href: `/api/attachments/${image.id}`, target: '_blank', rel: 'noopener', title: image.name },
+              {
+                href: `/api/attachments/${image.id}`,
+                target: '_blank',
+                rel: 'noopener',
+                title: image.name,
+                onclick: (event) => {
+                  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                  event.preventDefault();
+                  void openViewer({ kind: 'image', file: image });
+                },
+              },
               el('img', { src: `/api/attachments/${image.id}`, alt: image.name, loading: 'lazy' }),
             ),
           ),
@@ -308,7 +318,30 @@ const DIFF_NAME = /\.(diff|patch)$/i;
 // Terminal colour codes in logs are noise in a browser.
 const ANSI = /\u001b\[[0-9;]*[A-Za-z]/g;
 
-/** A text attachment: name and size, opening into the file itself (fetched as text, shown as text). */
+/** A text attachment's contents as text, with a diff coloured line by line. */
+async function fileText(file) {
+  try {
+    const res = await fetch(`/api/attachments/${file.id}`, { credentials: 'same-origin' });
+    if (!res.ok) throw new Error(res.statusText);
+    const text = (await res.text()).replace(ANSI, '');
+    const lines = text.split('\n');
+    const diff = DIFF_NAME.test(file.name);
+    return el(
+      'pre',
+      {},
+      lines.map((line, i) =>
+        el('span', {
+          class: diff ? (line.startsWith('+') && !line.startsWith('+++') ? 'add' : line.startsWith('-') && !line.startsWith('---') ? 'del' : line.startsWith('@@') ? 'hunk' : '') : '',
+          text: `${line}${i < lines.length - 1 ? '\n' : ''}`,
+        }),
+      ),
+    );
+  } catch (err) {
+    return el('p', { class: 'muted small', text: `Could not load the file: ${err.message}` });
+  }
+}
+
+/** A text attachment: name and size. The name opens it beside the conversation; Show opens it in place. */
 function fileChip(file) {
   const body = el('div', { class: 'file-view', hidden: true });
   let loaded = false;
@@ -324,27 +357,7 @@ function fileChip(file) {
       toggle.setAttribute('aria-expanded', String(open));
       if (!open || loaded) return;
       loaded = true;
-      try {
-        const res = await fetch(`/api/attachments/${file.id}`, { credentials: 'same-origin' });
-        if (!res.ok) throw new Error(res.statusText);
-        const text = (await res.text()).replace(ANSI, '');
-        const lines = text.split('\n');
-        const diff = DIFF_NAME.test(file.name);
-        body.replaceChildren(
-          el(
-            'pre',
-            {},
-            lines.map((line, i) =>
-              el('span', {
-                class: diff ? (line.startsWith('+') && !line.startsWith('+++') ? 'add' : line.startsWith('-') && !line.startsWith('---') ? 'del' : line.startsWith('@@') ? 'hunk' : '') : '',
-                text: `${line}${i < lines.length - 1 ? '\n' : ''}`,
-              }),
-            ),
-          ),
-        );
-      } catch (err) {
-        body.replaceChildren(el('p', { class: 'muted small', text: `Could not load the file: ${err.message}` }));
-      }
+      body.replaceChildren(await fileText(file));
     },
   });
   return el(
@@ -354,13 +367,38 @@ function fileChip(file) {
       'div',
       { class: 'file-head' },
       icon('file'),
-      el('span', { class: 'file-name', text: file.name }),
+      el('button', { class: 'file-name', type: 'button', title: 'Open beside the conversation', text: file.name, onclick: () => void openViewer({ kind: 'file', file }) }),
       el('span', { class: 'muted small', text: formatBytes(file.size) }),
       toggle,
       el('a', { class: 'ghost small button-link', href: `/api/attachments/${file.id}`, download: file.name, text: 'Download' }),
     ),
     body,
   );
+}
+
+/** An image or a text file in the side panel (#96), so it sits beside the conversation. */
+let viewerSeq = 0;
+
+async function openViewer({ kind, file }) {
+  const mine = ++viewerSeq;
+  openPanel('view', file.name);
+  const url = `/api/attachments/${file.id}`;
+  const body = $('panel-body');
+  const actions = el(
+    'div',
+    { class: 'viewer-actions' },
+    el('a', { class: 'ghost small button-link', href: url, target: '_blank', rel: 'noopener', text: 'Open in a new tab' }),
+    el('a', { class: 'ghost small button-link', href: url, download: file.name, text: 'Download' }),
+    file.size ? el('span', { class: 'muted small', text: formatBytes(file.size) }) : null,
+  );
+  if (kind === 'image') {
+    body.replaceChildren(el('div', { class: 'viewer' }, el('img', { class: 'viewer-image', src: url, alt: file.name }), actions));
+    return;
+  }
+  const view = el('div', { class: 'file-view viewer-text' }, el('p', { class: 'muted small', text: 'Loading…' }));
+  body.replaceChildren(el('div', { class: 'viewer' }, view, actions));
+  const text = await fileText(file);
+  if (state.panel === 'view' && viewerSeq === mine) view.replaceChildren(text);
 }
 
 /** Text the author relayed from outside Orco: shown apart from their own words, never as markdown, never with live links. */
@@ -1351,21 +1389,59 @@ function onTask(task) {
 
 /* Sidebar */
 
+/** The room that greets everyone, lobby, reads as Home in the app (#96); its name stays for agents. */
+const isHome = (room) => room.project === null && room.name === 'lobby';
+const roomLabel = (room) => (isHome(room) ? 'Home' : room.name);
+
 function roomLink(room) {
   const unread = state.unread.get(room.ref) || 0;
   const mentioned = state.mentioned.get(room.ref) || 0;
   return el(
     'a',
     {
-      class: `room-link${unread ? ' unread' : ''}`,
+      class: `room-link${unread ? ' unread' : ''}${isHome(room) ? ' home-link' : ''}`,
       href: `#${room.ref}`,
       'aria-current': state.view === 'room' && state.room?.ref === room.ref ? 'page' : null,
       onclick: () => $('sidebar').classList.remove('open'),
     },
-    el('span', { class: 'hash', text: '#' }),
-    el('span', { text: room.name }),
-    mentioned ? el('span', { class: 'badge', text: String(mentioned), title: 'Mentions' }) : null,
+    isHome(room) ? icon('home') : el('span', { class: 'hash', text: '#' }),
+    el('span', { class: 'room-name', text: roomLabel(room) }),
+    mentioned ? el('span', { class: 'badge', text: String(mentioned), title: 'Mentions' }) : unread ? el('span', { class: 'unread-dot', title: 'New messages', 'aria-label': 'New messages' }) : null,
   );
+}
+
+/* Recent rooms and tickets, newest first, for each person in this browser (#96). */
+const recentKey = () => `orco.recent.${state.me?.name ?? ''}`;
+
+function recentItems() {
+  try {
+    const list = JSON.parse(localStorage.getItem(recentKey()) ?? '[]');
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberRecent(item) {
+  const list = [item, ...recentItems().filter((x) => !(x.kind === item.kind && x.ref === item.ref))].slice(0, 12);
+  try {
+    localStorage.setItem(recentKey(), JSON.stringify(list));
+  } catch {
+    // Kept for this page only.
+  }
+}
+
+function recentLink(item) {
+  if (item.kind === 'ticket') {
+    return el(
+      'button',
+      { class: 'room-link recent-link', type: 'button', title: `${item.ref} ${item.label}`, onclick: () => ($('sidebar').classList.remove('open'), void tickets.openTicket(item.ref)) },
+      el('span', { class: 'recent-ref', text: item.ref }),
+      el('span', { class: 'room-name', text: item.label }),
+    );
+  }
+  const room = state.rooms.find((r) => r.ref === item.ref);
+  return room ? roomLink(room) : null;
 }
 
 /*
@@ -1421,28 +1497,41 @@ function groupHead(key, label, hidden, extra = null) {
   );
 }
 
+/*
+ * The sidebar in the order of the Claude app (#96): Needs you, Inbox and Portfolio above; then Home,
+ * your projects (each with its tickets, folders and rooms), the other server rooms, and what you
+ * opened recently. Every group folds from its name, and a folded group still shows what is new.
+ */
 function renderNav() {
   const nav = $('nav');
   nav.replaceChildren();
   const showFolded = (r) => (state.unread.get(r.ref) || 0) > 0 || (state.mentioned.get(r.ref) || 0) > 0 || (state.view === 'room' && state.room?.ref === r.ref);
-  const serverRooms = state.rooms.filter((r) => r.project === null);
-  const serverFolded = foldedGroups().has('server');
-  const serverShown = serverFolded ? serverRooms.filter(showFolded) : serverRooms;
-  nav.append(el('div', { class: 'nav-group' }, groupHead('server', 'Server', serverRooms.length - serverShown.length), serverShown.map(roomLink)));
-  for (const project of state.projects) {
-    const rooms = state.rooms.filter((r) => r.project === project.name);
-    const folded = foldedGroups().has(`project:${project.name}`);
-    const shown = folded ? rooms.filter(showFolded) : rooms;
-    const onTickets = state.view === 'tickets' && tickets.project === project.name;
-    nav.append(
-      el(
+  const home = state.rooms.find(isHome);
+  if (home) nav.append(el('div', { class: 'nav-home' }, roomLink(home)));
+
+  const projectsFolded = foldedGroups().has('projects');
+  const projectGroups = state.projects
+    .map((project) => {
+      const rooms = state.rooms.filter((r) => r.project === project.name);
+      const onTickets = state.view === 'tickets' && tickets.project === project.name;
+      const busy = onTickets || rooms.some(showFolded);
+      if (projectsFolded && !busy) return null;
+      const folded = foldedGroups().has(`project:${project.name}`);
+      const shown = folded ? rooms.filter(showFolded) : rooms;
+      const unread = rooms.some((r) => (state.unread.get(r.ref) || 0) > 0);
+      return el(
         'div',
-        { class: 'nav-group' },
+        { class: 'nav-group nav-project' },
         groupHead(
           `project:${project.name}`,
           project.name,
           rooms.length - shown.length + (folded && !onTickets ? 1 : 0),
-          el('button', { class: 'ghost', type: 'button', title: `New room in ${project.name}`, 'aria-label': `New room in ${project.name}`, onclick: () => newRoom(project.name) }, icon('plus')),
+          el(
+            'span',
+            { class: 'nav-head-end' },
+            folded && unread ? el('span', { class: 'unread-dot', title: 'New messages', 'aria-label': 'New messages' }) : null,
+            el('button', { class: 'ghost', type: 'button', title: `New room in ${project.name}`, 'aria-label': `New room in ${project.name}`, onclick: () => newRoom(project.name) }, icon('plus')),
+          ),
         ),
         folded && !onTickets
           ? null
@@ -1460,9 +1549,31 @@ function renderNav() {
         // The folders of the project whose tickets are on screen (#91).
         onTickets ? el('div', { class: 'nav-folders' }, tickets.navFolders(project.name)) : null,
         shown.map(roomLink),
-      ),
-    );
+      );
+    })
+    .filter(Boolean);
+  if (state.projects.length) {
+    nav.append(el('div', { class: 'nav-section' }, groupHead('projects', 'Projects', projectsFolded ? state.projects.length - projectGroups.length : 0), projectGroups));
   }
+
+  const serverRooms = state.rooms.filter((r) => r.project === null && !isHome(r));
+  if (serverRooms.length) {
+    const serverFolded = foldedGroups().has('server');
+    const serverShown = serverFolded ? serverRooms.filter(showFolded) : serverRooms;
+    nav.append(el('div', { class: 'nav-group' }, groupHead('server', 'Server', serverRooms.length - serverShown.length), serverShown.map(roomLink)));
+  }
+
+  // Recent: what you opened lately, without the room you are in or the ticket on screen.
+  const current = state.view === 'room' ? state.room?.ref : null;
+  const openTicketRef = tickets.openRef()?.ref;
+  const recent = recentItems()
+    .filter((item) => (item.kind === 'room' ? item.ref !== current && state.rooms.some((r) => r.ref === item.ref && !isHome(r)) : item.ref !== openTicketRef))
+    .slice(0, 5);
+  if (recent.length) {
+    const folded = foldedGroups().has('recent');
+    nav.append(el('div', { class: 'nav-group nav-recent' }, groupHead('recent', 'Recent', folded ? recent.length : 0), folded ? null : recent.map(recentLink)));
+  }
+
   // New project lives in the menu under your name; someone with no project yet sees it here too.
   if (!state.projects.length) {
     nav.append(el('button', { class: 'ghost wide nav-new-project', type: 'button', onclick: () => void newProject() }, icon('folder-plus'), el('span', { text: 'New project' })));
@@ -1499,7 +1610,7 @@ function renderRoomTitle() {
     return;
   }
   if (state.room.project) title.append(el('span', { class: 'project', text: `${state.room.project} / ` }));
-  title.append(`#${state.room.name}`);
+  title.append(isHome(state.room) ? 'Home' : `#${state.room.name}`);
   // The room's status line: its current state, set by anyone who can write here.
   const status = roomStatuses.get(state.room.ref);
   title.append(
@@ -1517,8 +1628,8 @@ function renderRoomTitle() {
   const audit = $('audit-log');
   audit.hidden = !state.room.project;
   if (state.room.project) audit.href = `/api/audit?project=${encodeURIComponent(state.room.project)}&format=jsonl`;
-  document.title = `#${state.room.name} · Orco`;
-  $('empty-title').textContent = `This is the start of #${state.room.name}`;
+  document.title = `${isHome(state.room) ? 'Home' : `#${state.room.name}`} · Orco`;
+  $('empty-title').textContent = isHome(state.room) ? 'This is Home, the room everyone on this server shares' : `This is the start of #${state.room.name}`;
 }
 
 function renderMessages({ keepScroll = false } = {}) {
@@ -1605,6 +1716,7 @@ async function selectRoom() {
   state.room = room;
   state.unread.delete(room.ref);
   state.mentioned.delete(room.ref);
+  rememberRecent({ kind: 'room', ref: room.ref, label: roomLabel(room) });
   renderNav();
   renderRoomTitle();
   if (changed) {
@@ -1642,7 +1754,8 @@ function openPanel(kind, title) {
   $('panel-title').textContent = title;
   $('thread-composer').hidden = kind !== 'thread';
   $('thread-pending').hidden = kind !== 'thread';
-  $('panel').classList.toggle('wide', kind === 'ticket' || kind === 'new-ticket');
+  $('panel').classList.toggle('wide', kind === 'ticket' || kind === 'new-ticket' || kind === 'view');
+  applyPanelWidth();
 }
 
 function closePanel() {
@@ -1650,6 +1763,86 @@ function closePanel() {
   state.thread = null;
   clearInterval(lockTimer);
   $('panel').hidden = true;
+  $('app').classList.remove('panel-full');
+}
+
+/*
+ * The split view (#96): the panel on the right resizes from its left edge, and each person's widths
+ * (one for tickets, one for the narrower panels) are remembered in this browser. Double-click the
+ * divider (or press Enter on it) for full width; arrow keys resize it too.
+ */
+const PANEL_MIN = 280;
+const panelKey = () => `orco.panelWidths.${state.me?.name ?? ''}`;
+
+function panelWidths() {
+  try {
+    return JSON.parse(localStorage.getItem(panelKey()) ?? '{}');
+  } catch {
+    return {};
+  }
+}
+
+function panelMax() {
+  // The conversation keeps at least 360 px beside the sidebar.
+  const sidebar = $('sidebar').getBoundingClientRect().width;
+  return Math.max(PANEL_MIN, window.innerWidth - sidebar - 360);
+}
+
+function applyPanelWidth(width) {
+  const panel = $('panel');
+  const kind = panel.classList.contains('wide') ? 'wide' : 'normal';
+  const widths = panelWidths();
+  const px = width ?? widths[kind];
+  if (!px) {
+    panel.style.removeProperty('--panel-width');
+    return;
+  }
+  panel.style.setProperty('--panel-width', `${Math.round(Math.min(Math.max(px, PANEL_MIN), panelMax()))}px`);
+}
+
+function savePanelWidth(px) {
+  const kind = $('panel').classList.contains('wide') ? 'wide' : 'normal';
+  const widths = { ...panelWidths(), [kind]: Math.round(Math.min(Math.max(px, PANEL_MIN), panelMax())) };
+  try {
+    localStorage.setItem(panelKey(), JSON.stringify(widths));
+  } catch {
+    // Kept for this page only.
+  }
+  applyPanelWidth(widths[kind]);
+}
+
+{
+  const resizer = $('panel-resizer');
+  const full = () => $('app').classList.toggle('panel-full');
+  resizer.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0 || $('app').classList.contains('panel-full')) return;
+    event.preventDefault();
+    resizer.setPointerCapture(event.pointerId);
+    resizer.classList.add('dragging');
+    document.body.classList.add('resizing-panel');
+    const move = (e) => applyPanelWidth(window.innerWidth - e.clientX);
+    const end = (e) => {
+      resizer.classList.remove('dragging');
+      document.body.classList.remove('resizing-panel');
+      resizer.removeEventListener('pointermove', move);
+      resizer.removeEventListener('pointerup', end);
+      resizer.removeEventListener('pointercancel', end);
+      if (e.type === 'pointerup') savePanelWidth(window.innerWidth - e.clientX);
+      else applyPanelWidth();
+    };
+    resizer.addEventListener('pointermove', move);
+    resizer.addEventListener('pointerup', end);
+    resizer.addEventListener('pointercancel', end);
+  });
+  resizer.addEventListener('dblclick', full);
+  resizer.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') return void full();
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    const current = $('panel').getBoundingClientRect().width;
+    savePanelWidth(current + (event.key === 'ArrowLeft' ? 40 : -40));
+  });
+  window.addEventListener('resize', () => applyPanelWidth());
 }
 
 let lockTimer = null;
@@ -3359,7 +3552,11 @@ document.addEventListener('click', (event) => {
 });
 $('load-older').addEventListener('click', () => void loadOlder());
 $('toggle-sidebar').addEventListener('click', () => $('sidebar').classList.toggle('open'));
-window.addEventListener('hashchange', () => void selectRoom());
+window.addEventListener('hashchange', () => {
+  // Going somewhere brings the conversation back beside a full-width panel.
+  $('app').classList.remove('panel-full');
+  void selectRoom();
+});
 setInterval(() => notify.tick(), 60_000);
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && state.view === 'room' && state.room) {
@@ -3408,6 +3605,10 @@ const tickets = createTickets({
   rooms: () => state.rooms,
   $,
   onNav: () => renderNav(),
+  onTicketOpen: (ticket) => {
+    rememberRecent({ kind: 'ticket', ref: ticket.ref, label: ticket.title });
+    renderNav();
+  },
   runCommand: (command, where) => runCommand(command, where),
   attachCommands: (box, where) => attachCommands(box, where),
   attachTicketRefs: (box) => attachTicketRefs(box),

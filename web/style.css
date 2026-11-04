@@ -4930,3 +4930,213 @@ details.md-work-item[open] > summary .md-work-action::after {
 .main:has(#composer.editing) .work-status {
   visibility: hidden;
 }
+
+/*
+ * Split view and a Claude-app sidebar (#96). The panel on the right is the thing you are working on
+ * (a ticket, a file, an image) beside the conversation, resized from its left edge. Structure comes
+ * from spacing and the background tokens rather than rules between regions.
+ */
+.sidebar,
+.me,
+.room-head,
+.panel-head {
+  border-width: 0;
+}
+
+.nav-group {
+  margin-bottom: 0.35rem;
+}
+
+.room-link {
+  margin: 0 0.5rem;
+  padding: 0.22rem 0.55rem;
+  min-width: 0;
+}
+
+.room-link .room-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inbox-link {
+  margin-top: 0;
+  padding: 0.3rem 0.6rem;
+}
+
+.search {
+  padding-bottom: 0.4rem;
+}
+
+.unread-dot {
+  margin-left: auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: none;
+}
+
+.nav-home {
+  margin: 0.15rem 0 0.4rem;
+}
+
+.home-link .svg-icon {
+  color: var(--muted);
+}
+
+.home-link[aria-current='page'] .svg-icon {
+  color: var(--text);
+}
+
+/* Projects is the section; each project inside it reads as a row you can fold. */
+.nav-section {
+  margin-bottom: 0.35rem;
+}
+
+.nav-project {
+  margin-bottom: 0.15rem;
+}
+
+.nav-project > .nav-group-head {
+  padding-top: 0.2rem;
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: color-mix(in srgb, var(--text) 82%, var(--muted));
+}
+
+.nav-project > .nav-group-head .fold-caret {
+  color: var(--muted);
+}
+
+.nav-head-end {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.nav-head-end .unread-dot {
+  margin-left: 0;
+}
+
+button.recent-link {
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.recent-ref {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+/* The divider: drag it, double-click it (or Enter) for full width, arrows to nudge. */
+.panel-resizer {
+  display: none;
+}
+
+@media (min-width: 901px) {
+  .panel {
+    position: relative;
+    width: var(--panel-width, 340px);
+  }
+
+  .panel.wide {
+    width: var(--panel-width, 460px);
+  }
+
+  .panel-resizer {
+    display: block;
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -4px;
+    width: 8px;
+    z-index: 6;
+    cursor: col-resize;
+    touch-action: none;
+  }
+
+  .panel-resizer::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 3px;
+    width: 2px;
+    background: transparent;
+    transition: background-color 0.12s ease;
+  }
+
+  .panel-resizer:hover::after,
+  .panel-resizer.dragging::after,
+  .panel-resizer:focus-visible::after {
+    background: var(--accent);
+  }
+
+  .panel-resizer:focus-visible {
+    outline: none;
+  }
+
+  .app.panel-full > .main {
+    display: none;
+  }
+
+  .app.panel-full > .panel {
+    width: auto;
+  }
+
+  body.resizing-panel,
+  body.resizing-panel * {
+    cursor: col-resize !important;
+    user-select: none;
+  }
+}
+
+/* Images and text files open in the panel. */
+.file-head .file-name {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.file-head .file-name:hover {
+  text-decoration: underline;
+}
+
+.viewer {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.25rem 1rem 1rem;
+}
+
+.viewer-image {
+  display: block;
+  max-width: 100%;
+  max-height: calc(100vh - 9rem);
+  margin: 0 auto;
+  border-radius: 6px;
+  background: var(--bg-raised);
+}
+
+.viewer-text {
+  border: 0;
+  border-radius: 6px;
+  background: var(--bg-raised);
+  max-height: none;
+}
+
+.viewer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}

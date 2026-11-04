@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Split view: the ticket, file or image you open sits beside the conversation, with a divider you drag (remembered per person) and double-click for full width; images and text files now open there. The sidebar follows the Claude app: Needs you on top, Home (the lobby), your projects with their tickets, folders and rooms, then Recent rooms and tickets, each group foldable, with unread dots. Fewer borders, tighter rows.
+
 - Keyboard first, like Claude Code (#93): **Ctrl+K** (⌘K) opens a palette that finds any room,
   ticket (by key or words), place or person as you type, and acts on the open ticket (assign, move,
   next step, ask someone, folder); Tab on a ticket gives its actions. `/` in the composer or a

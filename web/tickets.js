@@ -937,6 +937,8 @@ export function createTickets(ctx) {
     t.replan = false;
     if (panel() !== 'ticket' || t.open !== ref) return;
     renderDetail(ticket);
+    // A ticket you open goes to Recent in the sidebar (#96).
+    if (!refresh) ctx.onTicketOpen?.(ticket);
   }
 
   async function save(ticket, patch) {
