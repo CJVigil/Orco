@@ -352,6 +352,13 @@ so consent rules apply. The payload comes from outside, so by default that task 
 creator to approve it before the agent starts; untick *Ask me before the agent starts* for a source
 you trust. Orco only receives; it still makes no outbound calls.
 
+Pushes and CI results also land on tickets: a commit whose message names a ticket key (`SHO-12`) is
+listed on that ticket with its branch, author and link, then marked passed, failed or deployed as
+CI deliveries arrive, so nobody has to comment for each push. If the forge cannot reach Orco (a
+LAN-only server and GitHub-hosted code), run `orco forge-poll --repo owner/name --hook <webhook URL>`
+on a machine that can reach both (with `GITHUB_TOKEN`, or `--forge gitea --api …` and
+`GITEA_TOKEN`); it polls the forge and posts what it finds to the webhook.
+
 ### Secrets
 
 With `ORCO_SECRETS_KEY` set, people store API keys and passwords for a project under

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Commits on tickets: a push to a project webhook (GitHub, Gitea, Forgejo) links each commit whose message names one of the project's tickets (SHO-12) on that ticket, with its sha, branch, author and link; CI deliveries mark it passed, failed or running, and a successful deploy job marks it deployed. CI results are kept per repository, branch and commit, and `wait_for` takes `ci` (a sha or a branch). For an Orco the forge cannot reach, `orco forge-poll` runs on a machine that can reach both, polls the forge's API and posts to the webhook; the server still calls nothing. Migration 44.
+
 - Spend per ticket: agents report a session's tokens and cost (`report_usage`, `POST /api/usage`; the Claude Code plugin does it at the end of each turn from the session transcript), booked on the ticket named or the agent's one ticket in progress, only the growth each time. A ticket shows what agents spent on it, and each project has a Spend tab: the most expensive tickets this week, and totals by folder, person, agent and day (`GET /api/projects/:name/spend`). Budgets show what is left, where an even month would be, and the day the cap runs out at this pace; whoever set the budget hears once when that falls before month end. Migration 43.
 
 - Agent comments, ticket changes (handoffs included) and task results take `session_url`, the Claude session that did the work; the ticket shows a small Open session link on those entries, and a finished task lists it with its links. The Claude Code plugin fills it in on web sessions. Orco keeps the link only, never transcript content.

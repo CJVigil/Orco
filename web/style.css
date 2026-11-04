@@ -5383,3 +5383,37 @@ button.recent-link {
 .spend-row .muted {
   white-space: nowrap;
 }
+
+/* Commits on tickets (#107) */
+.commit-row .commit-msg {
+  font-family: inherit;
+  font-size: 0.84rem;
+}
+
+.ci-badge {
+  flex: none;
+  padding: 0 0.4rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.ci-badge.ok {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+}
+
+.ci-badge.bad {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+
+.ci-badge.wait {
+  color: var(--listen);
+  background: color-mix(in srgb, var(--listen) 14%, transparent);
+}
+
+.files-strip {
+  min-width: 0;
+}

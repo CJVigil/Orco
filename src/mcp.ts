@@ -319,6 +319,7 @@ function formatTicket(t: Ticket, since?: number) {
     ...(t.closedAs ? { closed_as: { reason: t.closedAs.reason, ticket: t.closedAs.ticket.ref } } : {}),
     ...(t.replaces.length ? { replaces: t.replaces.map((r) => ({ ticket: r.ref, reason: r.reason })) } : {}),
     ...(t.decisions.length ? { decisions: t.decisions } : {}),
+    ...(t.commits.length ? { commits: t.commits.map((c) => ({ sha: c.sha.slice(0, 10), branch: c.branch, author: c.author, message: c.message.split('\n')[0], ci: c.ci, deployed: c.deployedAt !== null, url: c.url })) } : {}),
     ...(t.spend.tokens || t.spend.cents ? { spend: { tokens: t.spend.tokens, usd: t.spend.cents / 100 } } : {}),
     ...(t.approvals.length ? { approvals: t.approvals.map((a) => ({ id: a.id, summary: a.summary, scope: a.scope, state: a.state, decided_by: a.decidedBy, valid_until: a.validUntil, in_force: a.inForce })) } : {}),
     children: t.children.map(formatTicketSummary),
@@ -2040,14 +2041,19 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         locks: z.array(z.object({ project: z.string(), name: z.string() })).optional(),
         mentions: z.boolean().optional().describe('Also wake on an unseen mention'),
         approvals: z.array(z.number().int()).max(20).optional().describe('Approval ids to wait on until they are decided'),
+        ci: z
+          .array(z.object({ repo: z.string().optional(), sha: z.string().optional(), branch: z.string().optional() }))
+          .max(10)
+          .optional()
+          .describe('Wake when CI on a commit (sha) or the newest commit of a branch passes or fails; needs the project webhook from the forge'),
         rooms: z.array(z.string()).max(20).optional().describe('Wake on a new message in these rooms or patterns'),
         after_id: z.number().int().min(0).optional().describe('With rooms: wake on messages after this id (default: from now)'),
         timeout_seconds: z.number().int().min(0).max(MAX_WAIT_SECONDS).optional().describe(`Default 120; waits at most ${SAFE_WAIT_SECONDS}`),
       }),
     },
-    async ({ tickets, tasks, locks, mentions, approvals, rooms, after_id, timeout_seconds }, ctx) => {
+    async ({ tickets, tasks, locks, mentions, approvals, ci, rooms, after_id, timeout_seconds }, ctx) => {
       try {
-        const conditions = { tickets, tasks, locks, mentions, approvals, ...(rooms ? { rooms: { patterns: rooms, afterId: after_id } } : {}) };
+        const conditions = { tickets, tasks, locks, mentions, approvals, ci, ...(rooms ? { rooms: { patterns: rooms, afterId: after_id } } : {}) };
         const result = await waitFor(store, me, conditions, waitMs(timeout_seconds, 120), ctx?.mcpReq?.signal);
         return ok(
           result.timedOut

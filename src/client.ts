@@ -2,6 +2,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { parseArgs } from 'node:util';
+import { forgePoll } from './forgepoll.js';
 
 /** Commands that talk to a running Orco server over HTTP, from any machine with a token. */
 export const CLIENT_COMMANDS = new Set([
@@ -22,6 +23,7 @@ export const CLIENT_COMMANDS = new Set([
   'tickets',
   'ticket',
   'api',
+  'forge-poll',
 ]);
 
 export const CLIENT_USAGE = `Client commands (talk to a running server; set ORCO_URL and ORCO_TOKEN, or run orco login):
@@ -37,6 +39,9 @@ export const CLIENT_USAGE = `Client commands (talk to a running server; set ORCO
                                 with --after ID (the last one you handled) the rest come back until acknowledged.
                                 --max-hours N gives up after N hours (exit 2); --text prints them as text. Run it in
                                 the background so an agent wakes only when someone mentions it.
+  forge-poll --repo owner/name --hook URL [--branch main] [--every 60] [--forge github|gitea --api URL]
+                                For an Orco the forge cannot reach: polls the forge (GITHUB_TOKEN or GITEA_TOKEN)
+                                and posts new commits and CI results to a project webhook, so they show on tickets
   ack <message-id>              Mark your mentions up to that message as handled, without replying
   post <room> <text|-> [--thread ID] [--file PATH]...   Post a message (- reads stdin)
   read <room> [--thread ID] [--limit N]
@@ -233,6 +238,13 @@ export async function runClient(argv: string[], io: ClientIO): Promise<number> {
       timeout: { type: 'string' },
       after: { type: 'string' },
       'max-hours': { type: 'string' },
+      forge: { type: 'string' },
+      repo: { type: 'string' },
+      branch: { type: 'string' },
+      hook: { type: 'string' },
+      every: { type: 'string' },
+      once: { type: 'boolean' },
+      api: { type: 'string' },
       text: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
@@ -259,6 +271,29 @@ export async function runClient(argv: string[], io: ClientIO): Promise<number> {
   try {
     if (values.help) {
       io.out(CLIENT_USAGE);
+      return 0;
+    }
+    // Needs no Orco token: the webhook URL is its own credential, and the forge token comes from the environment.
+    if (command === 'forge-poll') {
+      const forge = (values.forge ?? 'github') as 'github' | 'gitea';
+      if (forge !== 'github' && forge !== 'gitea') throw new ClientError('--forge is github or gitea');
+      const repo = need(values.repo, 'forge-poll --repo owner/name --hook URL [--branch main] [--forge github|gitea --api URL]');
+      const hook = need(values.hook ?? io.env.ORCO_HOOK_URL, 'forge-poll --repo owner/name --hook URL');
+      const api = values.api ?? (forge === 'github' ? 'https://api.github.com' : need(undefined, 'forge-poll --forge gitea --api https://gitea.example/api/v1 ...'));
+      const every = Number(values.every ?? 60);
+      if (!(every >= 15)) throw new ClientError('--every is at least 15 seconds');
+      io.out(`Polling ${repo} (${values.branch ?? 'main'}) every ${every}s and posting to the webhook. Ctrl+C stops.`);
+      await forgePoll({
+        forge,
+        repo,
+        branch: values.branch ?? 'main',
+        hook,
+        api,
+        token: forge === 'github' ? (io.env.GITHUB_TOKEN ?? io.env.GH_TOKEN) : io.env.GITEA_TOKEN,
+        intervalMs: every * 1000,
+        rounds: values.once ? 1 : undefined,
+        log: (line) => io.err(line),
+      });
       return 0;
     }
     if (command === 'login') {

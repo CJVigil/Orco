@@ -253,6 +253,9 @@ export class Hooks {
         )
         .run(row.project_id, ci.source, ci.state, ci.summary, new Date(now).toISOString());
     }
+    // Commits that name a ticket go on it, and CI results on those commits (#107).
+    const forge = forgeOf(headers);
+    if (forge && row.project_id !== null) this.store.commits.ingest(row.project_id, forge.event, payload, new Date(now).toISOString());
     let taskId: number | null = null;
     const matches = !row.wake_match || `${title}\n${details}`.toLowerCase().includes(row.wake_match.toLowerCase());
     // The agent's owner may have tightened who can give it work since the hook was made.

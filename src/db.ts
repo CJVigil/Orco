@@ -1057,6 +1057,35 @@ export const MIGRATIONS = [
     updated_at TEXT NOT NULL,
     PRIMARY KEY (agent_id, session)
   );
+  `,  // 44: commits that name a ticket, and CI results per repository, branch and sha (#107).
+  `
+  CREATE TABLE ticket_commits (
+    ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+    sha TEXT NOT NULL,
+    repo TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    author TEXT NOT NULL,
+    message TEXT NOT NULL,
+    url TEXT,
+    created_at TEXT NOT NULL,
+    ci TEXT CHECK (ci IN ('success', 'failure', 'pending')),
+    ci_summary TEXT,
+    deployed_at TEXT,
+    PRIMARY KEY (ticket_id, sha)
+  );
+  CREATE INDEX ticket_commits_sha ON ticket_commits (sha);
+  CREATE TABLE ci_results (
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    repo TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    sha TEXT NOT NULL,
+    source TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('success', 'failure', 'pending')),
+    summary TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (project_id, repo, sha, source)
+  );
+  CREATE INDEX ci_results_branch ON ci_results (project_id, branch, updated_at);
   `,
 ];
 

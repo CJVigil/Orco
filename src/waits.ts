@@ -14,6 +14,8 @@ export interface WaitConditions {
   approvals?: number[];
   /** Also wake on an unseen mention (it stays unseen). */
   mentions?: boolean;
+  /** Wake when CI for a commit (sha) or a branch's newest commit finishes: passed or failed (#107). */
+  ci?: { repo?: string; sha?: string; branch?: string }[];
   /** Wake on a new message in rooms matching these patterns (ops/*, or a * project with an alerts room), after a message id (default: now). */
   rooms?: { patterns: string[]; afterId?: number };
 }
@@ -37,13 +39,15 @@ export async function waitFor(store: Store, actor: Participant, conditions: Wait
   const tasks = conditions.tasks ?? [];
   const locks = conditions.locks ?? [];
   const approvals = conditions.approvals ?? [];
+  const ci = conditions.ci ?? [];
+  for (const c of ci) if (!c.sha && !c.branch) throw new OrcoError('invalid', 'Wait for CI on a sha or a branch');
   const rooms = conditions.rooms ? roomMatcher(conditions.rooms.patterns) : null;
   const roomsAfter = conditions.rooms?.afterId ?? store.latestMessageId();
-  if (tickets.length + tasks.length + locks.length + approvals.length === 0 && !conditions.mentions && !rooms) {
-    throw new OrcoError('invalid', 'Give at least one ticket, task, lock, approval, room or mentions to wait for');
+  if (tickets.length + tasks.length + locks.length + approvals.length + ci.length === 0 && !conditions.mentions && !rooms) {
+    throw new OrcoError('invalid', 'Give at least one ticket, task, lock, approval, CI run, room or mentions to wait for');
   }
   let newMessages: number[] = [];
-  if (tickets.length + tasks.length + locks.length + approvals.length > MAX_CONDITIONS) throw new OrcoError('invalid', `Wait for at most ${MAX_CONDITIONS} things at once`);
+  if (tickets.length + tasks.length + locks.length + approvals.length + ci.length > MAX_CONDITIONS) throw new OrcoError('invalid', `Wait for at most ${MAX_CONDITIONS} things at once`);
   // Check everything once up front, so a bad ref fails now instead of after the wait.
   for (const t of tickets) {
     store.tickets.get(actor, t.ref);
@@ -72,6 +76,13 @@ export async function waitFor(store: Store, actor: Participant, conditions: Wait
       const approval = store.approvals.get(actor, id);
       if (approval.state !== 'pending') fired.push(`Approval #${id} is ${approval.state}${approval.validUntil && approval.inForce ? ` until ${approval.validUntil}` : ''}`);
     }
+    for (const c of ci) {
+      const result = store.commits.ciFor(actor, c);
+      if (result && result.state !== 'pending') {
+        const failed = result.checks.filter((k) => k.state === 'failure').map((k) => k.source);
+        fired.push(`CI ${result.state === 'success' ? 'passed' : `failed (${failed.join(', ')})`} for ${result.sha.slice(0, 7)}${c.repo ? ` in ${c.repo}` : ''}`);
+      }
+    }
     if (conditions.mentions && store.unseenMentions(actor).length > 0) fired.push('You have unseen mentions; read them with wait_for_mentions');
     if (rooms) {
       const fresh = store.messagesAfter(actor, roomsAfter, 200).filter((m) => rooms.room(m.room));
@@ -88,7 +99,7 @@ export async function waitFor(store: Store, actor: Participant, conditions: Wait
   const now = check();
   if (now.length > 0 || timeoutMs <= 0) return result(now, now.length === 0);
   return new Promise<WaitResult>((resolve) => {
-    const events = ['ticket', 'task', 'lock', 'approval', `mention:${actor.id}`, ...(rooms ? ['message'] : [])];
+    const events = ['ticket', 'task', 'lock', 'approval', 'ci', `mention:${actor.id}`, ...(rooms ? ['message'] : [])];
     let pending: ReturnType<typeof setTimeout> | null = null;
     const finish = (result: WaitResult) => {
       clearTimeout(timer);

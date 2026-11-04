@@ -1,3 +1,4 @@
+import { Commits } from './commits.js';
 import { ToolUsage } from './toolusage.js';
 import { Artifacts } from './artifacts.js';
 import { TicketFiles } from './ticketfiles.js';
@@ -258,6 +259,7 @@ export class Store {
   readonly ticketFiles: TicketFiles;
   readonly artifacts: Artifacts;
   readonly toolUsage: ToolUsage;
+  readonly commits: Commits;
   readonly questions: Questions;
   readonly notes: Notes;
   readonly flags: Flags;
@@ -304,6 +306,7 @@ export class Store {
     this.ticketFiles = new TicketFiles(this);
     this.artifacts = new Artifacts(this);
     this.toolUsage = new ToolUsage(this);
+    this.commits = new Commits(this);
     this.questions = new Questions(this);
     this.notes = new Notes(this);
     this.flags = new Flags(this);

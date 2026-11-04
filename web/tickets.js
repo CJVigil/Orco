@@ -740,6 +740,32 @@ export function createTickets(ctx) {
     return el('a', { class: 'session-link small', href: url, target: '_blank', rel: 'noopener noreferrer', title: url, text: 'Open session' });
   }
 
+  /** Commits that name the ticket, with their CI result and whether they are deployed (#107). */
+  function commitsStrip(ticket) {
+    if (!ticket.commits?.length) return null;
+    const badge = (c) =>
+      c.deployedAt
+        ? el('span', { class: 'ci-badge ok', text: 'deployed' })
+        : c.ci
+          ? el('span', { class: `ci-badge ${c.ci === 'success' ? 'ok' : c.ci === 'failure' ? 'bad' : 'wait'}`, title: c.ciSummary ?? '', text: c.ci === 'success' ? 'CI passed' : c.ci === 'failure' ? 'CI failed' : 'CI running' })
+          : null;
+    return el(
+      'div',
+      { class: 'files-strip commits-strip' },
+      el('div', { class: 'small muted files-head', text: `Commits (${ticket.commits.length})` }),
+      ticket.commits.map((c) =>
+        el(
+          'div',
+          { class: 'ticket-file-row commit-row' },
+          c.url ? el('a', { class: 'mono small', href: c.url, target: '_blank', rel: 'noopener noreferrer', text: c.sha.slice(0, 7) }) : el('span', { class: 'mono small', text: c.sha.slice(0, 7) }),
+          el('span', { class: 'file-name commit-msg', title: c.message, text: c.message.split('\n')[0] }),
+          badge(c),
+          el('span', { class: 'muted small', text: `${c.branch} · ${c.author} · ${ago(c.at)}` }),
+        ),
+      ),
+    );
+  }
+
   /* Files on tickets (#98) */
 
   /** The files a comment came with, as small chips (the strip above has them all). */
@@ -1821,6 +1847,7 @@ export function createTickets(ctx) {
         el('label', { class: 'check small' }, el('input', { type: 'checkbox', checked: peopleOnly, onchange: (event) => (setPeopleOnly(event.target.checked), renderDetail(ticket)) }), 'People only'),
       ),
       filesStrip(ticket),
+      commitsStrip(ticket),
       ticket.artifacts?.length ? el('div', { class: 'files-strip' }, el('div', { class: 'small muted files-head', text: `Artifacts (${ticket.artifacts.length})` }), ticket.artifacts.map(artifactRow)) : null,
       el('ol', { class: 'activity' }, foldRuns(items, entries)),
       commentBox,

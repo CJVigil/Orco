@@ -1,3 +1,4 @@
+import type { TicketCommit } from './commits.js';
 import type { Artifact } from './artifacts.js';
 import type { TicketFile } from './ticketfiles.js';
 import { OrcoError } from './errors.js';
@@ -195,6 +196,8 @@ export interface TicketLink {
 export interface Ticket extends TicketSummary {
   /** Files on the ticket and its comments (#98). */
   files: TicketFile[];
+  /** Commits that name it, with their CI result (#107). */
+  commits: TicketCommit[];
   /** What agents have spent on it: tokens and cents (#106). */
   spend: { tokens: number; cents: number };
   /** Pages published on the ticket (#99). */
@@ -1847,6 +1850,7 @@ export class Tickets {
       children: this.summaries(children, actor),
       files: this.store.ticketFiles.forTicket(id),
       spend: this.store.controls.ticketSpend(id),
+      commits: this.store.commits.forTicket(id),
       artifacts: this.store.artifacts.forTicket(id).map(({ versions: _v, ...a }) => a),
       activity: activity.map((a) => ({
         id: a.id,
