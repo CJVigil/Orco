@@ -8,6 +8,7 @@ import { createMcpHandler } from '@modelcontextprotocol/server';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { MAX_ATTACHMENT_BYTES } from './attachments.js';
 import { MAX_TICKET_FILE_BYTES } from './ticketfiles.js';
+import { type ArtifactKind, chartPage, withTheme } from './artifacts.js';
 import { buildMcpServer } from './mcp.js';
 import { roomMatcher } from './rooms.js';
 import { OAUTH_SCOPE, OAuth } from './oauth.js';
@@ -912,6 +913,60 @@ export function createApp(store: Store, options: AppOptions = {}) {
       }),
     );
   });
+  // Shared artifacts (#99). The render route is the only one that returns an artifact's page, always
+  // under a CSP sandbox without same-origin and without network, so it cannot use this session.
+  api.get('/artifacts', (req, res) => {
+    res.json(store.artifacts.list(req.participant!, { project: str(req.query.project, 'project'), ticket: str(req.query.ticket, 'ticket') }));
+  });
+  api.post('/artifacts', (req, res) => {
+    const b = req.body ?? {};
+    const id = b.id === undefined ? undefined : optionalInt(b.id);
+    res.status(id === undefined ? 201 : 200).json(
+      store.artifacts.publish(req.participant!, {
+        id,
+        project: str(b.project, 'project'),
+        ticket: str(b.ticket, 'ticket'),
+        title: str(b.title, 'title'),
+        description: str(b.description, 'description'),
+        content: String(b.content ?? ''),
+        kind: str(b.kind, 'kind') as ArtifactKind | undefined,
+      }),
+    );
+  });
+  api.get('/artifacts/:id', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected an artifact id');
+    res.json(store.artifacts.get(req.participant!, id));
+  });
+  api.get('/artifacts/:id/content', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected an artifact id');
+    res.json(store.artifacts.content(req.participant!, id, optionalInt(req.query.v)));
+  });
+  api.delete('/artifacts/:id', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected an artifact id');
+    store.artifacts.remove(req.participant!, id);
+    res.status(204).end();
+  });
+  api.get('/artifacts/:id/render', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected an artifact id');
+    const { artifact, content } = store.artifacts.content(req.participant!, id, optionalInt(req.query.v));
+    if (artifact.kind === 'markdown') throw new OrcoError('invalid', 'Markdown artifacts are shown by the app, not rendered as a page');
+    const page = artifact.kind === 'chart' ? chartPage(content, artifact.title) : withTheme(content);
+    res.set({
+      'Content-Type': 'text/html; charset=utf-8',
+      // Scripts and inline styles run, in an opaque origin with no network: no cookies, no API, no beacons.
+      'Content-Security-Policy':
+        "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'",
+      'X-Content-Type-Options': 'nosniff',
+      'Referrer-Policy': 'no-referrer',
+      'Cache-Control': 'private, no-store',
+    });
+    res.send(page);
+  });
+
   // Files on tickets (#98): listed per ticket, served by id. Images and PDFs show inline, the rest downloads.
   api.get('/tickets/:ref/files', (req, res) => {
     res.json(store.ticketFiles.list(req.participant!, String(req.params.ref)));

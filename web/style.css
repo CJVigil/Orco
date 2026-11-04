@@ -5252,3 +5252,65 @@ button.recent-link {
     display: none;
   }
 }
+
+/* Shared artifacts (#99) */
+.artifact {
+  grid-template-rows: auto 1fr;
+  height: 100%;
+}
+
+.artifact-head p {
+  margin: 0 0 0.35rem;
+}
+
+.artifact-frame {
+  width: 100%;
+  min-height: calc(100vh - 10rem);
+  border: 0;
+  border-radius: 6px;
+  background: var(--bg-raised);
+}
+
+.artifact-cards {
+  grid-column: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+}
+
+.artifact-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: 100%;
+  padding: 0.45rem 0.7rem;
+  border: 0;
+  border-radius: 8px;
+  background: var(--bg-raised);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.artifact-card:hover {
+  background: var(--bg-hover);
+}
+
+.artifact-title {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-row {
+  flex-wrap: wrap;
+}
+
+.artifact-desc {
+  flex-basis: 100%;
+  padding-left: 1.6rem;
+}

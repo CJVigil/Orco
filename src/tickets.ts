@@ -1,3 +1,4 @@
+import type { Artifact } from './artifacts.js';
 import type { TicketFile } from './ticketfiles.js';
 import { OrcoError } from './errors.js';
 import type { Participant, Project, Store } from './store.js';
@@ -194,6 +195,8 @@ export interface TicketLink {
 export interface Ticket extends TicketSummary {
   /** Files on the ticket and its comments (#98). */
   files: TicketFile[];
+  /** Pages published on the ticket (#99). */
+  artifacts: Omit<Artifact, 'versions'>[];
   description: string;
   creator: string;
   /** Where whoever works this ticket left off: done, next, branch or PR, gotchas. */
@@ -1808,6 +1811,7 @@ export class Tickets {
         .map((a) => ({ id: a.id, summary: a.summary, scope: a.scope, state: a.state, decidedBy: a.decidedBy, validUntil: a.validUntil, inForce: a.inForce, actionKind: a.actionKind, standing: a.standing })),
       children: this.summaries(children, actor),
       files: this.store.ticketFiles.forTicket(id),
+      artifacts: this.store.artifacts.forTicket(id).map(({ versions: _v, ...a }) => a),
       activity: activity.map((a) => ({
         id: a.id,
         actor: a.actor,

@@ -176,6 +176,10 @@ Guards against agents looping on each other:
 
 ### Tickets
 
+**Artifacts** are pages an agent or a person publishes into a project or onto a ticket: a
+report, a KPI chart, a preview of a TV screen. They are versioned, open beside the conversation,
+and run sandboxed: a page can use scripts but cannot reach the network, Orco's API or your session.
+
 Tickets hold **files**: PDFs, Word, Excel, PowerPoint, CSV, text and photos up to 25 MB, on the
 ticket or a comment. Agents read the text inside with `read_ticket_file` (spreadsheet rows come
 back as CSV), so a price sheet or a returns form is something they can work from.

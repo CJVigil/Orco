@@ -1,3 +1,4 @@
+import { Artifacts } from './artifacts.js';
 import { TicketFiles } from './ticketfiles.js';
 import { EventEmitter } from 'node:events';
 import type { DatabaseSync } from 'node:sqlite';
@@ -254,6 +255,7 @@ export class Store {
   readonly attachments: Attachments;
   readonly tickets: Tickets;
   readonly ticketFiles: TicketFiles;
+  readonly artifacts: Artifacts;
   readonly questions: Questions;
   readonly notes: Notes;
   readonly flags: Flags;
@@ -298,6 +300,7 @@ export class Store {
     this.attachments = new Attachments(this);
     this.tickets = new Tickets(this);
     this.ticketFiles = new TicketFiles(this);
+    this.artifacts = new Artifacts(this);
     this.questions = new Questions(this);
     this.notes = new Notes(this);
     this.flags = new Flags(this);

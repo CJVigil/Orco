@@ -10,6 +10,7 @@ const TABS = [
   ['cycles', 'Cycles'],
   ['notes', 'Notes'],
   ['files', 'Files'],
+  ['artifacts', 'Artifacts'],
   ['schedules', 'Schedules'],
   ['integrations', 'Integrations'],
   ['settings', 'Settings'],
@@ -197,12 +198,13 @@ export function createTickets(ctx) {
   async function load() {
     const project = t.project;
     const p = encodeURIComponent(project);
-    const [plan, tickets, notes, schedules, files, integrations] = await Promise.all([
+    const [plan, tickets, notes, schedules, files, artifacts, integrations] = await Promise.all([
       api(`/projects/${p}/plan`),
       fetchTickets(),
       t.tab === 'notes' ? api(`/projects/${p}/notes`) : Promise.resolve(t.notes ?? []),
       t.tab === 'schedules' ? api(`/schedules?project=${p}`) : Promise.resolve(t.schedules ?? []),
       t.tab === 'files' ? api(`/projects/${p}/files`) : Promise.resolve(t.files ?? []),
+      t.tab === 'artifacts' ? api(`/artifacts?project=${p}`) : Promise.resolve(t.artifacts ?? []),
       t.tab === 'integrations'
         ? Promise.all([api(`/hooks?project=${p}`), api(`/projects/${p}/secrets`), api(`/leases?project=${p}`)]).then(([hooks, secrets, leases]) => ({ hooks, secrets, leases }))
         : Promise.resolve(t.integrations ?? null),
@@ -212,6 +214,7 @@ export function createTickets(ctx) {
     t.notes = notes;
     t.schedules = schedules;
     t.files = files;
+    t.artifacts = artifacts;
     t.integrations = integrations;
     plans.set(project, plan);
     // A filter on a folder that was removed or renamed would show nothing; drop it.
@@ -413,7 +416,7 @@ export function createTickets(ctx) {
       return;
     }
     t.pendingTab = false;
-    const views = { board: renderBoard, list: renderList, milestones: renderMilestones, cycles: renderCycles, notes: renderNotes, files: renderFiles, schedules: renderSchedules, integrations: renderIntegrations, settings: renderSettings };
+    const views = { board: renderBoard, list: renderList, milestones: renderMilestones, cycles: renderCycles, notes: renderNotes, files: renderFiles, artifacts: renderArtifacts, schedules: renderSchedules, integrations: renderIntegrations, settings: renderSettings };
     body.replaceChildren(...[views[t.tab]()].flat(Infinity).filter((node) => node !== null && node !== undefined));
   }
 
@@ -1807,6 +1810,7 @@ export function createTickets(ctx) {
         el('label', { class: 'check small' }, el('input', { type: 'checkbox', checked: peopleOnly, onchange: (event) => (setPeopleOnly(event.target.checked), renderDetail(ticket)) }), 'People only'),
       ),
       filesStrip(ticket),
+      ticket.artifacts?.length ? el('div', { class: 'files-strip' }, el('div', { class: 'small muted files-head', text: `Artifacts (${ticket.artifacts.length})` }), ticket.artifacts.map(artifactRow)) : null,
       el('ol', { class: 'activity' }, foldRuns(items, entries)),
       commentBox,
       el('p', { class: 'muted small detail-foot', text: `Opened by ${ticket.creator} ${ago(ticket.createdAt)} · updated ${ago(ticket.updatedAt)}` }),
@@ -2251,6 +2255,24 @@ export function createTickets(ctx) {
           ),
         ),
       ),
+    );
+  }
+
+  /** The project's published pages (#99), newest first. */
+  function renderArtifacts() {
+    const list = t.artifacts ?? [];
+    if (!list.length) return el('p', { class: 'muted plan-intro', text: 'No artifacts yet. Agents publish reports, dashboards and previews here with publish_artifact.' });
+    return el('div', { class: 'file-list plan-card' }, list.map(artifactRow));
+  }
+
+  function artifactRow(a) {
+    return el(
+      'div',
+      { class: 'file-row artifact-row' },
+      icon('grid'),
+      el('button', { class: 'link-button', type: 'button', text: a.title, onclick: () => ctx.openArtifact?.(a.id) }),
+      el('span', { class: 'muted small', text: `${a.kind} · v${a.version} · ${a.by} · ${ago(a.updatedAt)}${a.ticket ? ` · ${a.ticket}` : ''}` }),
+      a.description ? el('span', { class: 'muted small artifact-desc', text: a.description }) : null,
     );
   }
 

@@ -83,6 +83,8 @@ const UNTRUSTED_NOTE =
 
 const READ_ONLY_TOOLS = new Set([
   'whoami',
+  'list_artifacts',
+  'read_artifact',
   'list_ticket_files',
   'read_ticket_file',
   'my_work',
@@ -1321,6 +1323,53 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         const note = writingNote(text);
         return `Commented on ${t.ref}${note ? `\nNote: ${note}` : ''}`;
       }),
+  );
+
+  server.registerTool(
+    'publish_artifact',
+    {
+      annotations: annotate('publish_artifact'),
+      description:
+        'Publish a page people can open in Orco: a report, a dashboard, a preview, a table. kind html (one self-contained page: ' +
+        'inline CSS, JS and images as data: URLs; it runs sandboxed with no network, so fetch and external links to scripts fail), ' +
+        'markdown, or chart (JSON: {"type":"bar"|"line","labels":[...],"series":[{"name":"...","values":[...]}]}). ' +
+        'Give it a ticket to show it on the ticket. Publishing again with id adds a version; old versions stay viewable. ' +
+        'Pages follow the viewer\'s light or dark theme when they use color-scheme.',
+      inputSchema: z.object({
+        id: z.number().int().optional().describe('An artifact to publish a new version of'),
+        project: z.string().optional(),
+        ticket: z.string().optional().describe('The ticket it belongs to, like SHO-12'),
+        title: z.string().max(120).optional(),
+        description: z.string().max(200).optional().describe('One line: what it shows'),
+        kind: z.enum(['html', 'markdown', 'chart']).optional(),
+        content: z.string(),
+      }),
+    },
+    async (args) =>
+      run(() => {
+        const a = store.artifacts.publish(me, args);
+        return { id: a.id, version: a.version, title: a.title, project: a.project, ticket: a.ticket, link: `#!artifact/${a.id}` };
+      }),
+  );
+
+  server.registerTool(
+    'list_artifacts',
+    {
+      annotations: annotate('list_artifacts'),
+      description: 'Artifacts (published pages) in a project or on a ticket, newest first: id, title, kind, version, who published it.',
+      inputSchema: z.object({ project: z.string().optional(), ticket: z.string().optional() }),
+    },
+    async (args) => run(() => store.artifacts.list(me, args).map(({ versions: _v, ...a }) => a)),
+  );
+
+  server.registerTool(
+    'read_artifact',
+    {
+      annotations: annotate('read_artifact'),
+      description: `The content of an artifact (the latest version, or the one asked for). ${UNTRUSTED_NOTE}`,
+      inputSchema: z.object({ id: z.number().int(), version: z.number().int().optional() }),
+    },
+    async ({ id, version }) => run(() => store.artifacts.content(me, id, version)),
   );
 
   server.registerTool(

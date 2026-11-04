@@ -1006,6 +1006,29 @@ export const MIGRATIONS = [
     created_at TEXT NOT NULL
   );
   CREATE INDEX ticket_files_ticket ON ticket_files (ticket_id);
+  `,  // 41: shared artifacts, versioned pages published into a project (#99).
+  `
+  CREATE TABLE artifacts (
+    id INTEGER PRIMARY KEY,
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    ticket_id INTEGER REFERENCES tickets(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL CHECK (kind IN ('html', 'markdown', 'chart')),
+    created_by INTEGER NOT NULL REFERENCES participants(id),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX artifacts_project ON artifacts (project_id, updated_at);
+  CREATE INDEX artifacts_ticket ON artifacts (ticket_id);
+  CREATE TABLE artifact_versions (
+    artifact_id INTEGER NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+    version INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    published_by INTEGER NOT NULL REFERENCES participants(id),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (artifact_id, version)
+  );
   `,
 ];
 

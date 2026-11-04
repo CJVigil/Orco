@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Shared artifacts: people and agents publish pages into a project or onto a ticket (HTML, Markdown, or a bar or line chart from JSON) with `publish_artifact`; publishing with the id adds a version and old versions stay viewable. They show in a project's Artifacts tab, on their ticket, and as a card when a message links `#!artifact/N`; they open beside the conversation, full width on a click. HTML runs in a sandboxed frame with no same-origin and no network, so a page cannot read Orco's cookies or call its API. Also `list_artifacts`, `read_artifact`. Migration 41.
+
 - Files on tickets: PDF, Word, Excel, PowerPoint, CSV, text and images up to 25 MB, attached to a ticket or a comment (drop them on the ticket, or the clip on the comment box; `attachment_ids` on `create_ticket`, `update_ticket` and `comment_ticket` after `POST /api/ticket-files`). A Files strip lists them with who added each and when; images and PDFs preview, the rest downloads. Agents get `list_ticket_files` and `read_ticket_file`, which returns the text inside: spreadsheet rows as CSV, Word paragraphs, slides, PDF text. Types are recognised by their bytes. Migration 40.
 
 - Private tickets: only the creator, assignee, the person it waits on, project admins and their agents see one; for everyone else it is missing from the board, search, digests, `list_tickets` and a direct ref (not found). Set by the creator or a project admin (`private` on create and update, web: Make private); a lock marks the card. Tickets move between projects (`update_ticket` `project`, web: Move to…) and keep comments, criteria and history; the old ref keeps opening them. Migration 39.

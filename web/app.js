@@ -260,6 +260,7 @@ function renderMessage(message, previous, { inThread = false } = {}) {
       message.editedAt ? el('span', { class: 'edited muted small', title: `Edited ${new Date(message.editedAt).toLocaleString()}`, text: '(edited)' }) : null,
     ),
     message.text ? foldedBody(message.text) : null,
+    message.text ? artifactCards(message.text) : null,
     message.external ? externalBlock(message.external) : null,
     images.length
       ? el(
@@ -373,6 +374,76 @@ function fileChip(file) {
       el('a', { class: 'ghost small button-link', href: `/api/attachments/${file.id}`, download: file.name, text: 'Download' }),
     ),
     body,
+  );
+}
+
+/*
+ * Shared artifacts (#99): pages agents and people publish. HTML and charts load from the render
+ * route inside a frame with sandbox="allow-scripts" (no same-origin), and the route's own CSP keeps
+ * them off the network, so a page cannot use this session. Markdown renders here, as text.
+ */
+async function openArtifact(id, version) {
+  const mine = ++viewerSeq;
+  let artifact;
+  try {
+    artifact = await api(`/artifacts/${id}`);
+  } catch (err) {
+    toast(err.message);
+    return;
+  }
+  if (mine !== viewerSeq) return;
+  openPanel('view', artifact.title);
+  const v = version ?? artifact.version;
+  const src = `/api/artifacts/${id}/render?v=${v}`;
+  const versions = el(
+    'select',
+    { class: 'ghost small', 'aria-label': 'Version', onchange: (event) => void openArtifact(id, Number(event.target.value)) },
+    artifact.versions.map((x) => el('option', { value: String(x.version), selected: x.version === v, text: `v${x.version} · ${x.by} · ${formatTime(x.at)}` })),
+  );
+  const head = el(
+    'div',
+    { class: 'artifact-head' },
+    artifact.description ? el('p', { class: 'small', text: artifact.description }) : null,
+    el(
+      'div',
+      { class: 'viewer-actions' },
+      artifact.versions.length > 1 ? versions : el('span', { class: 'muted small', text: `v${v} · ${artifact.by}` }),
+      artifact.ticket ? el('button', { class: 'ghost small', type: 'button', text: artifact.ticket, onclick: () => void tickets.openTicket(artifact.ticket) }) : null,
+      el('button', { class: 'ghost small', type: 'button', text: 'Full width', onclick: () => $('app').classList.toggle('panel-full') }),
+      artifact.kind === 'markdown' ? null : el('a', { class: 'ghost small button-link', href: src, target: '_blank', rel: 'noopener', text: 'Open in a new tab' }),
+    ),
+  );
+  const body = $('panel-body');
+  if (artifact.kind === 'markdown') {
+    const { content } = await api(`/artifacts/${id}/content?v=${v}`);
+    if (mine !== viewerSeq) return;
+    body.replaceChildren(el('div', { class: 'viewer artifact' }, head, el('div', { class: 'md artifact-md' }, richText(content))));
+    return;
+  }
+  body.replaceChildren(
+    el(
+      'div',
+      { class: 'viewer artifact' },
+      head,
+      el('iframe', { class: 'artifact-frame', src, title: artifact.title, sandbox: 'allow-scripts allow-popups allow-popups-to-escape-sandbox', referrerpolicy: 'no-referrer', loading: 'lazy' }),
+    ),
+  );
+}
+
+/** A message that links an artifact (#!artifact/12) shows a card for it under the text. */
+function artifactCards(text) {
+  const ids = [...new Set([...String(text ?? '').matchAll(/#!artifact\/(\d+)/g)].map((m) => Number(m[1])))].slice(0, 3);
+  if (!ids.length) return null;
+  return el(
+    'div',
+    { class: 'artifact-cards' },
+    ids.map((id) => {
+      const card = el('button', { class: 'artifact-card', type: 'button', onclick: () => void openArtifact(id) }, icon('grid'), el('span', { class: 'artifact-title', text: `Artifact ${id}` }));
+      api(`/artifacts/${id}`)
+        .then((a) => card.replaceChildren(icon('grid'), el('span', { class: 'artifact-title', text: a.title }), el('span', { class: 'muted small', text: `${a.kind} · v${a.version} · ${a.by}` })))
+        .catch(() => card.replaceChildren(icon('grid'), el('span', { class: 'muted small', text: 'An artifact you cannot open' })));
+      return card;
+    }),
   );
 }
 
@@ -1670,6 +1741,7 @@ function overlayRoute() {
   // carried in a link someone could send you.
   if (/^#pair(=.*)?$/.test(location.hash)) void guide.connectComputer();
   else if (location.hash === '#!help') guide.showHelp();
+  else if (/^#!artifact\/\d+$/.test(location.hash)) void openArtifact(Number(location.hash.split('/')[1]));
   else return false;
   history.replaceState(null, '', state.viewHash || location.pathname + location.search);
   return Boolean(state.room);
@@ -3605,6 +3677,7 @@ const tickets = createTickets({
   rooms: () => state.rooms,
   $,
   onNav: () => renderNav(),
+  openArtifact: (id) => void openArtifact(id),
   onTicketOpen: (ticket) => {
     rememberRecent({ kind: 'ticket', ref: ticket.ref, label: ticket.title });
     renderNav();
