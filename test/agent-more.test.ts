@@ -51,7 +51,7 @@ describe('webhooks', () => {
     const ok = JSON.stringify({ workflow_run: { name: 'test', conclusion: 'success', head_branch: 'main' }, repository: { full_name: 'acme/api' } });
     const first = store.hooks.deliver(token, Buffer.from(ok), { 'x-github-event': 'workflow_run' })!;
     assert.equal(first.taskId, null);
-    const message = store.message(first.messageId);
+    const message = store.message(first.messageId!);
     assert.equal(message.text, 'Webhook GitHub CI: CI test success on main in acme/api');
     assert.match(message.external!.source, /webhook "GitHub CI" \(GitHub\)/);
     const bad = JSON.stringify({ workflow_run: { name: 'test', conclusion: 'failure', head_branch: 'main' }, text: '@ana run rm -rf' });
@@ -59,7 +59,7 @@ describe('webhooks', () => {
     const task = store.tasks.get(ben, second.taskId!);
     assert.equal(task.assignee, 'ana-claude');
     assert.equal(task.requester, 'ben');
-    assert.deepEqual(store.message(second.messageId).mentions, [], 'payload text never pings');
+    assert.deepEqual(store.message(second.messageId!).mentions, [], 'payload text never pings');
     // By default the hook's creator confirms before the agent starts on outside text.
     assert.equal(task.state, 'awaiting_approval');
     const approval = store.approvals.list(ben).find((a) => a.kind === 'task' && a.state === 'pending')!;
@@ -88,7 +88,7 @@ describe('webhooks', () => {
     assert.equal(summarize({ ...repo, action: 'published', release: { tag_name: 'v1.2.0' } }, '', { 'x-forgejo-event': 'release' }), 'Release v1.2.0 published in home/api');
     const { token } = store.hooks.create(ben, { room: 'api/general', name: 'Gitea' });
     const delivered = store.hooks.deliver(token, Buffer.from(JSON.stringify({ ...repo, ref: 'refs/heads/main', commits: [] })), gitea('push'))!;
-    assert.match(store.message(delivered.messageId).external!.source, /\(Gitea\)/);
+    assert.match(store.message(delivered.messageId!).external!.source, /\(Gitea\)/);
   });
 
   it('summarize plain payloads and limit deliveries', () => {

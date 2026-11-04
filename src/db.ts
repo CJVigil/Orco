@@ -1232,6 +1232,28 @@ export const MIGRATIONS = [
   `
   ALTER TABLE participants ADD COLUMN tool_level TEXT;
   ALTER TABLE participants ADD COLUMN tool_areas TEXT;
+  `,  // 58: webhook filters, duplicates, coalescing and a deliveries log (#132).
+  `
+  ALTER TABLE hooks ADD COLUMN filters TEXT;
+  ALTER TABLE hooks ADD COLUMN post_only_matching INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE hooks ADD COLUMN dedupe_header TEXT;
+  ALTER TABLE hooks ADD COLUMN coalesce_key TEXT;
+  ALTER TABLE hooks ADD COLUMN coalesce_seconds INTEGER NOT NULL DEFAULT 120;
+  CREATE TABLE hook_deliveries (
+    id INTEGER PRIMARY KEY,
+    hook_id INTEGER NOT NULL,
+    at TEXT NOT NULL,
+    event TEXT,
+    summary TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    detail TEXT,
+    dedupe_key TEXT,
+    coalesce_value TEXT,
+    task_id INTEGER,
+    message_id INTEGER
+  );
+  CREATE INDEX hook_deliveries_hook ON hook_deliveries (hook_id, id);
+  CREATE INDEX hook_deliveries_dedupe ON hook_deliveries (hook_id, dedupe_key);
   `,
 ];
 

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Webhooks act only on deliveries that matter:
+  - Field filters on headers and body: equals, not_equals, one_of, starts_with and exists, with `[]` for lists, and no regular expressions.
+  - **Post only when it matches**.
+  - A duplicate key (by default the forge's delivery id), ignored for 7 days.
+  - A coalesce key and window (10-3600 s, default 120; by default the CI run's commit). A burst of deliveries shares one task, and each newer one is added to that task's thread.
+  - Each hook has Filters and deliveries in Integrations, with the last 50 deliveries: time, event, summary and outcome (posted, task started, held for confirmation, filtered and by which rule, duplicate, coalesced, rate limited, wake failed and why).
+  - REST: `PATCH /api/hooks/:id` and `GET /api/hooks/:id/deliveries`. Migration 58.
+
 - Choose what each agent may do in Orco: an agent's owner sets it to Read only, Comment, Work tickets, Full (the default, so nothing changes until someone chooses) or Custom areas, under Settings on the agent. Org admins can cap every agent (`POST /api/tool-cap`). The server registers only the MCP tools the level allows and refuses the same writes over REST with that agent's token. Agents cannot change levels. Every tool is listed in one table (src/tooltable.ts), and a test fails when a tool has no entry. `orco tools` prints every tool, what it touches and which levels may call it, and `whoami` shows the agent's level. Migration 57.
 
 - Unsent text survives: every room, thread and ticket comment box keeps its own draft and attachments in this browser. Switching rooms never carries text or photos into another room or posts them there, and rooms holding a draft show a small ring. A send that does not reach the server (no signal, the server restarting) waits under the conversation as "Not sent yet, retrying", with Retry now and Cancel. It goes when the connection returns, under its own idempotency key, so it posts exactly once. After 30 seconds without the live connection, a banner says "Can't reach Orco. Last reached 10:42." with Retry.

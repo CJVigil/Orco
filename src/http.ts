@@ -239,6 +239,17 @@ function ticketInput(body: Record<string, unknown> | undefined): TicketInput {
   };
 }
 
+/** A hook's filter, duplicate and coalesce settings from a request body (#132); absent fields stay as they are. */
+function hookSettings(b: Record<string, unknown>) {
+  return {
+    ...(b.filters !== undefined ? { filters: b.filters } : {}),
+    ...(b.postOnlyMatching !== undefined ? { postOnlyMatching: b.postOnlyMatching === true } : {}),
+    ...(b.dedupeHeader !== undefined ? { dedupeHeader: b.dedupeHeader === null ? null : String(b.dedupeHeader) } : {}),
+    ...(b.coalesceKey !== undefined ? { coalesceKey: b.coalesceKey === null ? null : String(b.coalesceKey) } : {}),
+    ...(b.coalesceSeconds !== undefined ? { coalesceSeconds: Number(b.coalesceSeconds) } : {}),
+  };
+}
+
 /** A retry-safe key from the Idempotency-Key header or an idempotency_key body field. */
 function idempotencyKey(req: Request): string | undefined {
   const header = req.headers['idempotency-key'];
@@ -1139,8 +1150,20 @@ export function createApp(store: Store, options: AppOptions = {}) {
       wakeAgent: nullableStr(b.wakeAgent, 'wakeAgent'),
       wakeMatch: str(b.wakeMatch, 'wakeMatch'),
       confirmTasks: b.confirmTasks !== false,
+      ...hookSettings(b),
     });
     res.status(201).json({ hook, token, path: `/hooks/${token}` });
+  });
+  // Filters, duplicates and coalescing, and what each delivery did (#132).
+  api.patch('/hooks/:id', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a hook id');
+    res.json(store.hooks.update(req.participant!, id, hookSettings(req.body ?? {})));
+  });
+  api.get('/hooks/:id/deliveries', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a hook id');
+    res.json(store.hooks.deliveriesOf(req.participant!, id));
   });
   api.delete('/hooks/:id', (req, res) => {
     const id = optionalInt(req.params.id);
@@ -2481,7 +2504,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
       res.status(404).json({ error: 'Unknown hook' });
       return;
     }
-    res.status(202).json({ ok: true, message_id: result.messageId, task_id: result.taskId });
+    res.status(202).json({ ok: true, message_id: result.messageId, task_id: result.taskId, outcome: result.outcome });
   });
 
   // The bridge reports each run of its agent on a task: how long, how it ended, usage, and a masked log.

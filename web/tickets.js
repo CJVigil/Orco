@@ -2685,6 +2685,90 @@ export function createTickets(ctx) {
 
   /* Integrations: webhooks and secrets */
 
+  /*
+   * A hook's filters, duplicates and coalescing, and its Deliveries (#132). Filters are typed one per
+   * line, like "body.workflow_run.conclusion equals failure"; the server checks them.
+   */
+  const OUTCOME_TEXT = { posted: 'Posted', task_started: 'Task started', held: 'Held for confirmation', filtered: 'Filtered', duplicate: 'Duplicate', coalesced: 'Coalesced', rate_limited: 'Rate limited', wake_failed: 'Wake failed' };
+  const ruleLine = (r) => (r.op === 'exists' ? `${r.path} exists` : `${r.path} ${r.op} ${Array.isArray(r.value) ? r.value.join(', ') : r.value}`);
+  const parseRules = (text) =>
+    text
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const m = /^(\S+)\s+(equals|not_equals|one_of|starts_with|exists)\b\s*(.*)$/i.exec(line);
+        if (!m) throw new Error(`Cannot read “${line}”: write <path> <equals|not_equals|one_of|starts_with|exists> <value>`);
+        return { path: m[1], op: m[2].toLowerCase(), value: m[3] };
+      });
+
+  function hookDetails(h) {
+    const rules = el('textarea', { rows: '3', class: 'mono', 'aria-label': 'Filters', placeholder: 'header.x-github-event equals workflow_run\nbody.workflow_run.conclusion equals failure\nbody.workflow_run.head_branch one_of dev, main' });
+    rules.value = h.filters.map(ruleLine).join('\n');
+    const onlyMatching = el('input', { type: 'checkbox', checked: h.postOnlyMatching });
+    const dedupe = el('input', { class: 'mono', placeholder: 'the forge’s delivery id', value: h.dedupeHeader ?? '', 'aria-label': 'Duplicate key header' });
+    const coalesceKey = el('input', { class: 'mono', placeholder: 'the CI run’s commit', value: h.coalesceKey ?? '', 'aria-label': 'Coalesce key' });
+    const coalesceSeconds = el('input', { type: 'number', min: '10', max: '3600', value: String(h.coalesceSeconds), 'aria-label': 'Coalesce window in seconds' });
+    const list = el('div', { class: 'deliveries' });
+    const showDeliveries = async () => {
+      const rows = await api(`/hooks/${h.id}/deliveries`);
+      list.replaceChildren(
+        rows.length
+          ? el(
+              'table',
+              { class: 'deliveries-table small' },
+              el('thead', {}, el('tr', {}, ['When', 'Event', 'What', 'Outcome'].map((x) => el('th', { text: x })))),
+              el(
+                'tbody',
+                {},
+                rows.map((d) =>
+                  el(
+                    'tr',
+                    { class: `outcome-${d.outcome}` },
+                    el('td', { class: 'muted', text: ago(d.at) }),
+                    el('td', { class: 'mono', text: d.event ?? '' }),
+                    el('td', { text: d.summary }),
+                    el('td', {}, el('strong', { text: OUTCOME_TEXT[d.outcome] ?? d.outcome }), d.detail ? el('span', { class: 'muted', text: ` · ${d.detail}` }) : null),
+                  ),
+                ),
+              ),
+            )
+          : el('p', { class: 'muted small', text: 'No deliveries yet.' }),
+      );
+    };
+    return el(
+      'details',
+      { class: 'hook-details' },
+      el('summary', { class: 'small', text: `Filters and deliveries${h.filters.length ? ` · ${h.filters.length} filter${h.filters.length === 1 ? '' : 's'}` : ''}${h.postOnlyMatching ? ' · posts only matches' : ''}` }),
+      el(
+        'form',
+        {
+          class: 'hook-settings',
+          onsubmit: (event) => {
+            event.preventDefault();
+            void act(async () => {
+              await api(`/hooks/${h.id}`, {
+                method: 'PATCH',
+                body: { filters: parseRules(rules.value), postOnlyMatching: onlyMatching.checked, dedupeHeader: dedupe.value || null, coalesceKey: coalesceKey.value || null, coalesceSeconds: Number(coalesceSeconds.value) },
+              });
+            });
+          },
+        },
+        el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Act only when all of these hold (header.<name> or body.<path>, [] for lists)' }), rules),
+        el('label', { class: 'check small' }, onlyMatching, 'Post only when it matches'),
+        el(
+          'div',
+          { class: 'schedule-grid' },
+          el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Duplicate key header (ignored for 7 days)' }), dedupe),
+          el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Coalesce by (a path, or off)' }), coalesceKey),
+          el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Coalesce window, seconds' }), coalesceSeconds),
+        ),
+        el('div', { class: 'row-end' }, el('button', { class: 'ghost small', type: 'button', text: 'Show deliveries', onclick: () => void showDeliveries() }), el('button', { class: 'primary small', type: 'submit', text: 'Save' })),
+      ),
+      list,
+    );
+  }
+
   function renderIntegrations() {
     const { hooks = [], secrets = { enabled: false, secrets: [] }, leases = [] } = t.integrations ?? {};
     const p = encodeURIComponent(t.project);
@@ -2733,7 +2817,7 @@ export function createTickets(ctx) {
       ),
       el('div', { class: 'row-end' }, el('button', { class: 'primary small', type: 'submit', text: 'Create webhook' })),
     );
-    const hookRows = hooks.map((h) =>
+    const hookRows = hooks.map((h) => [
       el(
         'div',
         { class: 'file-row' },
@@ -2742,7 +2826,8 @@ export function createTickets(ctx) {
         el('span', { class: 'spacer' }),
         el('button', { class: 'ghost small danger', type: 'button', text: 'Remove', onclick: () => confirm(`Remove the ${h.name} webhook? Its URL stops working.`) && void act(() => api(`/hooks/${h.id}`, { method: 'DELETE' })) }),
       ),
-    );
+      hookDetails(h),
+    ]);
 
     const secretName = el('input', { placeholder: 'STRIPE_TEST_KEY', required: true, pattern: '[A-Z][A-Z0-9_]*', 'aria-label': 'Secret name', class: 'mono' });
     const secretValue = el('input', { type: 'password', required: true, autocomplete: 'off', 'aria-label': 'Value' });
@@ -2796,7 +2881,7 @@ export function createTickets(ctx) {
       el('section', { class: 'settings-section' },
         el('h3', { text: 'Webhooks' }),
         el('p', { class: 'muted small', text: 'A secret URL that CI, GitHub or monitoring can POST to. Each delivery is posted in the room as untrusted external text, and can start a task for an agent. Orco only receives; it never calls out.' }),
-        hookRows.length ? el('div', { class: 'file-list plan-card' }, hookRows) : null,
+        hookRows.length ? el('div', { class: 'file-list plan-card' }, hookRows.flat()) : null,
         reveal,
         projectRooms.length ? hookForm : null,
       ),
