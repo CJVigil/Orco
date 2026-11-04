@@ -293,7 +293,13 @@ function renderMessage(message, previous, { inThread = false } = {}) {
   );
   if (!inThread) {
     node.append(
-      el('div', { class: 'msg-actions' }, el('button', { class: 'ghost small', type: 'button', text: 'Reply in thread', onclick: () => openThread(message) })),
+      el(
+        'div',
+        { class: 'msg-actions' },
+        el('button', { class: 'ghost small', type: 'button', text: 'Reply in thread', onclick: () => openThread(message) }),
+        // An outage reported here becomes an incident with its postmortem to write (#114).
+        message.projectId !== null && state.me.kind === 'user' ? el('button', { class: 'ghost small', type: 'button', text: 'Incident', title: 'Open an incident ticket from this message', onclick: () => void startIncident(message) }) : null,
+      ),
     );
     if (message.replyCount > 0) {
       node.append(
@@ -318,6 +324,19 @@ function formatBytes(bytes) {
 const DIFF_NAME = /\.(diff|patch)$/i;
 // Terminal colour codes in logs are noise in a browser.
 const ANSI = /\u001b\[[0-9;]*[A-Za-z]/g;
+
+async function startIncident(message) {
+  const project = message.room.split('/')[0];
+  const title = prompt('What is the incident? (one line)', message.text.split('\n')[0].slice(0, 120));
+  if (!title?.trim()) return;
+  try {
+    const ticket = await api(`/projects/${encodeURIComponent(project)}/incidents`, { method: 'POST', body: { title, messageId: message.id } });
+    toast(`${ticket.ref} opened: fill in its postmortem before it closes`);
+    void tickets.openTicket(ticket.ref);
+  } catch (err) {
+    toast(err.message);
+  }
+}
 
 /** A text attachment's contents as text, with a diff coloured line by line. */
 async function fileText(file) {

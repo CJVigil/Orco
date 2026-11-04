@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Incident tickets: open one from a message (its Incident action) or with `open_incident`, linked back to the alert, labelled `incident` and urgent, with the postmortem to write: timeline with timezone, impact, root cause, fix, prevention steps and owner. It cannot close as Done until every section has content and each prevention step names a follow-up ticket. Its other labels are tags: `list_incidents` (and `GET /api/projects/:name/incidents?tag=`) lists incidents by tag with their root cause.
+
 - Checked rules: org admins add rules with a name, a pattern (text or regular expression) and where to check it: plans, approval requests, and code blocks or diffs in agents' messages and ticket comments. A match blocks the plan or approval, naming the rule and telling its owner; in a message it is flagged in the thread. Five examples ship switched off (Docker socket mounts, `ports:` in compose, terminals on servers, skipped hooks, force-pushes to main). Portfolio > Controls; `/api/checked-rules`. Migration 50.
 
 - Deploy windows and freezes: org or project admins set weekly windows ("production deploys Wed 13:00-17:00", or never "Mon-Fri 06:00-17:00") in the server's timezone (`ORCO_TIMEZONE`), and freezes with a reason and an end time (Portfolio > Controls; `/api/deploy-windows`, `/api/freezes`). A deploy or push approval request during a freeze is refused with the freeze's reason; outside a window it is flagged on the card for the approver, or refused if the window says so. An admin can go ahead anyway with a reason (`override`), which is audited and shown. Freezes show as a banner at the top and in every agent's `my_work`. Migration 49.

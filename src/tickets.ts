@@ -753,6 +753,8 @@ export class Tickets {
         this.store.scope.assertBuildAllowed(row.project_id, labels, status.category);
         // Build order (#109): a ticket that waits on a milestone or label does not start yet.
         if (status.category === 'started' || status.category === 'completed') this.store.order.assertMayStart(row.project_id, labels, row.id, refOf(row));
+        // An incident closes only with its postmortem written (#114).
+        if (status.category === 'completed') this.store.incidents.assertMayClose(row.project_id, labels, input.description ?? row.description, refOf(row));
         newStatus = status;
         changes.push({ field: 'status', from: row.status_name, to: status.name });
       }

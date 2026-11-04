@@ -1680,6 +1680,14 @@ export function createApp(store: Store, options: AppOptions = {}) {
   api.get('/projects/:name/spend', (req, res) => {
     res.json(store.controls.projectSpend(req.participant!, String(req.params.name), optionalInt(req.query.days) ?? 7));
   });
+  // Incidents (#114): open one (from a message), and list them by tag with their root cause.
+  api.post('/projects/:name/incidents', (req, res) => {
+    const b = req.body ?? {};
+    res.status(201).json(store.incidents.open(req.participant!, String(req.params.name), { title: String(b.title ?? ''), messageId: b.messageId === undefined ? undefined : optionalInt(b.messageId), tags: Array.isArray(b.tags) ? b.tags.map(String) : [] }));
+  });
+  api.get('/projects/:name/incidents', (req, res) => {
+    res.json(store.incidents.list(req.participant!, String(req.params.name), str(req.query.tag, 'tag')));
+  });
   // Checked rules (#113): anyone reads them (so agents know); org admins change them.
   api.get('/checked-rules', (req, res) => {
     res.json(store.rules.list());

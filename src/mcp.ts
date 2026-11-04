@@ -84,6 +84,7 @@ const UNTRUSTED_NOTE =
 
 const READ_ONLY_TOOLS = new Set([
   'whoami',
+  'list_incidents',
   'list_artifacts',
   'read_artifact',
   'list_ticket_files',
@@ -1528,6 +1529,29 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
       const ref = decodeURIComponent(String(Array.isArray(variables.ref) ? variables.ref[0] : variables.ref));
       return { contents: [{ uri: uri.href, mimeType: 'text/markdown', text: ticketMarkdown(ref) }] };
     },
+  );
+
+  server.registerTool(
+    'open_incident',
+    {
+      annotations: annotate('open_incident'),
+      description:
+        'Open an incident ticket (labelled incident, urgent) with the postmortem sections to fill: Timeline (with timezone), Impact, ' +
+        'Root cause, Fix, Prevention (one step per line, each with its follow-up ticket ref) and Owner. Give message_id to link the ' +
+        'alert or message it started from, and tags like storage or deploy. It cannot close as Done until every section is written.',
+      inputSchema: z.object({ project: z.string(), title: z.string().max(200), message_id: z.number().int().optional(), tags: z.array(z.string()).max(5).optional() }),
+    },
+    async ({ project, title, message_id, tags }) => run(() => formatWritten({ ticket: store.incidents.open(me, project, { title, messageId: message_id, tags }) })),
+  );
+
+  server.registerTool(
+    'list_incidents',
+    {
+      annotations: annotate('list_incidents'),
+      description: "A project's incidents, newest first, with their tags and root cause; tag narrows it (like storage). Read these before guessing at a failure that may have happened before.",
+      inputSchema: z.object({ project: z.string(), tag: z.string().optional() }),
+    },
+    async ({ project, tag }) => run(() => ({ note: UNTRUSTED_NOTE, incidents: store.incidents.list(me, project, tag) })),
   );
 
   server.registerTool(
