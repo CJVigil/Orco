@@ -307,6 +307,7 @@ function formatWritten(result: Written, full?: boolean) {
 }
 
 const ticketFields = {
+  private: z.boolean().optional().describe('Private: only its creator, assignee, waiting_on person and project admins (and their agents) see it. Set by people only. Never quote a private ticket in a shared room.'),
   title: z.string().max(MAX_TITLE).optional(),
   description: z.string().max(MAX_DESCRIPTION).optional().describe('Markdown'),
   status: z.string().optional().describe('A status name from project_plan, such as "In Progress"'),
@@ -401,6 +402,7 @@ function ticketInput(args: TicketArgs): TicketInput {
     waitingOn: args.waiting_on,
     waitingAsk: args.waiting_ask,
     waitingOptions: args.waiting_options,
+    private: args.private,
   };
 }
 
@@ -1248,11 +1250,17 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         'change. If you are working a ticket through a task, finish the task with update_task as well. Replies with a ' +
         'summary; full: true for the whole ticket. Changing many tickets? Use update_tickets. Keep next_step current (one line, ' +
         'shown on the card); need a person to act? set waiting_on and waiting_ask. Descriptions and handoffs: lead with the point.',
-      inputSchema: z.object({ ticket: z.string(), ...ticketFields, full: z.boolean().optional() }),
+      inputSchema: z.object({
+        ticket: z.string(),
+        project: z.string().optional().describe('Move it to this project: it gets a new ref there, the old ref keeps opening it'),
+        ...ticketFields,
+        full: z.boolean().optional(),
+      }),
     },
-    async ({ ticket, full, ...args }) =>
+    async ({ ticket, project, full, ...args }) =>
       run(() => {
-        const written = formatWritten(store.tickets.update(me, ticket, ticketInput(args)), full);
+        const ref = project ? store.tickets.move(me, ticket, project).ticket.ref : ticket;
+        const written = formatWritten(store.tickets.update(me, ref, ticketInput(args)), full);
         const note = writingNote(args.description) ?? writingNote(args.handoff);
         return note ? { ...written, writing_note: note } : written;
       }),

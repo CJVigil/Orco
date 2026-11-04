@@ -213,6 +213,7 @@ function ticketInput(body: Record<string, unknown> | undefined): TicketInput {
     waitingOn: nullableStr(b.waitingOn, 'waitingOn'),
     waitingAsk: str(b.waitingAsk, 'waitingAsk'),
     waitingOptions: b.waitingOptions === null ? null : list(b.waitingOptions, 'waitingOptions', 'string'),
+    private: b.private === undefined ? undefined : b.private === true,
   };
 }
 
@@ -1273,7 +1274,11 @@ export function createApp(store: Store, options: AppOptions = {}) {
     res.json(store.tickets.updateMany(req.participant!, edits));
   });
   api.post('/tickets/:ref', (req, res) => {
-    res.json(store.tickets.update(req.participant!, String(req.params.ref), ticketInput(req.body)));
+    // project moves it to another project (#97) before any other change.
+    let ref = String(req.params.ref);
+    const target = str(req.body?.project, 'project');
+    if (target) ref = store.tickets.move(req.participant!, ref, target).ticket.ref;
+    res.json(store.tickets.update(req.participant!, ref, ticketInput(req.body)));
   });
   // The person a ticket waits on answers: "done", "not_yet" (snooze a day) or a line of text.
   api.post('/tickets/:ref/waiting', (req, res) => {

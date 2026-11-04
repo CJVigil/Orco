@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Private tickets: only the creator, assignee, the person it waits on, project admins and their agents see one; for everyone else it is missing from the board, search, digests, `list_tickets` and a direct ref (not found). Set by the creator or a project admin (`private` on create and update, web: Make private); a lock marks the card. Tickets move between projects (`update_ticket` `project`, web: Move to…) and keep comments, criteria and history; the old ref keeps opening them. Migration 39.
+
 - Split view: the ticket, file or image you open sits beside the conversation, with a divider you drag (remembered per person) and double-click for full width; images and text files now open there. The sidebar follows the Claude app: Needs you on top, Home (the lobby), your projects with their tickets, folders and rooms, then Recent rooms and tickets, each group foldable, with unread dots. Fewer borders, tighter rows.
 
 - Keyboard first, like Claude Code (#93): **Ctrl+K** (⌘K) opens a palette that finds any room,

@@ -727,6 +727,46 @@ export function createTickets(ctx) {
 
   let dragging = null;
 
+  /** Private or shared, and Move to… another project (#97), at the foot of an open ticket. */
+  function accessRow(ticket) {
+    const others = [...new Set(rooms().map((r) => r.project).filter((p) => p && p !== ticket.project))];
+    const move = others.length
+      ? el(
+          'select',
+          {
+            class: 'ghost small',
+            'aria-label': 'Move to another project',
+            onchange: async (event) => {
+              const project = event.target.value;
+              if (!project) return;
+              try {
+                const result = await api(`/tickets/${encodeURIComponent(ticket.ref)}`, { method: 'POST', body: { project } });
+                notify(`${ticket.ref} is now ${result.ticket.ref} in ${project}`);
+                void openTicket(result.ticket.ref);
+              } catch (err) {
+                notify(err.message);
+                event.target.value = '';
+              }
+            },
+          },
+          el('option', { value: '', text: 'Move to…' }),
+          others.map((p) => el('option', { value: p, text: p })),
+        )
+      : null;
+    return el(
+      'div',
+      { class: 'detail-access small' },
+      el('button', {
+        class: 'ghost small',
+        type: 'button',
+        title: ticket.private ? 'Let everyone in the project see it' : 'Only its creator, assignee, the person it waits on and project admins (and their agents) will see it',
+        text: ticket.private ? '🔒 Private · share with the project' : 'Make private',
+        onclick: () => void save(ticket, { private: !ticket.private }),
+      }),
+      move,
+    );
+  }
+
   function card(ticket) {
     const node = el(
       'article',
@@ -753,7 +793,7 @@ export function createTickets(ctx) {
         },
       },
       stateLine(ticket),
-      el('div', { class: 'ticket-card-top' }, el('span', { class: 'ticket-ref', text: ticket.ref }), ticket.assignee ? avatar(ticket.assignee.name, ticket.assignee.kind) : null),
+      el('div', { class: 'ticket-card-top' }, el('span', { class: 'ticket-ref', text: ticket.ref }), ticket.private ? el('span', { class: 'private-mark', title: 'Private: only the people on it and project admins see it', 'aria-label': 'Private' }, icon('lock')) : null, ticket.assignee ? avatar(ticket.assignee.name, ticket.assignee.kind) : null),
       el('div', { class: 'ticket-title', text: ticket.title }),
       nextStepLine(ticket),
       el(
@@ -1637,6 +1677,7 @@ export function createTickets(ctx) {
       el('ol', { class: 'activity' }, foldRuns(items, entries)),
       commentBox,
       el('p', { class: 'muted small detail-foot', text: `Opened by ${ticket.creator} ${ago(ticket.createdAt)} · updated ${ago(ticket.updatedAt)}` }),
+      accessRow(ticket),
     );
   }
 

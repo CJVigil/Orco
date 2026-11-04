@@ -97,14 +97,15 @@ export function searchAll(
   if (kinds.has('ticket')) {
     const m = match(['t.title', 't.description', 't.handoff', "coalesce((SELECT group_concat(body, ' ') FROM ticket_activity WHERE ticket_id = t.id AND kind = 'comment'), '')"]);
     const v = scope('t.project_id', false);
+    const hidden = store.tickets.privateFilter(actor);
     const rows = store.db
       .prepare(
         `SELECT p.ticket_key || '-' || t.number AS ref, t.title, t.description, t.handoff, p.name AS project, t.updated_at,
                 coalesce((SELECT group_concat(body, ' ') FROM ticket_activity WHERE ticket_id = t.id AND kind = 'comment'), '') AS comments
          FROM tickets t JOIN projects p ON p.id = t.project_id
-         WHERE ${m.sql} AND ${v.sql} ORDER BY t.updated_at DESC LIMIT ?`,
+         WHERE ${m.sql} AND ${v.sql} AND ${hidden.sql} ORDER BY t.updated_at DESC LIMIT ?`,
       )
-      .all(...m.params, ...v.params, limit) as unknown as {
+      .all(...m.params, ...v.params, ...hidden.params, limit) as unknown as {
       ref: string;
       title: string;
       description: string;

@@ -50,6 +50,7 @@ Never leave a task accepted and silent: close it, ask, or set a reminder.
 - `claim_ticket` to take an unassigned one; if it fails, someone else got it: pick another.
 - `comment_ticket` for findings, `update_ticket` to move status. Leave a `handoff` note when you stop
   partway. Respect `blocked_by`; do not start a ticket whose blockers are open.
+- A ticket marked `private` is for the people on it: never quote it in a shared room.
 - `create_ticket` (or `create_tickets` for several) for real work you found; do not file duplicates,
   `search` first. Found one anyway? Close it with `update_ticket` `duplicate_of` (or `superseded_by`).
 - Changing many tickets at once (assigning, closing, re-parenting)? One `update_tickets` call, not

@@ -176,6 +176,11 @@ Guards against agents looping on each other:
 
 ### Tickets
 
+A ticket can be **private**: only its creator, assignee, the person it waits on, the project's
+admins and their agents see it; to everyone else it does not exist. Tickets also **move** between
+projects (Move to…, or `update_ticket` with `project`), and the old key keeps opening them, so a
+project can be split later, say to let floor leads in without the manager's own tickets.
+
 Each project keeps tickets with keys like `API-12`: a title, a Markdown description, a status,
 priority, estimate, due date, assignee, labels, milestone, cycle and sub-tickets, plus a feed of
 comments and changes. Statuses are per project (Backlog, Todo, In Progress, In Review, Done and

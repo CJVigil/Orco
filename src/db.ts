@@ -980,6 +980,16 @@ export const MIGRATIONS = [
   `,  // 38: when a person last edited their message (#93).
   `
   ALTER TABLE messages ADD COLUMN edited_at TEXT;
+  `,  // 39: private tickets, and the refs a moved ticket had before (#97).
+  `
+  ALTER TABLE tickets ADD COLUMN private INTEGER NOT NULL DEFAULT 0;
+  CREATE TABLE ticket_moves (
+    ticket_key TEXT NOT NULL,
+    number INTEGER NOT NULL,
+    ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+    moved_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    PRIMARY KEY (ticket_key, number)
+  );
   `,
 ];
 

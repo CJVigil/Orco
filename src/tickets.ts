@@ -130,6 +130,8 @@ export interface Cycle {
 
 export interface TicketSummary {
   id: number;
+  /** Seen only by the people on it, project admins and their agents (#97). */
+  private: boolean;
   ref: string;
   project: string;
   projectId: number;
@@ -221,6 +223,8 @@ export interface Ticket extends TicketSummary {
 }
 
 export interface TicketInput {
+  /** Private (#97): only its creator, assignee, waiting-on person, project admins and their agents see it. */
+  private?: boolean;
   title?: string;
   description?: string;
   status?: string;
@@ -296,6 +300,8 @@ export interface Written {
 
 interface TicketRow {
   id: number;
+  private: number;
+  creator_id: number;
   project_id: number;
   project: string;
   ticket_key: string;
@@ -360,7 +366,7 @@ const TICKET_SELECT = `
          t.handoff, hb.name AS handoff_by, t.handoff_at, t.blocked_reason, t.closed_reason, t.closed_for,
          t.next_step, nsf.name AS next_step_for, t.waiting_on AS waiting_on_id, wo.name AS waiting_on, t.waiting_ask, t.waiting_since, t.waiting_snoozed_until, t.waiting_options, t.status_changed_at,
          t.folder_id, f.name AS folder, f.emoji AS folder_emoji,
-         t.sort, t.created_at, t.updated_at, t.started_at, t.completed_at
+         t.sort, t.created_at, t.updated_at, t.started_at, t.completed_at, t.private, t.creator_id
   FROM tickets t
   JOIN projects p ON p.id = t.project_id
   JOIN ticket_statuses s ON s.id = t.status_id
@@ -553,6 +559,7 @@ export class Tickets {
         this.store.db.prepare(`UPDATE tickets SET handoff = ?, handoff_by = ?, handoff_at = ${NOW_SQL} WHERE id = ?`).run(handoff, actor.id, id);
       }
       if (blockedReason) this.store.db.prepare('UPDATE tickets SET blocked_reason = ? WHERE id = ?').run(blockedReason, id);
+      if (input.private) this.store.db.prepare('UPDATE tickets SET private = 1 WHERE id = ?').run(id);
       this.activity(id, actor, 'created', null, null);
       this.store.commit();
     } catch (err) {
@@ -645,6 +652,14 @@ export class Tickets {
       params.push(value);
     };
 
+    if (input.private !== undefined && (input.private ? 1 : 0) !== row.private) {
+      // Who can see a ticket is a person's call: its creator or a project admin.
+      if (actor.kind !== 'user' || (actor.id !== row.creator_id && this.store.roleIn(actor, row.project_id) !== 'admin')) {
+        throw new OrcoError('forbidden', 'Only the person who opened a ticket or a project admin makes it private or shared');
+      }
+      set('private', input.private ? 1 : 0);
+      changes.push({ field: 'private', from: row.private ? 'private' : 'shared', to: input.private ? 'private' : 'shared' });
+    }
     if (input.title !== undefined) {
       const title = this.title(input.title);
       if (title !== row.title) {
@@ -1107,6 +1122,11 @@ export class Tickets {
       const visible = this.store.projectFilter(actor, 't.project_id');
       where.push(visible.sql);
       params.push(...visible.params);
+    }
+    {
+      const hidden = this.privateFilter(actor);
+      where.push(hidden.sql);
+      params.push(...hidden.params);
     }
     if (filter.status) {
       where.push('s.name = ?');
@@ -1638,8 +1658,78 @@ export class Tickets {
     const row = this.store.db
       .prepare(`${TICKET_SELECT} WHERE p.ticket_key = ? AND t.number = ?`)
       .get(match[1]!.toUpperCase(), Number(match[2])) as TicketRow | undefined;
-    if (!row || !this.store.canSee(actor, row.project_id)) throw new OrcoError('not_found', `No ticket ${ref}`);
-    return row;
+    const found = row ?? this.movedRow(match[1]!.toUpperCase(), Number(match[2]));
+    if (!found || !this.store.canSee(actor, found.project_id) || !this.sees(actor, found.id)) throw new OrcoError('not_found', `No ticket ${ref}`);
+    return found;
+  }
+
+  /** A ref a ticket had before it moved to another project opens it where it is now (#97). */
+  private movedRow(key: string, number: number): TicketRow | undefined {
+    const moved = this.store.db.prepare('SELECT ticket_id FROM ticket_moves WHERE ticket_key = ? AND number = ?').get(key, number) as { ticket_id: number } | undefined;
+    return moved ? this.row(moved.ticket_id) : undefined;
+  }
+
+  /**
+   * SQL keeping private tickets (#97) to their creator, assignee and waiting-on person, the project's
+   * admins, and the agents of any of them. Add it wherever tickets are listed by title.
+   */
+  privateFilter(actor: Participant, alias = 't'): { sql: string; params: number[] } {
+    if (this.store.isSystem(actor)) return { sql: '1', params: [] };
+    const human = this.store.humanOf(actor);
+    return {
+      sql: `(${alias}.private = 0 OR ${alias}.creator_id IN (?, ?) OR ${alias}.assignee_id IN (?, ?) OR ${alias}.waiting_on IN (?, ?)
+        OR EXISTS (SELECT 1 FROM project_access pa WHERE pa.project_id = ${alias}.project_id AND pa.user_id = ? AND pa.role = 'admin'))`,
+      params: [actor.id, human, actor.id, human, actor.id, human, human],
+    };
+  }
+
+  /** Whether the actor may see this ticket, private or not (project access is checked separately). */
+  sees(actor: Participant, ticketId: number): boolean {
+    const f = this.privateFilter(actor);
+    return this.store.db.prepare(`SELECT 1 FROM tickets t WHERE t.id = ? AND ${f.sql}`).get(ticketId, ...f.params) !== undefined;
+  }
+
+  /**
+   * Moves a ticket to another project (#97): it takes the next number there and keeps its comments,
+   * criteria, links and history; its old ref keeps opening it. Statuses map by name (or by category),
+   * labels by name; milestone, cycle and folder belong to the old project and are cleared. The mover
+   * must be able to change tickets in both projects.
+   */
+  move(actor: Participant, ref: string, projectName: string): Written {
+    const row = this.byRef(actor, ref);
+    this.store.assertWrite(actor, row.project_id);
+    const target = this.writable(actor, projectName);
+    if (target.id === row.project_id) return { ticket: this.detail(actor, row.id) };
+    const statuses = this.statuses(target.id);
+    const status = statuses.find((st) => st.name.toLowerCase() === row.status_name.toLowerCase()) ?? statuses.find((st) => st.category === row.category) ?? statuses[0]!;
+    const targetLabels = this.labels(target.id);
+    const oldLabels = this.labelsFor([row.id]).get(row.id) ?? [];
+    const keep = oldLabels.map((l) => targetLabels.find((t) => t.name.toLowerCase() === l.name.toLowerCase())).filter((l): l is Label => l !== undefined);
+    const oldRef = refOf(row);
+    this.store.begin();
+    try {
+      const { number } = this.store.db
+        .prepare('UPDATE projects SET next_ticket = next_ticket + 1 WHERE id = ? RETURNING next_ticket - 1 AS number')
+        .get(target.id) as { number: number };
+      this.store.db.prepare('INSERT OR REPLACE INTO ticket_moves (ticket_key, number, ticket_id) VALUES (?, ?, ?)').run(row.ticket_key, row.number, row.id);
+      this.store.db
+        .prepare('UPDATE tickets SET project_id = ?, number = ?, status_id = ?, milestone_id = NULL, cycle_id = NULL, folder_id = NULL, parent_id = NULL, sort = ? WHERE id = ?')
+        .run(target.id, number, status.id, this.topSort(status.id), row.id);
+      this.store.db.prepare('UPDATE tickets SET parent_id = NULL WHERE parent_id = ? AND project_id != ?').run(row.id, target.id);
+      this.store.db.prepare('DELETE FROM ticket_labels WHERE ticket_id = ?').run(row.id);
+      const link = this.store.db.prepare('INSERT INTO ticket_labels (ticket_id, label_id) VALUES (?, ?)');
+      for (const l of keep) link.run(row.id, l.id);
+      this.activity(row.id, actor, 'change', null, { changes: [{ field: 'project', from: `${row.project} (${oldRef})`, to: target.name }] });
+      this.store.commit();
+    } catch (err) {
+      this.store.rollback();
+      throw err;
+    }
+    const moved = this.row(row.id)!;
+    this.store.audit.record(actor, 'ticket.move', { projectId: target.id, subject: `ticket:${refOf(moved)}`, detail: { from: oldRef, to: refOf(moved), fromProject: row.project } });
+    this.changed(row);
+    this.changed(moved);
+    return { ticket: this.detail(actor, row.id) };
   }
 
   private row(id: number): TicketRow | undefined {
@@ -1649,7 +1739,7 @@ export class Tickets {
   private detail(actor: Participant, id: number, since = 0): Ticket {
     const row = this.row(id)!;
     const [summary] = this.summaries([row], actor);
-    const children = this.store.db.prepare(`${TICKET_SELECT} WHERE t.parent_id = ? ORDER BY t.number`).all(id) as unknown as TicketRow[];
+    const children = (this.store.db.prepare(`${TICKET_SELECT} WHERE t.parent_id = ? ORDER BY t.number`).all(id) as unknown as TicketRow[]).filter((r) => this.sees(actor, r.id));
     const activity = this.store.db
       .prepare(
         `SELECT ta.id, p.name AS actor, p.kind AS actor_kind, ta.kind, ta.body, ta.detail, ta.created_at
@@ -1671,7 +1761,7 @@ export class Tickets {
     // A linked ticket in a project the viewer cannot see still shows that a link exists, and nothing else.
     const link = (sql: string) =>
       (this.store.db.prepare(sql).all(id) as unknown as TicketRow[]).map((r) =>
-        this.store.canSee(actor, r.project_id)
+        this.store.canSee(actor, r.project_id) && this.sees(actor, r.id)
           ? { ref: refOf(r), title: r.title, status: r.status_name, category: r.category }
           : { ref: HIDDEN_REF, title: 'A ticket in a project you cannot see', status: '', category: r.category },
       );
@@ -1690,7 +1780,7 @@ export class Tickets {
           ? { reason: row.closed_reason, ticket: link(`${TICKET_SELECT} WHERE t.id = (SELECT closed_for FROM tickets WHERE id = ?)`)[0]! }
           : null,
       replaces: (this.store.db.prepare(`${TICKET_SELECT} WHERE t.closed_for = ? ORDER BY t.id`).all(id) as unknown as TicketRow[]).map((r) => ({
-        ...(this.store.canSee(actor, r.project_id) ? { ref: refOf(r), title: r.title, status: r.status_name } : { ref: HIDDEN_REF, title: 'A ticket in a project you cannot see', status: '' }),
+        ...(this.store.canSee(actor, r.project_id) && this.sees(actor, r.id) ? { ref: refOf(r), title: r.title, status: r.status_name } : { ref: HIDDEN_REF, title: 'A ticket in a project you cannot see', status: '' }),
         category: r.category,
         reason: r.closed_reason!,
       })),
@@ -1761,6 +1851,7 @@ export class Tickets {
         labels: labels.get(row.id) ?? [],
         milestone: row.milestone_id === null ? null : { id: row.milestone_id, name: row.milestone! },
         cycle: row.cycle_id === null ? null : { id: row.cycle_id, number: row.cycle_number! },
+        private: row.private === 1,
         folder: row.folder_id === null ? null : { id: row.folder_id, name: row.folder!, emoji: row.folder_emoji },
         parent: row.parent_number === null ? null : `${row.ticket_key}-${row.parent_number}`,
         task: row.task_id === null || state === null ? null : { id: row.task_id, state, since: row.task_since!, steps: stepCount(row.task_steps) },
@@ -1806,13 +1897,13 @@ export class Tickets {
     if (ids.length === 0) return map;
     const rows = this.store.db
       .prepare(
-        `SELECT tl.blocked_id, p.ticket_key, b.number, b.project_id FROM ticket_links tl
+        `SELECT tl.blocked_id, b.id, p.ticket_key, b.number, b.project_id FROM ticket_links tl
          JOIN tickets b ON b.id = tl.blocker_id JOIN ticket_statuses s ON s.id = b.status_id JOIN projects p ON p.id = b.project_id
          WHERE tl.blocked_id IN (${ids.map(() => '?').join(', ')}) AND s.category NOT IN ('completed', 'canceled')
          ORDER BY b.id`,
       )
-      .all(...ids) as unknown as { blocked_id: number; ticket_key: string; number: number; project_id: number }[];
-    for (const r of rows) map.set(r.blocked_id, [...(map.get(r.blocked_id) ?? []), this.store.canSee(actor, r.project_id) ? refOf(r) : HIDDEN_REF]);
+      .all(...ids) as unknown as { blocked_id: number; id: number; ticket_key: string; number: number; project_id: number }[];
+    for (const r of rows) map.set(r.blocked_id, [...(map.get(r.blocked_id) ?? []), this.store.canSee(actor, r.project_id) && this.sees(actor, r.id) ? refOf(r) : HIDDEN_REF]);
     return map;
   }
 

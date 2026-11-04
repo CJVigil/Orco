@@ -268,7 +268,7 @@ export class Portfolios {
     const shipped = db
       .prepare(
         `SELECT t.number, t.title, k.links FROM tickets t JOIN ticket_statuses s ON s.id = t.status_id LEFT JOIN tasks k ON k.id = t.task_id
-         WHERE t.project_id = ? AND s.category = 'completed' AND t.completed_at >= ? ORDER BY t.completed_at`,
+         WHERE t.project_id = ? AND t.private = 0 AND s.category = 'completed' AND t.completed_at >= ? ORDER BY t.completed_at`,
       )
       .all(projectId, weekAgo) as { number: number; title: string; links: string | null }[];
     lines.push('', `**Shipped (${shipped.length})**`);
@@ -282,7 +282,7 @@ export class Portfolios {
     const blocked = db
       .prepare(
         `SELECT t.id, t.number, t.title, t.blocked_reason FROM tickets t JOIN ticket_statuses s ON s.id = t.status_id
-         WHERE t.project_id = ? AND s.category NOT IN ${CLOSED} AND (t.blocked_reason != '' OR EXISTS (
+         WHERE t.project_id = ? AND t.private = 0 AND s.category NOT IN ${CLOSED} AND (t.blocked_reason != '' OR EXISTS (
            SELECT 1 FROM ticket_links l JOIN tickets b ON b.id = l.blocker_id JOIN ticket_statuses bs ON bs.id = b.status_id
            WHERE l.blocked_id = t.id AND bs.category NOT IN ${CLOSED})) ORDER BY t.priority DESC, t.number LIMIT 15`,
       )
@@ -332,7 +332,7 @@ export class Portfolios {
     const dueTickets = db
       .prepare(
         `SELECT t.number, t.title, t.due_date FROM tickets t JOIN ticket_statuses s ON s.id = t.status_id
-         WHERE t.project_id = ? AND s.category NOT IN ${CLOSED} AND t.due_date IS NOT NULL AND t.due_date <= ? ORDER BY t.due_date LIMIT 10`,
+         WHERE t.project_id = ? AND t.private = 0 AND s.category NOT IN ${CLOSED} AND t.due_date IS NOT NULL AND t.due_date <= ? ORDER BY t.due_date LIMIT 10`,
       )
       .all(projectId, nextWeek) as { number: number; title: string; due_date: string }[];
     if (due.length || dueTickets.length) {

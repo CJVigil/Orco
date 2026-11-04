@@ -5140,3 +5140,25 @@ button.recent-link {
   align-items: center;
   gap: 0.25rem;
 }
+
+/* Private tickets and moving them (#97) */
+.private-mark {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.private-mark .svg-icon {
+  width: 0.9em;
+  height: 0.9em;
+}
+
+.detail-access {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.detail-access select {
+  width: auto;
+}
