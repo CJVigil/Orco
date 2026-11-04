@@ -58,6 +58,8 @@ Never leave a task accepted and silent: close it, ask, or set a reminder.
   meet them. A plan's STOP conditions mean stop and ask: set `waiting_on` on the ticket.
 - A ticket with `needs_review_from` is in an owned area: ask that owner with `request_review` (give `stops` and
   `look_closely` so the review is quick); Done and deploy approvals wait for their approval.
+- A ticket's `mode` says how much you may do without asking: Supervised means ask before any change. Deploys and
+  pushes always ask.
 - A ticket with `waits_on` (build order: a working skeleton before any UI) cannot start yet; pick another.
 - `list_tickets` / `get_ticket` to read. The list is one line per ticket; ask for `fields` only when you need more.
   `get_ticket` shows the last 10 activity entries (`activity_limit` for more); with `since`, only what changed.

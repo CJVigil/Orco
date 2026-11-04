@@ -1683,6 +1683,21 @@ export function createApp(store: Store, options: AppOptions = {}) {
   api.get('/projects/:name/spend', (req, res) => {
     res.json(store.controls.projectSpend(req.participant!, String(req.params.name), optionalInt(req.query.days) ?? 7));
   });
+  // Permission modes (#119): a ticket's, a project's default and cap, the org's cap.
+  api.post('/tickets/:ref/mode', (req, res) => {
+    res.json(store.modes.setTicket(req.participant!, String(req.params.ref), req.body?.mode === null ? null : String(req.body?.mode ?? '')));
+  });
+  api.get('/projects/:name/modes', (req, res) => {
+    res.json(store.modes.project(store.visibleProject(req.participant!, String(req.params.name)).id));
+  });
+  api.post('/projects/:name/modes', (req, res) => {
+    const b = req.body ?? {};
+    res.json(store.modes.setProject(req.participant!, String(req.params.name), { defaultMode: str(b.defaultMode, 'defaultMode'), cap: b.cap === null ? null : str(b.cap, 'cap') }));
+  });
+  api.post('/mode-cap', (req, res) => {
+    store.modes.setOrgCap(req.participant!, req.body?.cap === null || req.body?.cap === undefined ? null : String(req.body.cap));
+    res.status(204).end();
+  });
   // Guest links (#117), for people in the project: share, stop, and send or dismiss what guests ask.
   api.post('/tickets/:ref/guest-link', (req, res) => {
     const origin = (options.publicUrl ?? process.env.ORCO_PUBLIC_URL ?? `${req.protocol}://${req.get('host')}${basePath()}`).replace(/\/+$/, '');

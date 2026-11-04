@@ -290,6 +290,7 @@ function formatTicketSummary(t: TicketSummary) {
     blocked: t.blocked,
     blocked_by: t.blockedBy,
     blocked_reason: t.blockedReason,
+    mode: `${t.mode.label}${t.mode.cappedBy ? ` (capped by ${t.mode.cappedBy})` : ''}`,
     ...(t.waitsOn.length ? { waits_on: t.waitsOn } : {}),
     ...(t.needsReviewFrom.length ? { needs_review_from: t.needsReviewFrom, note_on_review: 'Ask an owner with request_review (stops and look_closely help them); Done and deploy approvals wait for it.' } : {}),
     criteria: t.criteria.total ? `${t.criteria.done}/${t.criteria.total}` : null,

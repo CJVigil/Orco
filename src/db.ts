@@ -1216,6 +1216,12 @@ export const MIGRATIONS = [
     decided_by INTEGER REFERENCES participants(id),
     created_at INTEGER NOT NULL
   );
+  `,  // 54: permission modes per ticket, project defaults and caps (#119).
+  `
+  ALTER TABLE tickets ADD COLUMN mode TEXT;
+  ALTER TABLE projects ADD COLUMN default_mode TEXT NOT NULL DEFAULT 'supervised';
+  ALTER TABLE projects ADD COLUMN mode_cap TEXT;
+  ALTER TABLE projects ADD COLUMN mode_cap_by INTEGER REFERENCES participants(id);
   `,
 ];
 

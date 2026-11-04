@@ -1,3 +1,4 @@
+import type { ModeInfo } from './modes.js';
 import type { GuestRequest } from './guests.js';
 import type { OrderRule } from './order.js';
 import type { ScopeStatus } from './scope.js';
@@ -138,6 +139,8 @@ export interface TicketSummary {
   id: number;
   /** Seen only by the people on it, project admins and their agents (#97). */
   private: boolean;
+  /** How much its agent may do on its own (#119). */
+  mode: ModeInfo;
   /** What a not-yet-started ticket waits on under the build order rules (#109), like ["Skeleton"]. */
   waitsOn: string[];
   /** Owners whose approving review an open ticket in an owned area still needs (#111), like ["ana (Infrastructure)"]. */
@@ -2012,6 +2015,7 @@ export class Tickets {
         milestone: row.milestone_id === null ? null : { id: row.milestone_id, name: row.milestone! },
         cycle: row.cycle_id === null ? null : { id: row.cycle_id, number: row.cycle_number! },
         private: row.private === 1,
+        mode: this.store.modes.forTicket(row.id),
         waitsOn: waitsOn(row),
         needsReviewFrom: ownedProjects.has(row.project_id) && row.category !== 'completed' && row.category !== 'canceled' ? this.store.owners.waitingFor(row.id) : [],
         folder: row.folder_id === null ? null : { id: row.folder_id, name: row.folder!, emoji: row.folder_emoji },

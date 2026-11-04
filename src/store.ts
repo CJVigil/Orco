@@ -1,3 +1,4 @@
+import { Modes } from './modes.js';
 import { Guests } from './guests.js';
 import { Incidents } from './incidents.js';
 import { CheckedRules } from './rules.js';
@@ -276,6 +277,7 @@ export class Store {
   readonly rules: CheckedRules;
   readonly incidents: Incidents;
   readonly guests: Guests;
+  readonly modes: Modes;
   readonly questions: Questions;
   readonly notes: Notes;
   readonly flags: Flags;
@@ -331,6 +333,7 @@ export class Store {
     this.rules = new CheckedRules(this);
     this.incidents = new Incidents(this);
     this.guests = new Guests(this);
+    this.modes = new Modes(this);
     this.questions = new Questions(this);
     this.notes = new Notes(this);
     this.flags = new Flags(this);

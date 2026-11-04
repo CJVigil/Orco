@@ -945,9 +945,32 @@ export function createTickets(ctx) {
             }
           },
         });
+    // Permission mode (#119): how much the agent may do without asking; a cap stops broader ones.
+    const mode = el(
+      'select',
+      {
+        class: 'ghost small',
+        'aria-label': 'Permission mode',
+        title: ticket.mode?.cappedBy ? `Capped by ${ticket.mode.cappedBy}` : 'How much its agent may do without asking. Deploys and pushes always ask.',
+        onchange: (event) =>
+          void api(`/tickets/${encodeURIComponent(ticket.ref)}/mode`, { method: 'POST', body: { mode: event.target.value || null } }).then(
+            () => openTicket(ticket.ref, { refresh: true, force: true }),
+            (err) => (notify(err.message), void openTicket(ticket.ref, { refresh: true, force: true })),
+          ),
+      },
+      [
+        ['', `Project default (${ticket.mode?.source === 'project' ? ticket.mode.label : 'its default'})`],
+        ['supervised', 'Supervised: ask before changes'],
+        ['auto_edits', 'Auto-accept edits'],
+        ['auto', 'Auto: risky things ask'],
+        ['full', 'Full access'],
+      ].map(([value, text]) => el('option', { value, text, selected: (ticket.mode?.source === 'ticket' ? ticket.mode.mode : '') === value ? true : null })),
+    );
     return el(
       'div',
       { class: 'detail-access small' },
+      mode,
+      ticket.mode?.cappedBy ? el('span', { class: 'muted', text: `${ticket.mode.label}, capped by ${ticket.mode.cappedBy}` }) : null,
       guest,
       el('button', {
         class: 'ghost small',
@@ -988,6 +1011,7 @@ export function createTickets(ctx) {
       stateLine(ticket),
       el('div', { class: 'ticket-card-top' }, el('span', { class: 'ticket-ref', text: ticket.ref }), ticket.private ? el('span', { class: 'private-mark', title: 'Private: only the people on it and project admins see it', 'aria-label': 'Private' }, icon('lock')) : null, ticket.assignee ? avatar(ticket.assignee.name, ticket.assignee.kind) : null),
       el('div', { class: 'ticket-title', text: ticket.title }),
+      ticket.mode && ticket.mode.mode !== 'supervised' ? el('div', { class: 'mode-line small', title: ticket.mode.cappedBy ? `Capped by ${ticket.mode.cappedBy}` : 'How much its agent may do without asking', text: ticket.mode.label }) : null,
       ticket.needsReviewFrom?.length ? el('div', { class: 'waits-on small', title: 'An owned area: Done and deploys wait for an approving review', text: `Needs review from ${ticket.needsReviewFrom.join(' and ')}` }) : null,
       ticket.waitsOn?.length ? el('div', { class: 'waits-on small', title: 'Build order rule: it starts once this is done', text: `Waits on ${ticket.waitsOn.join(' and ')}` }) : null,
       nextStepLine(ticket),

@@ -209,6 +209,11 @@ export class Approvals {
     const warning = this.store.windows.check(actor, room.projectId, `${actionKind ?? ''}\n${summary}\n${details ?? ''}`, input.override);
     // Checked rules (#113): a request whose command or diff matches one is refused, naming it.
     this.store.rules.enforce(actor, 'approval', `${actionKind ?? ''}\n${summary}\n${details ?? ''}\n${Array.isArray(input.scope) ? input.scope.join('\n') : (input.scope ?? '')}`, room.ref, room.projectId);
+    // The ticket's permission mode (#119): what it allows goes ahead, on the record; deploys always ask.
+    if (actor.kind === 'agent' && ticket) {
+      const allowed = this.store.modes.allows(ticket.id, `${actionKind ?? ''}\n${summary}\n${details ?? ''}`);
+      if (allowed.yes) return this.modeApprove(actor, room, ticket, actionKind, summary, details, scope, allowed.info.label);
+    }
     const approver = mode === 'owner' ? this.store.participantById(actor.ownerId!) : null;
     const notify = approver ? [approver.name] : this.deciders(actor, room).map((p) => p.name);
     const ping = notify.length ? `${notify.map((n) => `@${n}`).join(' ')} ` : '';
@@ -352,6 +357,22 @@ export class Approvals {
   }
 
   /** A request covered by a standing approval: recorded and approved at once, without pinging anyone. */
+  private modeApprove(actor: Participant, room: Room, ticket: { id: number; ref: string }, actionKind: string | null, summary: string, details: string | null, scope: string | null, label: string): Approval {
+    const note = `Approved without asking: ${ticket.ref} is in ${label} mode.`;
+    let id = 0;
+    this.store.post(actor, room.ref, `Approved without asking on ${ticket.ref}: ${summary}\n${note}`, undefined, {
+      onInsert: (messageId) => {
+        id = this.insert('action', room, messageId, actor, actor.ownerId, summary, details, 60_000);
+        this.store.db
+          .prepare('UPDATE approvals SET state = ?, note = ?, decided_at = ?, ticket_id = ?, scope = ?, action_kind = ? WHERE id = ?')
+          .run('approved', note, this.store.now(), ticket.id, scope, actionKind, id);
+      },
+    });
+    this.store.tickets.note(ticket.id, actor, 'change', null, { changes: [{ field: 'approval', from: null, to: `#${id} approved by the ${label} mode: ${summary}` }] });
+    this.store.audit.record(actor, 'approval.mode', { projectId: room.projectId, subject: `approval:${id}`, detail: { mode: label, ticket: ticket.ref, summary } });
+    return this.changed(id);
+  }
+
   private autoApprove(
     actor: Participant,
     room: Room,
