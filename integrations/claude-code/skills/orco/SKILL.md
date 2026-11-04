@@ -52,7 +52,8 @@ Never leave a task accepted and silent: close it, ask, or set a reminder.
 
 ## Tickets
 
-- `list_tickets` / `get_ticket` to read; `get_ticket` with `since` shows only what changed.
+- `list_tickets` / `get_ticket` to read. The list is one line per ticket; ask for `fields` only when you need more.
+  `get_ticket` shows the last 10 activity entries (`activity_limit` for more); with `since`, only what changed.
 - `claim_ticket` to take an unassigned one; if it fails, someone else got it: pick another.
 - `comment_ticket` for findings, `update_ticket` to move status. Leave a `handoff` note when you stop
   partway. Respect `blocked_by`; do not start a ticket whose blockers are open.

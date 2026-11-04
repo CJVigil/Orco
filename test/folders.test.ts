@@ -108,7 +108,7 @@ describe('folders for tickets (#91)', () => {
     assert.ok(folders.some((f) => f.name === 'Vendors'));
     const created = await call('create_ticket', { project: 'ops', title: 'Renew the SOC 2 report', folder: 'Compliance' });
     const ref = /OPS-\d+/.exec(created)![0];
-    const listed = JSON.parse(await call('list_tickets', { project: 'ops', folder: 'Compliance', include_closed: true })).tickets as { ref: string; folder: string }[];
+    const listed = JSON.parse(await call('list_tickets', { project: 'ops', folder: 'Compliance', include_closed: true, fields: 'ref,folder' })).tickets as { ref: string; folder: string }[];
     assert.ok(listed.length >= 2 && listed.every((t) => t.folder === 'Compliance'), 'only that folder');
     assert.ok(listed.some((t) => t.ref === ref));
     await call('update_ticket', { ticket: ref, folder: 'Vendors' });

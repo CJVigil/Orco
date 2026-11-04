@@ -125,7 +125,41 @@ function annotate(tool: string): ToolAnnotations {
 type ToolResult = { content: { type: 'text'; text: string }[]; isError?: boolean };
 
 function ok(value: unknown): ToolResult {
-  return { content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }] };
+  if (typeof value === 'string') return { content: [{ type: 'text', text: value }] };
+  // Indentation reads well in small replies; in long lists it is a third of the tokens (#103).
+  const pretty = JSON.stringify(value, null, 2);
+  return { content: [{ type: 'text', text: pretty.length > 4000 ? JSON.stringify(value) : pretty }] };
+}
+
+/** The fields asked for, from a field list ("ref,title" or ["ref", "title"]); unknown names are skipped. */
+const FIELDS = z
+  .union([z.string(), z.array(z.string())])
+  .optional()
+  .describe('Only these fields, like "ref,title,status"; "all" for every field');
+
+function pick<T extends Record<string, unknown>>(row: T, fields: string[] | null): Partial<T> {
+  if (!fields) return row;
+  return Object.fromEntries(fields.filter((f) => f in row).map((f) => [f, row[f]])) as Partial<T>;
+}
+
+function fieldList(raw: string | string[] | undefined, fallback: string[] | null): string[] | null {
+  if (raw === undefined) return fallback;
+  const list = (Array.isArray(raw) ? raw : raw.split(',')).map((f) => f.trim()).filter(Boolean);
+  return list.includes('all') ? null : list;
+}
+
+/** A ticket row for lists: what an agent needs to pick one (#103). Nulls and empties are left out. */
+function compactTicket(t: TicketSummary) {
+  return {
+    ref: t.ref,
+    title: t.title,
+    status: t.status.name,
+    ...(t.assignee ? { assignee: t.assignee.name } : {}),
+    ...(t.nextStep ? { next_step: t.nextStep.text } : {}),
+    ...(t.folder ? { folder: t.folder.name } : {}),
+    ...(t.blocked ? { blocked: true } : {}),
+    ...(t.waitingOn ? { waiting_on: t.waitingOn.person } : {}),
+  };
 }
 
 function formatMessage(message: Message) {
@@ -707,10 +741,14 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         project: z.string().optional(),
         kinds: z.array(z.enum(SEARCH_KINDS)).optional().describe('Default all'),
         limit: z.number().int().min(1).max(100).optional().describe('Default 30'),
+        fields: FIELDS.describe('Only these fields of each hit, like "kind,ref,title,snippet"'),
       }),
     },
-    async ({ query, project, kinds, limit }) =>
-      run(() => ({ note: UNTRUSTED_NOTE, results: searchAll(store, me, query, { project, kinds, limit }) })),
+    async ({ query, project, kinds, limit, fields }) =>
+      run(() => ({
+        note: UNTRUSTED_NOTE,
+        results: searchAll(store, me, query, { project, kinds, limit }).map((h) => pick(h as unknown as Record<string, unknown>, fieldList(fields, null))),
+      })),
   );
 
   // Only where an org admin connected Onyx; the search leaves Orco, so it is marked open-world.
@@ -1004,9 +1042,10 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         scope: z.enum(['assigned', 'requested', 'room']).optional().describe('Default "assigned"'),
         room: z.string().optional().describe('Required when scope is "room"'),
         include_closed: z.boolean().optional(),
+        fields: FIELDS,
       }),
     },
-    async ({ scope, room, include_closed }) =>
+    async ({ scope, room, include_closed, fields }) =>
       run(() => {
         const which = scope ?? 'assigned';
         if (which === 'room' && !room) throw new OrcoError('invalid', 'Pass room when scope is "room"');
@@ -1018,7 +1057,8 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
             open: !include_closed,
           });
         store.tasks.markSeen(me, tasks.filter((t) => t.assignee === me.name).map((t) => t.id));
-        return tasks.map(formatTask);
+        const only = fieldList(fields, null);
+        return tasks.map((t) => pick(formatTask(t) as Record<string, unknown>, only));
       }),
   );
 
@@ -1196,12 +1236,14 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         blocked: z.boolean().optional().describe('Only blocked (true) or only unblocked (false) tickets'),
         query: z.string().optional().describe('Words in the title or description, or a ticket ref'),
         limit: z.number().int().min(1).max(500).optional(),
+        fields: FIELDS.describe(
+          'Default: one line per ticket (ref, status, title, assignee, folder, blocked, waiting on, next step). Name fields for JSON rows, like "ref,title,priority,labels,due", or "all"',
+        ),
       }),
     },
     async (args) =>
-      run(() => ({
-        note: UNTRUSTED_NOTE,
-        tickets: store.tickets
+      run(() => {
+        const tickets = store.tickets
           .list(me, {
             project: args.project,
             assignee: args.assignee,
@@ -1215,9 +1257,18 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
             blocked: args.blocked,
             query: args.query,
             limit: args.limit,
-          })
-          .map(formatTicketSummary),
-      })),
+          });
+        const fields = fieldList(args.fields, []);
+        // The default is one line per ticket: ref, status, title, then only what is set (#103).
+        if (fields?.length === 0) {
+          const lines = tickets.map((t) => {
+            const c = compactTicket(t);
+            return `${c.ref} [${c.status}] ${c.title}${c.assignee ? ` @${c.assignee}` : ''}${c.folder ? ` (${c.folder})` : ''}${c.blocked ? ' BLOCKED' : ''}${c.waiting_on ? ` waiting on ${c.waiting_on}` : ''}${c.next_step ? ` | next: ${c.next_step}` : ''}`;
+          });
+          return `${UNTRUSTED_NOTE}\n${tickets.length} tickets (fields: "all" or a list like "ref,priority,labels" for more):\n${lines.join('\n')}`;
+        }
+        return { note: UNTRUSTED_NOTE, tickets: tickets.map((t) => pick(formatTicketSummary(t) as Record<string, unknown>, fields)) };
+      }),
   );
 
   server.registerTool(
@@ -1230,10 +1281,22 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
       inputSchema: z.object({
         ticket: z.string().describe('Like API-12'),
         since: z.number().int().optional().describe('Only activity after this id; unchanged description and handoff are elided'),
+        activity_limit: z.number().int().min(0).max(1000).optional().describe('How many of the latest activity entries (default 10; with since, all new ones)'),
+        fields: FIELDS,
       }),
     },
-    async ({ ticket, since }) =>
-      run(() => ({ note: UNTRUSTED_NOTE, ticket: formatTicket(store.tickets.get(me, ticket, since), since) })),
+    async ({ ticket, since, activity_limit, fields }) =>
+      run(() => {
+        const full = formatTicket(store.tickets.get(me, ticket, since), since);
+        const limit = activity_limit ?? (since === undefined ? 10 : 1000);
+        const earlier = Math.max(0, full.activity.length - limit);
+        const trimmed = {
+          ...full,
+          activity: limit === 0 ? [] : full.activity.slice(-limit),
+          ...(earlier ? { earlier_activity: `${earlier} earlier entries left out; pass activity_limit for more` } : {}),
+        };
+        return { note: UNTRUSTED_NOTE, ticket: pick(trimmed as Record<string, unknown>, fieldList(fields, null)) };
+      }),
   );
 
   server.registerTool(

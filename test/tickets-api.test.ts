@@ -149,7 +149,9 @@ describe('tickets over MCP', () => {
     assert.equal(got.json.ticket.status, 'Todo');
     assert.equal(got.json.ticket.activity.at(-1).text, 'Seen twice today');
     const listed = await call(client, 'list_tickets', { project: 'api', label: 'bug' });
-    assert.ok(listed.json.tickets.some((t: { ref: string }) => t.ref === ref));
+    assert.ok(listed.text.split('\n').some((line) => line.startsWith(`${ref} [`)), 'one line per ticket by default');
+    const rows = await call(client, 'list_tickets', { project: 'api', label: 'bug', fields: 'all' });
+    assert.ok(rows.json.tickets.some((t: { ref: string }) => t.ref === ref));
     const plan = await call(client, 'project_plan', { project: 'api' });
     assert.ok(plan.json.statuses.some((s: { name: string }) => s.name === 'In Review'));
     const denied = await call(client, 'update_ticket', { ticket: ref, status: 'Shipped' });
