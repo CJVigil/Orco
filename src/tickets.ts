@@ -228,7 +228,22 @@ export interface Ticket extends TicketSummary {
   }[];
 }
 
+/** A link to the agent session that did the work (#105): https only, stored as a link, never content. */
+export function sessionLink(raw: string | null | undefined): string | null {
+  if (!raw?.trim()) return null;
+  let url: URL;
+  try {
+    url = new URL(raw.trim());
+  } catch {
+    throw new OrcoError('invalid', 'session_url is a link, like https://claude.ai/code/session_…');
+  }
+  if (url.protocol !== 'https:' || url.href.length > 500) throw new OrcoError('invalid', 'session_url is an https link of at most 500 characters');
+  return url.href;
+}
+
 export interface TicketInput {
+  /** The agent session behind this change (#105), shown as "Open session" on its entry. */
+  sessionUrl?: string | null;
   /** Uploads (POST /api/ticket-files) to attach to the ticket (#98). */
   attachmentIds?: number[];
   /** Private (#97): only its creator, assignee, waiting-on person, project admins and their agents see it. */
@@ -918,7 +933,8 @@ export class Tickets {
       links.apply?.();
       if (files.length) this.store.ticketFiles.attach(row.id, null, files);
       if (!sets.length) this.store.db.prepare(`UPDATE tickets SET updated_at = ${NOW_SQL} WHERE id = ?`).run(row.id);
-      if (changes.length) this.activity(row.id, actor, 'change', null, { changes });
+      const session = sessionLink(input.sessionUrl);
+      if (changes.length) this.activity(row.id, actor, 'change', null, { changes, ...(session ? { session } : {}) });
       this.store.commit();
     } catch (err) {
       this.store.rollback();
@@ -1037,7 +1053,7 @@ export class Tickets {
     };
   }
 
-  comment(actor: Participant, ref: string, body: string, attachmentIds: number[] = []): Ticket {
+  comment(actor: Participant, ref: string, body: string, attachmentIds: number[] = [], sessionUrl?: string | null): Ticket {
     const row = this.byRef(actor, ref);
     this.store.assertWrite(actor, row.project_id);
     const text = body.trim();
@@ -1045,7 +1061,9 @@ export class Tickets {
     if (text.length > MAX_COMMENT) throw new OrcoError('invalid', `Comment is over ${MAX_COMMENT} characters`);
     if (attachmentIds.length) this.store.ticketFiles.check(actor, row.project_id, attachmentIds);
     this.store.checkRate(actor, 'post');
-    const activityId = this.activity(row.id, actor, 'comment', text || null, attachmentIds.length ? { files: attachmentIds } : null);
+    const session = sessionLink(sessionUrl);
+    const extra = { ...(attachmentIds.length ? { files: attachmentIds } : {}), ...(session ? { session } : {}) };
+    const activityId = this.activity(row.id, actor, 'comment', text || null, Object.keys(extra).length ? extra : null);
     if (attachmentIds.length) this.store.ticketFiles.attach(row.id, activityId, attachmentIds);
     this.store.db.prepare(`UPDATE tickets SET updated_at = ${NOW_SQL} WHERE id = ?`).run(row.id);
     this.store.audit.record(actor, 'ticket.comment', { projectId: row.project_id, subject: `ticket:${refOf(row)}`, detail: { text } });

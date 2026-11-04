@@ -12,6 +12,11 @@ const dataDir = process.env.CLAUDE_PLUGIN_DATA || join(process.env.HOME || proce
 const stateFile = join(dataDir, 'hook-state.json');
 // PostToolUse fires after every tool: look at most this often there.
 const TOOL_EVERY_MS = 20_000;
+// The link to this session (#105): a Claude Code session on the web has one; ORCO_SESSION_URL overrides.
+const remote = process.env.CLAUDE_CODE_REMOTE_SESSION_ID || '';
+const sessionUrl = process.env.ORCO_SESSION_URL || (remote ? `https://claude.ai/code/session_${remote.replace(/^cse_/, '')}` : '');
+// Orco tools that take session_url, by their name without the plugin prefix.
+const SESSION_TOOLS = /(?:^|__)(comment_ticket|update_ticket|update_task)$/;
 
 async function main() {
   if (!base || !token) return;
@@ -26,11 +31,20 @@ async function main() {
   const session = input.session_id || 'default';
   const mine = state[session] ?? {};
 
+  if (event === 'PreToolUse') {
+    // Fill in session_url on Orco writes, so a comment links back to the session that wrote it.
+    const name = input.tool_name || '';
+    if (!sessionUrl || !SESSION_TOOLS.test(name) || !input.tool_input || input.tool_input.session_url) return;
+    if (name.endsWith('update_task') && !['done', 'failed'].includes(input.tool_input.state)) return;
+    process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput: { ...input.tool_input, session_url: sessionUrl } } }));
+    return;
+  }
   if (event === 'SessionStart') {
     const text = await get('/api/my-work?format=brief', 'text');
     const now = new Date().toISOString();
     save(state, session, { cursor: now, checked: Date.now() });
-    if (text) emit(event, text);
+    const link = sessionUrl ? `\nThis session's link: ${sessionUrl} (pass it as session_url when you comment on or hand off a ticket).` : '';
+    if (text || link) emit(event, `${text ?? ''}${link}`.trim());
     return;
   }
   if (event === 'PostToolUse' && mine.checked && Date.now() - mine.checked < TOOL_EVERY_MS) return;

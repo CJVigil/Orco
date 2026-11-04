@@ -68,3 +68,25 @@ describe('Claude Code plugin hooks (#102)', () => {
     assert.ok(Date.now() - t0 < 3000);
   });
 });
+
+describe('links to the Claude session (#105)', () => {
+  it('fills session_url on Orco writes from a web session, and the ticket keeps the link', async () => {
+    const out = await new Promise<string>((resolve, reject) => {
+      const child = execFile(
+        process.execPath,
+        ['integrations/claude-code/hooks/orco-hook.mjs'],
+        { env: { PATH: process.env.PATH, CLAUDE_PLUGIN_OPTION_SERVER_URL: base, CLAUDE_PLUGIN_OPTION_TOKEN: botToken, CLAUDE_PLUGIN_DATA: data, CLAUDE_CODE_REMOTE_SESSION_ID: 'cse_01ABC' } },
+        (err, stdout) => (err ? reject(err) : resolve(stdout)),
+      );
+      child.stdin!.end(JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'mcp__plugin_orco_orco__comment_ticket', tool_input: { ticket: 'SHO-1', text: 'Fixed' } }));
+    });
+    const input = JSON.parse(out).hookSpecificOutput.updatedInput;
+    assert.equal(input.session_url, 'https://claude.ai/code/session_01ABC');
+    const bot = store.participantByName('carlos-bot')!;
+    const t = store.tickets.comment(bot, 'SHO-1', input.text, [], input.session_url);
+    assert.equal((t.activity.at(-1)!.detail as { session: string }).session, 'https://claude.ai/code/session_01ABC');
+    assert.throws(() => store.tickets.comment(bot, 'SHO-1', 'x', [], 'javascript:alert(1)'), /session_url/);
+    const plain = store.tickets.comment(bot, 'SHO-1', 'No link');
+    assert.equal(plain.activity.at(-1)!.detail, null, 'entries without one stay as they were');
+  });
+});

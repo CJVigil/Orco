@@ -3,14 +3,48 @@
     "SessionStart": [
       {
         "matcher": "startup|resume|compact|clear",
-        "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/orco-hook.mjs\" SessionStart", "timeout": 5 }]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/orco-hook.mjs\" SessionStart",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
-      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/orco-hook.mjs\" UserPromptSubmit", "timeout": 5 }] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/orco-hook.mjs\" UserPromptSubmit",
+            "timeout": 5
+          }
+        ]
+      }
     ],
     "PostToolUse": [
-      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/orco-hook.mjs\" PostToolUse", "timeout": 5 }] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/orco-hook.mjs\" PostToolUse",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "mcp__plugin_orco_orco__(comment_ticket|update_ticket|update_task)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/orco-hook.mjs\" PreToolUse",
+            "timeout": 5
+          }
+        ]
+      }
     ]
   }
 }

@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import { sessionLink } from './tickets.js';
 import { McpServer, ResourceTemplate, type ToolAnnotations } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import type { Presence } from './presence.js';
@@ -345,6 +346,7 @@ function formatWritten(result: Written, full?: boolean) {
 }
 
 const ticketFields = {
+  session_url: z.string().optional().describe('Your Claude session link, so people can open the session behind this change'),
   attachment_ids: z.array(z.number().int()).max(10).optional().describe('Files to attach: upload each first with POST /api/ticket-files?project=<name>&name=<file> (your token, raw bytes)'),
   private: z.boolean().optional().describe('Private: only its creator, assignee, waiting_on person and project admins (and their agents) see it. Set by people only. Never quote a private ticket in a shared room.'),
   title: z.string().max(MAX_TITLE).optional(),
@@ -443,6 +445,7 @@ function ticketInput(args: TicketArgs): TicketInput {
     waitingOptions: args.waiting_options,
     private: args.private,
     attachmentIds: args.attachment_ids,
+    sessionUrl: args.session_url,
   };
 }
 
@@ -1023,6 +1026,7 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         state: z.enum(['accepted', 'declined', 'done', 'failed', 'cancelled']),
         note: z.string().optional().describe('Result or reason, in a few sentences'),
         links: z.array(z.object({ url: z.string(), title: z.string().optional() })).max(10).optional(),
+        session_url: z.string().optional().describe('Your Claude session link: added to the result as "Claude session" when you finish'),
         followups: z
           .array(z.object({ title: z.string(), description: z.string().optional() }))
           .max(10)
@@ -1031,9 +1035,12 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         steps: STEPS.optional(),
       }),
     },
-    async ({ task_id, state, note, links, followups, steps }) =>
+    async ({ task_id, state, note, links, followups, steps, session_url }) =>
       run(async () => {
-        const task = store.tasks.update(me, task_id, state, note, { links, followups, steps });
+        // The session that did the work goes with the result as one more link (#105).
+        const session = state === 'done' || state === 'failed' ? sessionLink(session_url) : null;
+        const withSession = session && !(links ?? []).some((l) => l.url === session) ? [...(links ?? []), { url: session, title: 'Claude session' }] : links;
+        const task = store.tasks.update(me, task_id, state, note, { links: withSession, followups, steps });
         // On accepting, the agent gets what the company's knowledge base says about the task.
         const knowledge = state === 'accepted' ? await store.onyx.brief(me, task) : null;
         const note_ = writingNote(note);
@@ -1386,11 +1393,12 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         ticket: z.string(),
         text: z.string().max(MAX_COMMENT),
         attachment_ids: z.array(z.number().int()).max(10).optional().describe('Files uploaded with POST /api/ticket-files to attach to the comment'),
+        session_url: z.string().optional().describe('Your Claude session link, shown as "Open session" on the comment'),
       }),
     },
-    async ({ ticket, text, attachment_ids }) =>
+    async ({ ticket, text, attachment_ids, session_url }) =>
       run(() => {
-        const t = store.tickets.comment(me, ticket, text, attachment_ids ?? []);
+        const t = store.tickets.comment(me, ticket, text, attachment_ids ?? [], session_url);
         const note = writingNote(text);
         return `Commented on ${t.ref}${note ? `\nNote: ${note}` : ''}`;
       }),

@@ -217,6 +217,7 @@ function ticketInput(body: Record<string, unknown> | undefined): TicketInput {
     waitingOptions: b.waitingOptions === null ? null : list(b.waitingOptions, 'waitingOptions', 'string'),
     private: b.private === undefined ? undefined : b.private === true,
     attachmentIds: list(b.attachmentIds, 'attachmentIds', 'number'),
+    sessionUrl: typeof b.sessionUrl === 'string' ? b.sessionUrl : undefined,
   };
 }
 
@@ -1366,7 +1367,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
   api.post('/tickets/:ref/comments', (req, res) => {
     const ids = req.body?.attachmentIds;
     if (ids !== undefined && (!Array.isArray(ids) || ids.some((v) => !Number.isInteger(v)))) throw new OrcoError('invalid', 'attachmentIds must be a list of ids');
-    res.status(201).json(store.tickets.comment(req.participant!, String(req.params.ref), str(req.body?.text, 'text') ?? '', ids ?? []));
+    res.status(201).json(store.tickets.comment(req.participant!, String(req.params.ref), str(req.body?.text, 'text') ?? '', ids ?? [], str(req.body?.sessionUrl, 'sessionUrl')));
   });
   api.post('/tickets/:ref/claim', (req, res) => {
     res.json(store.tickets.claim(req.participant!, String(req.params.ref), { start: req.body?.start !== false }));

@@ -730,6 +730,13 @@ export function createTickets(ctx) {
 
   let dragging = null;
 
+  /** "Open session": the agent session behind an entry (#105); entries without one stay as they were. */
+  function sessionLinkFor(a) {
+    const url = a.detail?.session;
+    if (typeof url !== 'string' || !/^https:\/\//.test(url)) return null;
+    return el('a', { class: 'session-link small', href: url, target: '_blank', rel: 'noopener noreferrer', title: url, text: 'Open session' });
+  }
+
   /* Files on tickets (#98) */
 
   /** The files a comment came with, as small chips (the strip above has them all). */
@@ -1692,6 +1699,7 @@ export function createTickets(ctx) {
             el('div', { class: 'comment-head' }, el('strong', { text: who }), el('span', { class: `who-chip ${person ? 'person' : 'agent'}`, text: person ? 'Person' : a.actorKind === 'agent' ? 'Agent' : 'Orco' }), el('span', { class: 'muted small', text: ago(a.createdAt) })),
             a.body ? (person ? el('div', { class: 'md ticket-text' }, richText(a.body, { headline: true })) : folded(a.body, { firstLineOnly: true, headline: true })) : null,
             commentFiles(ticket, a),
+            sessionLinkFor(a),
           ),
         );
       }
@@ -1706,7 +1714,7 @@ export function createTickets(ctx) {
         'li',
         { class: 'activity-event' },
         el('span', { class: 'activity-dot', 'aria-hidden': 'true' }),
-        el('span', {}, a.actor ? [el('strong', { text: who }), ` ${text}`] : `${text[0].toUpperCase()}${text.slice(1)}`, a.kind === 'task' && a.body ? el('span', { class: 'activity-note', text: ` — ${a.body}` }) : null, el('span', { class: 'muted small', text: ` · ${ago(a.createdAt)}` })),
+        el('span', {}, a.actor ? [el('strong', { text: who }), ` ${text}`] : `${text[0].toUpperCase()}${text.slice(1)}`, a.kind === 'task' && a.body ? el('span', { class: 'activity-note', text: ` — ${a.body}` }) : null, el('span', { class: 'muted small', text: ` · ${ago(a.createdAt)}` }), sessionLinkFor(a)),
       );
     });
     const box = el('textarea', { rows: '2', placeholder: 'Leave a comment, or / for commands', 'aria-label': 'Comment' });

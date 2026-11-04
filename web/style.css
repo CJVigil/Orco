@@ -5347,3 +5347,15 @@ button.recent-link {
 .portfolio-body:has(.pf-table) {
   overflow-x: auto;
 }
+
+/* #105: the agent session behind a comment or change */
+.session-link {
+  margin-left: 0.4rem;
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.session-link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}

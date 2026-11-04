@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Agent comments, ticket changes (handoffs included) and task results take `session_url`, the Claude session that did the work; the ticket shows a small Open session link on those entries, and a finished task lists it with its links. The Claude Code plugin fills it in on web sessions. Orco keeps the link only, never transcript content.
+
 - Tickets are MCP resources (`orco://ticket/SHO-12`: description, handoff, criteria, files and the latest comments), so Claude Code can @-mention them; an agent's own open tickets are listed and refs complete. `start_ticket` claims a ticket (or keeps it if it is yours), sets it In Progress and returns it with the project notes in one call. Plugin commands `/orco:ticket <ref>` (read only) and `/orco:start <ref>`.
 
 - Tool use: every MCP call is counted per agent, tool and day (calls, errors by code, reply size, time), kept on this server for 90 days and never sent anywhere. Org admins see it in Portfolio > Tool use (`GET /api/tool-usage`), biggest replies first. Migration 42.
