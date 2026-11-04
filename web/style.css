@@ -5692,3 +5692,25 @@ button.recent-link {
 .mode-line {
   color: var(--muted);
 }
+
+/* Voice input (#122) */
+.voice-button.recording {
+  color: var(--danger);
+  animation: voice-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes voice-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.voice-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.25rem;
+}
+
+.voice-row > textarea {
+  flex: 1;
+}

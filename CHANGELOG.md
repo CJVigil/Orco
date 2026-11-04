@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Voice input: a mic beside the message and thread boxes, ticket comments, the new-ticket description and question answers. Speech goes into the draft only; nothing is sent or created until you press Send. A transcript that arrives after the draft was edited or replaced is dropped, not written over it, and Escape cancels a recording. Uses the browser's speech recognition (Chrome, Edge, Safari); without it no mic appears. Server-side transcription is not included.
+
 - Handoff context packs: an agent picking up a ticket (assigned, reassigned, or after a restart or compaction) reads one budgeted selection of its history with `ticket_pack`: the original request verbatim, the handoff note, open criteria and blockers, task outcomes and answers (partial work from failed tasks too), and the newest comments, each with author and time, in order. It says what it left out and how to fetch it; the request is never shortened. The pack size is per agent (its owner sets it, `POST /api/agents/:name/pack-size`). `start_ticket` includes it, and a ticket's task tells the agent to read it first.
 
 - Policies as a file: `ORCO_POLICY_FILE` names a versioned JSON policy for the org and each project (scope gate, build order, Done checklists, area owners, deploy windows, checked rules, permission modes, guest links), kept in git. It sets defaults, `lock` makes settings "managed by policy" in the app, and a project can only tighten the org. `orco policy check <file>` prints what it will do or exactly what is wrong; the server applies it on start (a bad file stops the start) and on `orco policy reload`; `orco policy show` prints what is in force and where each value came from (file, app or default). Example: `docs/policy.example.json`.

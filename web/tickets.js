@@ -2,6 +2,7 @@
 // Builds DOM through the `el` helper from app.js; ticket text is untrusted and only ever set as text.
 
 import { parseCommand } from './commands.js';
+import { voiceButton } from './voice.js';
 
 const TABS = [
   ['board', 'Board'],
@@ -1950,6 +1951,7 @@ export function createTickets(ctx) {
         'div',
         { class: 'row-end' },
         picker,
+        voiceButton(box, el, icon, (text) => notify(text)),
         el('button', { class: 'ghost small', type: 'button', title: 'Attach files: PDF, Word, Excel, PowerPoint, CSV, text or images, up to 25 MB (or drop them on the ticket)', 'aria-label': 'Attach files', onclick: () => picker.click() }, icon('paperclip')),
         el('button', { class: 'primary small', type: 'button', text: 'Comment', onclick: () => void send() }),
       ),
@@ -2040,6 +2042,7 @@ export function createTickets(ctx) {
     const description = el('textarea', { name: 'description', rows: '5', placeholder: 'Description (Markdown)', 'aria-label': 'Description' });
     // A prompt link (#118) fills the draft; nothing is created until the reader presses Create.
     title.value = (defaults.title ?? '').slice(0, 200);
+    const speak = voiceButton(description, el, icon, (text) => notify(text));
     description.value = (defaults.description ?? '').slice(0, 5000);
     const fields = {
       status: select(defaults.status ?? plan.statuses.find((s) => s.category === 'backlog' || s.category === 'unstarted')?.name, plan.statuses.map((s) => [s.name, s.name]), () => {}, { 'aria-label': 'Status' }),
@@ -2117,7 +2120,7 @@ export function createTickets(ctx) {
       },
       defaults.parent ? el('p', { class: 'muted small', text: `Sub-ticket of ${defaults.parent}` }) : null,
       title,
-      description,
+      el('div', { class: 'voice-row' }, description, speak),
       el('div', { class: 'new-ticket-grid' }, fields.status, fields.priority, fields.assignee, estimate, fields.milestone, fields.cycle, fields.folder),
       labels.length ? el('div', { class: 'label-picker' }, labels) : null,
       el('p', { class: 'muted small', text: 'Assigning an agent starts a task for it right away.' }),

@@ -2,6 +2,7 @@ import { attachMentionAutocomplete, attachSuggest } from './autocomplete.js';
 import { commandSuggestions, parseCommand } from './commands.js';
 import { createPalette } from './palette.js';
 import { icon } from './icons.js';
+import { voiceButton } from './voice.js';
 import { codeChildren, renderMarkdown } from './markdown.js';
 import * as notify from './notify.js';
 import { createGuide } from './guide.js';
@@ -1138,7 +1139,7 @@ function answerBox(question, onDone) {
     'div',
     { class: 'answer-wrap' },
     choices,
-    el('div', { class: 'answer-box' }, input, el('button', { class: 'primary small', type: 'button', text: options.length && question.multiSelect ? 'Send' : 'Answer', onclick: () => void send() })),
+    el('div', { class: 'answer-box' }, input, voiceButton(input, el, icon, (text) => toast(text)), el('button', { class: 'primary small', type: 'button', text: options.length && question.multiSelect ? 'Send' : 'Answer', onclick: () => void send() })),
   );
 }
 
@@ -2596,9 +2597,20 @@ async function loadFreezes() {
   );
 }
 
+/** A mic beside a text box (#122): speech goes in the draft only. */
+function addVoice(box) {
+  const button = voiceButton(box, el, icon, (text) => toast(text));
+  if (button) box.after(button);
+  return button;
+}
+
 function connect() {
   const events = new EventSource('api/events');
   void loadFreezes();
+  if (!$('composer-text').nextElementSibling?.classList.contains('voice-button')) {
+    addVoice($('composer-text'));
+    addVoice($('thread-text'));
+  }
   events.addEventListener('controls', () => void loadFreezes());
   const dot = $('connection');
   events.addEventListener('ready', () => {
