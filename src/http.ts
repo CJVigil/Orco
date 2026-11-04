@@ -1683,6 +1683,21 @@ export function createApp(store: Store, options: AppOptions = {}) {
   api.get('/projects/:name/spend', (req, res) => {
     res.json(store.controls.projectSpend(req.participant!, String(req.params.name), optionalInt(req.query.days) ?? 7));
   });
+  // Policies as a file (#120): what is in force and from where (org admins), reload, and the locked settings.
+  api.get('/policy', (req, res) => {
+    res.json(store.policyFile.show(req.participant!));
+  });
+  api.post('/policy/reload', (req, res) => {
+    const me = req.participant!;
+    if (me.kind !== 'user' || !store.isOrgAdmin(me)) throw new OrcoError('forbidden', 'Only org admins reload the policy');
+    if (!process.env.ORCO_POLICY_FILE) throw new OrcoError('invalid', 'No ORCO_POLICY_FILE is set on this server');
+    const errors = store.policyFile.load();
+    if (errors.length) throw new OrcoError('invalid', `The policy file has problems, nothing changed: ${errors.join('; ')}`);
+    res.json(store.policyFile.show(me));
+  });
+  api.get('/policy/locked', (_req, res) => {
+    res.json({ file: store.policyFile.loadedFrom, locked: store.policyFile.lockedKeys() });
+  });
   // Permission modes (#119): a ticket's, a project's default and cap, the org's cap.
   api.post('/tickets/:ref/mode', (req, res) => {
     res.json(store.modes.setTicket(req.participant!, String(req.params.ref), req.body?.mode === null ? null : String(req.body?.mode ?? '')));

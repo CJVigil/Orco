@@ -42,6 +42,8 @@ export const CLIENT_USAGE = `Client commands (talk to a running server; set ORCO
   forge-poll --repo owner/name --hook URL [--branch main] [--every 60] [--forge github|gitea --api URL]
                                 For an Orco the forge cannot reach: polls the forge (GITHUB_TOKEN or GITEA_TOKEN)
                                 and posts new commits and CI results to a project webhook, so they show on tickets
+  policy show | policy reload   What the server enforces and where each value came from (file, app, default);
+                                reload re-reads ORCO_POLICY_FILE (org admins). policy check <file> needs no server.
   ack <message-id>              Mark your mentions up to that message as handled, without replying
   post <room> <text|-> [--thread ID] [--file PATH]...   Post a message (- reads stdin)
   read <room> [--thread ID] [--limit N]
@@ -551,6 +553,18 @@ export async function runClient(argv: string[], io: ClientIO): Promise<number> {
         }
         const ticket = (await call('GET', `/api/tickets/${enc(need(sub, 'ticket <ref>'))}`)) as Json;
         print(ticket, () => formatTicketDetail(ticket));
+        return 0;
+      }
+      case 'policy': {
+        const what = rest[0];
+        if (what !== 'show' && what !== 'reload') throw new ClientError('Usage: orco policy check <file> | orco policy show | orco policy reload');
+        const shown = (await call(what === 'show' ? 'GET' : 'POST', what === 'show' ? '/api/policy' : '/api/policy/reload')) as Json;
+        print(shown, () =>
+          [
+            shown.file ? `Policy file: ${shown.file} (loaded ${shown.loadedAt})` : 'No policy file loaded (ORCO_POLICY_FILE is not set).',
+            ...(shown.settings as Json[]).map((s) => `${String(s.key).padEnd(28)} ${String(s.value).padEnd(20)} ${s.source}${s.locked ? ', locked' : ''}`),
+          ].join('\n'),
+        );
         return 0;
       }
       case 'api': {

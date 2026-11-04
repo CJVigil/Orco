@@ -85,6 +85,7 @@ export class Scope {
 
   setGateNewProjects(actor: Participant, on: boolean): boolean {
     if (actor.kind !== 'user' || !this.store.isOrgAdmin(actor)) throw new OrcoError('forbidden', 'Only org admins change the scope gate');
+    this.store.policyFile.assertUnlocked('org', 'scopeGate');
     this.store.db.prepare("INSERT INTO org_settings (key, value) VALUES ('scope_gate_new_projects', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value").run(on ? 'on' : 'off');
     this.store.audit.record(actor, 'scope.gate_default', { projectId: null, subject: 'org', detail: { on } });
     return on;
@@ -100,6 +101,7 @@ export class Scope {
   /** Org admins set the template's sections (an empty list restores the built-in one). */
   setSections(actor: Participant, sections: string[]): string[] {
     if (actor.kind !== 'user' || !this.store.isOrgAdmin(actor)) throw new OrcoError('forbidden', 'Only org admins change the scope template');
+    this.store.policyFile.assertUnlocked('org', 'scopeSections');
     const clean = [...new Set(sections.map((s) => s.trim().replace(/\s+/g, ' ')).filter(Boolean))];
     if (clean.length > 20 || clean.some((s) => s.length > 120)) throw new OrcoError('invalid', 'At most 20 sections of 120 characters');
     this.store.db.prepare("INSERT INTO org_settings (key, value) VALUES ('scope_sections', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value").run(JSON.stringify(clean));

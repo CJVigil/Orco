@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "org": {
+    "scopeGate": true,
+    "modeCap": "auto",
+    "guestLinks": true,
+    "checkedRules": [
+      { "name": "No Docker socket mounts", "enabled": true, "owner": "carlos" },
+      { "name": "No force-push to main", "enabled": true }
+    ],
+    "orderRules": [{ "label": "ui", "waitsMilestone": "Skeleton" }],
+    "checklists": [
+      { "label": "ui", "items": [{ "text": "Works at phone width (390 px)" }, { "text": "Screenshots on the ticket", "required": false }] }
+    ],
+    "deployWindows": [{ "spec": "Mon-Fri 06:00-17:00", "mode": "deny", "refuse": true }],
+    "lock": ["scopeGate", "modeCap"]
+  },
+  "projects": {
+    "ops": {
+      "defaultMode": "supervised",
+      "modeCap": "auto_edits",
+      "owners": [{ "kind": "folder", "area": "Infrastructure", "owner": "carlos" }],
+      "lock": ["modeCap"]
+    }
+  }
+}

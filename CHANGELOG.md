@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Policies as a file: `ORCO_POLICY_FILE` names a versioned JSON policy for the org and each project (scope gate, build order, Done checklists, area owners, deploy windows, checked rules, permission modes, guest links), kept in git. It sets defaults, `lock` makes settings "managed by policy" in the app, and a project can only tighten the org. `orco policy check <file>` prints what it will do or exactly what is wrong; the server applies it on start (a bad file stops the start) and on `orco policy reload`; `orco policy show` prints what is in force and where each value came from (file, app or default). Example: `docs/policy.example.json`.
+
 - Permission modes per ticket: Supervised (ask before changes, the default), Auto-accept edits (code and docs go ahead, anything outward-facing asks), Auto (routine actions go ahead, risky ones ask), Full access. A ticket takes its project's default unless it sets its own (the picker on the open ticket; the card shows it). Project and org admins cap the mode, and a capped one says who capped it. An agent's `request_approval` on the ticket is approved on the record when the mode allows it; deploys and pushes always ask. Agents see the mode in `get_ticket`. Migration 54.
 
 - Serve Orco under a sub-path: `ORCO_BASE_PATH=/orco/` behind a proxy that strips the prefix (like nginx `location /orco/ { proxy_pass http://orco:7420/; }`). The web app uses relative URLs, so it loads, signs in and gets live updates there; redirects, cookie paths, the OAuth pages, guest links and install snippets carry the prefix, and agents connect to `https://host/orco/mcp`. Set `ORCO_PUBLIC_URL` to the address with the prefix (`https://host/orco`).

@@ -54,6 +54,7 @@ export class Guests {
 
   setEnabled(actor: Participant, on: boolean): void {
     if (actor.kind !== 'user' || !this.store.isOrgAdmin(actor)) throw new OrcoError('forbidden', 'Only org admins turn guest links on or off');
+    this.store.policyFile.assertUnlocked('org', 'guestLinks');
     this.store.db.prepare("INSERT INTO org_settings (key, value) VALUES ('guest_links', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value").run(on ? 'on' : 'off');
     if (!on) this.store.db.prepare('UPDATE guest_links SET revoked_at = ? WHERE revoked_at IS NULL').run(this.store.now());
     this.store.audit.record(actor, 'guest.setting', { projectId: null, subject: 'org', detail: { on } });

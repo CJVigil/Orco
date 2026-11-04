@@ -418,9 +418,12 @@ export function createPortfolio(ctx) {
     if (!p.policyProject && administered[0] && !admin) p.policyProject = administered[0];
     const policy = p.policyProject || admin ? await api(`/policy${p.policyProject ? `?project=${encodeURIComponent(p.policyProject)}` : ''}`) : null;
     const scope = admin ? await api('/scope/settings') : null;
+    const policyFile = await api('/policy/locked').catch(() => null);
     const rules = admin ? await api('/checked-rules') : null;
     const deploy = administered.length || admin ? await Promise.all([api('/freezes'), api('/deploy-windows')]) : null;
-    return [pausesCard(state.pauses, administered, agents), deploy ? deployCard(deploy[0], deploy[1], administered, admin) : null, budgetsCard(state.budgets, administered, agents), scope ? scopeCard(scope) : null, rules ? rulesCard(rules) : null, admin ? peopleCard(setup.proxy ?? (setup.oidc ? { label: setup.oidc.label } : null)) : null, admin ? modelsCard(models) : null, admin ? onyxCard(onyx) : null, policy ? policyCard(policy, administered) : null, admin ? groupsCard(groups) : null];
+    return [
+      policyFile?.file ? el('p', { class: 'small muted plan-card', text: `Managed by the policy file ${policyFile.file}${policyFile.locked.length ? `: ${policyFile.locked.join(', ')} can only change there` : ''}.` }) : null,
+      pausesCard(state.pauses, administered, agents), deploy ? deployCard(deploy[0], deploy[1], administered, admin) : null, budgetsCard(state.budgets, administered, agents), scope ? scopeCard(scope) : null, rules ? rulesCard(rules) : null, admin ? peopleCard(setup.proxy ?? (setup.oidc ? { label: setup.oidc.label } : null)) : null, admin ? modelsCard(models) : null, admin ? onyxCard(onyx) : null, policy ? policyCard(policy, administered) : null, admin ? groupsCard(groups) : null];
   }
 
   /** Freezes and deploy windows (#112): start or end a freeze, and the weekly windows deploys keep to. */

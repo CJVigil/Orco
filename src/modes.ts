@@ -80,6 +80,8 @@ export class Modes {
     if (actor.kind !== 'user') throw new OrcoError('forbidden', 'Only people set modes');
     const p = this.store.visibleProject(actor, project);
     if (this.store.roleIn(actor, p.id) !== 'admin' && !this.store.isOrgAdmin(actor)) throw new OrcoError('forbidden', `Only admins of ${project} set its modes`);
+    if (input.cap !== undefined) this.store.policyFile.assertUnlocked(project, 'modeCap');
+    if (input.defaultMode !== undefined) this.store.policyFile.assertUnlocked(project, 'defaultMode');
     if (input.cap !== undefined) {
       this.store.db.prepare('UPDATE projects SET mode_cap = ?, mode_cap_by = ? WHERE id = ?').run(input.cap === null ? null : check(input.cap), input.cap === null ? null : actor.id, p.id);
     }
@@ -96,6 +98,7 @@ export class Modes {
   /** Org admins cap every project (null lifts it). */
   setOrgCap(actor: Participant, cap: string | null): void {
     if (actor.kind !== 'user' || !this.store.isOrgAdmin(actor)) throw new OrcoError('forbidden', 'Only org admins cap modes for every project');
+    this.store.policyFile.assertUnlocked('org', 'modeCap');
     if (cap === null) this.store.db.prepare("DELETE FROM org_settings WHERE key = 'mode_cap'").run();
     else this.store.db.prepare("INSERT INTO org_settings (key, value) VALUES ('mode_cap', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value").run(JSON.stringify({ mode: check(cap), by: actor.name }));
     this.store.audit.record(actor, 'mode.org_cap', { projectId: null, subject: 'org', detail: { cap } });

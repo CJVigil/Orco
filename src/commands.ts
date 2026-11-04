@@ -1,3 +1,4 @@
+import { checkPolicy, POLICY_VERSION } from './policyfile.js';
 import { Oidc, type OidcConfig } from './oidc.js';
 import { HostedRunner } from './hosted-runner.js';
 import { normalizeIdentity } from './identities.js';
@@ -149,7 +150,8 @@ async function runBridge(path: string): Promise<void> {
 export function main(): void {
   // Client commands talk to a server over HTTP and take their own options.
   const first = process.argv[2];
-  if (first && CLIENT_COMMANDS.has(first)) {
+  // orco policy show / reload ask a running server; orco policy check reads a file here (#120).
+  if (first && (CLIENT_COMMANDS.has(first) || (first === 'policy' && process.argv[3] !== 'check'))) {
     void runClient(process.argv.slice(2), {
       env: process.env,
       out: (text) => process.stdout.write(text.endsWith('\n') ? text : `${text}\n`),
@@ -296,11 +298,30 @@ export function main(): void {
     return;
   }
 
+  // orco policy check <file> (#120): no server or database needed.
+  if (command === 'policy' && sub === 'check') {
+    const file = args[0];
+    if (!file) throw new OrcoError('invalid', 'Usage: orco policy check <file>');
+    const result = checkPolicy(readFileSync(file, 'utf8'));
+    if (!result.ok) {
+      for (const e of result.errors) console.error(`✗ ${e}`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`✓ ${file} is a valid policy (version ${POLICY_VERSION}). It will:`);
+    for (const line of result.summary) console.log(`  - ${line}`);
+    return;
+  }
+
   const store = new Store(openDatabase(values.db, { snapshotDir: process.env.ORCO_BACKUP_DIR?.trim() || dirname(resolve(values.db)), log: (m) => console.log(m) }), { limits: limitsFromEnv(), secretsKey: parseSecretsKey(process.env.ORCO_SECRETS_KEY), digest: digestFromEnv() });
   const key = sub && !['serve', 'list', 'backup', 'import'].includes(command) ? `${command} ${sub}` : command;
 
   switch (key) {
     case 'serve': {
+      // Policies as a file (#120): a bad file stops the start, so a typo never loosens the guard rails.
+      const policyErrors = store.policyFile.load();
+      if (policyErrors.length) throw new OrcoError('invalid', `ORCO_POLICY_FILE has problems:\n${policyErrors.map((e) => `  - ${e}`).join('\n')}`);
+      if (store.policyFile.loadedFrom) console.log(`Policy loaded from ${store.policyFile.loadedFrom}`);
       const publicUrl = process.env.ORCO_PUBLIC_URL || undefined;
       // Until someone has an account, a one-time code lets the first person set Orco up in the browser.
       const setupCode = store.onboarding.setupNeeded() ? randomBytes(9).toString('base64url') : undefined;
