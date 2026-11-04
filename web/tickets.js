@@ -1944,7 +1944,10 @@ export function createTickets(ctx) {
       );
     });
     const box = el('textarea', { rows: '2', placeholder: 'Leave a comment, or / for commands', 'aria-label': 'Comment' });
-    box.value = draft;
+    // Each ticket keeps its own unsent comment in this browser (#130).
+    const draftPlace = `ticket:${ticket.ref}`;
+    box.value = draft || ctx.drafts?.get(draftPlace) || '';
+    box.addEventListener('input', () => ctx.drafts?.set(draftPlace, box.value));
     // Files waiting to go with the next comment (#98), kept per ticket while the panel redraws.
     const pending = (t.pendingFiles ??= new Map()).get(ticket.ref) ?? [];
     t.pendingFiles.set(ticket.ref, pending);
@@ -2000,6 +2003,7 @@ export function createTickets(ctx) {
         try {
           await ctx.runCommand(command, { ticket: ticket.ref, project: ticket.project });
           box.value = '';
+          ctx.drafts?.set(draftPlace, '');
         } catch (err) {
           notify(err.message);
         }
@@ -2008,6 +2012,7 @@ export function createTickets(ctx) {
       try {
         const updated = await api(`/tickets/${ticket.ref}/comments`, { method: 'POST', body: { text: box.value, attachmentIds: ids } });
         box.value = '';
+          ctx.drafts?.set(draftPlace, '');
         pending.length = 0;
         renderDetail(updated);
       } catch (err) {

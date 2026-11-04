@@ -5933,3 +5933,60 @@ body.lightbox-open {
 .task-card .link-button:hover {
   text-decoration: underline;
 }
+
+/* Unsent text survives (#130) */
+.room-link .draft-dot {
+  display: none;
+  width: 0.4rem;
+  height: 0.4rem;
+  margin-left: auto;
+  border: 1.5px solid var(--muted);
+  border-radius: 50%;
+}
+
+.room-link.has-draft .draft-dot {
+  display: inline-block;
+}
+
+.room-link.has-draft .badge + .draft-dot,
+.room-link.has-draft .unread-dot + .draft-dot {
+  margin-left: 0.3rem;
+}
+
+.outbox-msg {
+  opacity: 0.75;
+}
+
+.outbox-chip {
+  margin-left: 0.4rem;
+  background: var(--mention-bg);
+}
+
+.outbox-actions {
+  display: flex;
+  gap: 0.35rem;
+  grid-column: 2;
+}
+
+.offline-banner {
+  position: fixed;
+  left: 50%;
+  bottom: max(1rem, env(safe-area-inset-bottom));
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  max-width: calc(100vw - 2rem);
+  padding: 0.6rem 0.9rem;
+  border-radius: 10px;
+  background: var(--danger);
+  color: #fff;
+  box-shadow: var(--shadow);
+  transform: translateX(-50%);
+}
+
+.offline-banner button {
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+  border: 0;
+}

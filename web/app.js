@@ -5,6 +5,7 @@ import { icon } from './icons.js';
 import { voiceButton } from './voice.js';
 import { quoteText } from './quotes.js';
 import { openLightbox, prepareImage } from './photos.js';
+import { createDrafts, createOutbox, newKey, retryable } from './drafts.js';
 import { catchBigPastes, MAX_MESSAGE_CHARS } from './paste.js';
 import { codeChildren, renderMarkdown } from './markdown.js';
 import * as notify from './notify.js';
@@ -1646,6 +1647,7 @@ function roomLink(room) {
     isHome(room) ? icon('home') : el('span', { class: 'hash', text: '#' }),
     el('span', { class: 'room-name', text: roomLabel(room) }),
     mentioned ? el('span', { class: 'badge', text: String(mentioned), title: 'Mentions' }) : unread ? el('span', { class: 'unread-dot', title: 'New messages', 'aria-label': 'New messages' }) : null,
+    el('span', { class: 'draft-dot', 'aria-label': 'Unsent draft' }),
   );
 }
 
@@ -1817,6 +1819,7 @@ function renderNav() {
   if (!state.projects.length) {
     nav.append(el('button', { class: 'ghost wide nav-new-project', type: 'button', onclick: () => void newProject() }, icon('folder-plus'), el('span', { text: 'New project' })));
   }
+  renderDraftDots();
 }
 
 async function loadStructure() {
@@ -1875,7 +1878,7 @@ function renderMessages({ keepScroll = false } = {}) {
   const box = $('messages');
   const fromBottom = box.scrollHeight - box.scrollTop;
   const list = $('message-list');
-  list.replaceChildren(...withDays(state.messages, (m, prev) => renderMessage(m, prev)));
+  list.replaceChildren(...withDays(state.messages, (m, prev) => renderMessage(m, prev)), ...(state.room ? outboxRows(state.room.ref, null) : []));
   $('empty').hidden = state.messages.length > 0;
   if (keepScroll) box.scrollTop = box.scrollHeight - fromBottom;
   else box.scrollTop = box.scrollHeight;
@@ -2000,6 +2003,7 @@ async function selectRoom() {
   state.unread.delete(room.ref);
   state.mentioned.delete(room.ref);
   rememberRecent({ kind: 'room', ref: room.ref, label: roomLabel(room) });
+  roomComposer.switchPlace();
   renderNav();
   renderRoomTitle();
   if (changed) {
@@ -2328,7 +2332,7 @@ function renderThread({ keepScroll = false } = {}) {
   const list = el('ol', { class: 'message-list' });
   if (root) list.append(renderMessage(root, null, { inThread: true }));
   list.append(el('li', { class: 'thread-divider', text: `${replies.length} ${replies.length === 1 ? 'reply' : 'replies'}` }));
-  list.append(...withDays(replies, (m, prev) => renderMessage(m, prev, { inThread: true })));
+  list.append(...withDays(replies, (m, prev) => renderMessage(m, prev, { inThread: true })), ...outboxRows(state.thread.room, state.thread.id));
   const body = $('panel-body');
   const top = body.scrollTop;
   body.replaceChildren(summaryBox(), list);
@@ -2515,6 +2519,7 @@ async function showTrail(taskId) {
 async function openThread(message) {
   state.thread = message;
   openPanel('thread', 'Thread');
+  threadComposer.switchPlace();
   state.threadSummary = null;
   state.threadMessages = await api(`/messages?room=${encodeURIComponent(message.room)}&thread_id=${message.id}&limit=200`);
   renderThread();
@@ -2802,8 +2807,50 @@ function addVoice(box) {
   return button;
 }
 
+/*
+ * Can't reach Orco (#130): after 30 seconds without the live connection a banner says so, with the
+ * last time it was reached and Retry, so a dead server is not mistaken for a broken phone.
+ */
+let liveEvents = null;
+let lastReached = null;
+let downTimer = null;
+const offlineBanner = el('div', { class: 'offline-banner', role: 'alert', hidden: true });
+document.body.append(offlineBanner);
+
+function markReached() {
+  lastReached = new Date();
+  clearTimeout(downTimer);
+  downTimer = null;
+  offlineBanner.hidden = true;
+}
+
+function markDown() {
+  if (downTimer || !offlineBanner.hidden) return;
+  downTimer = setTimeout(() => {
+    downTimer = null;
+    const when = lastReached ? `Last reached ${lastReached.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.` : '';
+    const waiting = outbox.items().length;
+    offlineBanner.replaceChildren(
+      el('span', { text: `Can't reach Orco. ${when}${waiting ? ` ${waiting} message${waiting === 1 ? '' : 's'} will send when it is back.` : ''}` }),
+      el('button', {
+        class: 'small',
+        type: 'button',
+        text: 'Retry',
+        onclick: () => {
+          offlineBanner.hidden = true;
+          liveEvents?.close();
+          connect();
+          markDown();
+        },
+      }),
+    );
+    offlineBanner.hidden = false;
+  }, 30_000);
+}
+
 function connect() {
   const events = new EventSource('api/events');
+  liveEvents = events;
   void loadFreezes();
   if (!$('composer-text').nextElementSibling?.classList.contains('voice-button')) {
     addVoice($('composer-text'));
@@ -2812,6 +2859,8 @@ function connect() {
   events.addEventListener('controls', () => void loadFreezes());
   const dot = $('connection');
   events.addEventListener('ready', () => {
+    markReached();
+    void outbox.flush();
     dot.classList.add('live');
     dot.title = 'Live';
   });
@@ -2886,10 +2935,12 @@ function connect() {
   events.addEventListener('shutdown', () => {
     dot.classList.remove('live');
     dot.title = 'Orco is restarting…';
+    markDown();
   });
   events.onerror = () => {
     dot.classList.remove('live');
     dot.title = 'Reconnecting…';
+    markDown();
   };
 }
 
@@ -3019,7 +3070,12 @@ function uploadWithProgress(file, room, onProgress) {
 }
 
 function wireComposer(form, textarea, pendingEl, roomOf, send, options = {}) {
-  const pending = [];
+  // Each room or thread keeps its own draft and its own attachments (#130): switching never carries
+  // text or photos into another place, and Enter never posts them there.
+  let pending = [];
+  const pendingByPlace = new Map();
+  let place = null;
+  const placeOf = options.placeOf ?? roomOf;
   // Up in an empty box edits your last message (#93); Escape cancels the edit.
   let editing = null;
   const banner = el('div', { class: 'edit-banner small', hidden: true });
@@ -3143,7 +3199,26 @@ function wireComposer(form, textarea, pendingEl, roomOf, send, options = {}) {
       addFiles([...event.dataTransfer.files]);
     }
   });
-  textarea.addEventListener('input', () => autosize(textarea));
+  textarea.addEventListener('input', () => {
+    autosize(textarea);
+    if (!editing && place) drafts.set(place, textarea.value);
+    renderDraftDots();
+  });
+  /** Called when the room or thread shown changes: saves this place's draft and brings the new one's back. */
+  const switchPlace = () => {
+    const next = placeOf();
+    if (!next || next === place) return;
+    if (place) {
+      if (!editing) drafts.set(place, textarea.value);
+      pendingByPlace.set(place, pending);
+    }
+    if (editing) stopEditing();
+    place = next;
+    pending = pendingByPlace.get(place) ?? [];
+    textarea.value = drafts.get(place);
+    autosize(textarea);
+    renderPending();
+  };
   textarea.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
@@ -3188,6 +3263,7 @@ function wireComposer(form, textarea, pendingEl, roomOf, send, options = {}) {
     }
     if (!text && pending.length === 0) return;
     textarea.disabled = true;
+    const sentFrom = place;
     try {
       const room = roomOf();
       const ids = [];
@@ -3200,6 +3276,8 @@ function wireComposer(form, textarea, pendingEl, roomOf, send, options = {}) {
         ids.push(item.id);
       }
       const message = await send(text, ids);
+      drafts.set(sentFrom, '');
+      renderDraftDots();
       textarea.value = '';
       autosize(textarea);
       for (const item of pending) if (item.url) URL.revokeObjectURL(item.url);
@@ -3213,6 +3291,7 @@ function wireComposer(form, textarea, pendingEl, roomOf, send, options = {}) {
       textarea.focus();
     }
   });
+  return { switchPlace };
 }
 
 const THEMES = ['system', 'light', 'dark'];
@@ -4083,6 +4162,7 @@ const portfolio = createPortfolio({
 
 const tickets = createTickets({
   api,
+  drafts: { get: (place) => drafts.get(place), set: (place, text) => drafts.set(place, text) },
   copyLink: (route, what) => void copyLink(route, what),
   el,
   icon,
@@ -4151,7 +4231,82 @@ function parseTask(text) {
   return { ...body, request };
 }
 
-wireComposer(
+/* Unsent text survives (#130): drafts per place, and an outbox for sends that did not get through. */
+const drafts = createDrafts(() => state.me?.name ?? '');
+const outbox = createOutbox(() => state.me?.name ?? '', {
+  send: (item) => api('/messages', { method: 'POST', body: { ...item.body, idempotency_key: item.key } }),
+  onChange: () => renderOutbox(),
+  onSent: (_item, message) => message && onMessage(message),
+  onDropped: (item, err) => {
+    drafts.set(item.place, `${item.text}${drafts.get(item.place) ? `\n\n${drafts.get(item.place)}` : ''}`);
+    toast(`A message could not be sent (${err.message}); it is back in its draft.`);
+    renderDraftDots();
+  },
+});
+
+/** Posts a message with its own idempotency key; if the request may not have arrived, it waits in the outbox. */
+async function postMessage(place, body) {
+  const key = newKey();
+  try {
+    return await api('/messages', { method: 'POST', body: { ...body, idempotency_key: key } });
+  } catch (err) {
+    if (!retryable(err)) throw err;
+    outbox.add({ key, place, room: body.room, threadId: body.thread_id ?? null, body, text: body.text, at: new Date().toISOString() });
+    return null;
+  }
+}
+
+/** Messages waiting in the outbox, shown under the room or thread they were sent to. */
+function outboxRows(room, threadId) {
+  return outbox
+    .items()
+    .filter((i) => i.room === room && (i.threadId ?? null) === threadId)
+    .map((item) =>
+      el(
+        'li',
+        { class: 'msg outbox-msg', 'data-outbox': item.key },
+        avatar(state.me.name, state.me.kind),
+        el('div', { class: 'msg-head' }, el('span', { class: 'author', text: state.me.name }), el('span', { class: 'chip outbox-chip', text: 'Not sent yet, retrying' })),
+        el('div', { class: 'body', text: item.text || '(attachments)' }),
+        el(
+          'div',
+          { class: 'outbox-actions' },
+          el('button', { class: 'ghost small', type: 'button', text: 'Retry now', onclick: () => void outbox.flush() }),
+          el('button', {
+            class: 'ghost small',
+            type: 'button',
+            text: 'Cancel',
+            onclick: () => {
+              outbox.cancel(item.key);
+              if (!drafts.get(item.place)) drafts.set(item.place, item.text);
+              renderDraftDots();
+            },
+          }),
+        ),
+      ),
+    );
+}
+
+function renderOutbox() {
+  for (const node of document.querySelectorAll('[data-outbox]')) node.remove();
+  if (state.view === 'room' && state.room) $('message-list').append(...outboxRows(state.room.ref, null));
+  if (state.panel === 'thread' && state.thread) $('panel-body').querySelector('.message-list')?.append(...outboxRows(state.thread.room, state.thread.id));
+}
+
+/** A dot on rooms (and tickets) holding a draft. */
+function renderDraftDots() {
+  for (const link of document.querySelectorAll('#sidebar a.room-link')) {
+    const ref = decodeURIComponent((link.getAttribute('href') || '').slice(1));
+    const has = ref && drafts.has(ref) && !(state.view === 'room' && state.room?.ref === ref);
+    link.classList.toggle('has-draft', Boolean(has));
+    link.title = has ? 'You have an unsent draft here' : '';
+  }
+}
+
+addEventListener('online', () => void outbox.flush());
+setInterval(() => outbox.items().length && void outbox.flush(), 15_000);
+
+const roomComposer = wireComposer(
   $('composer'),
   $('composer-text'),
   $('composer-pending'),
@@ -4167,17 +4322,17 @@ wireComposer(
       await runCommand(command, { project: state.room.project });
       return null;
     }
-    return api('/messages', { method: 'POST', body: { room: state.room.ref, text, attachment_ids: ids } });
+    return postMessage(state.room.ref, { room: state.room.ref, text, attachment_ids: ids });
   },
-  { lastOwn: () => lastEditable(state.messages) },
+  { lastOwn: () => lastEditable(state.messages), placeOf: () => (state.view === 'room' ? state.room?.ref : null) },
 );
-wireComposer(
+const threadComposer = wireComposer(
   $('thread-composer'),
   $('thread-text'),
   $('thread-pending'),
   () => state.thread.room,
-  (text, ids) => api('/messages', { method: 'POST', body: { room: state.thread.room, text, thread_id: state.thread.id, attachment_ids: ids } }),
-  { lastOwn: () => lastEditable(state.threadMessages) },
+  (text, ids) => postMessage(`thread:${state.thread.id}`, { room: state.thread.room, text, thread_id: state.thread.id, attachment_ids: ids }),
+  { lastOwn: () => lastEditable(state.threadMessages), placeOf: () => (state.thread ? `thread:${state.thread.id}` : null) },
 );
 
 /* Keyboard first (#93): slash commands, ticket refs, the palette, Up to edit, Escape to close. */
