@@ -1,3 +1,4 @@
+import { adminDigest } from './admindigest.js';
 import { nextRun, parseCron } from './cron.js';
 import type { Pause } from './controls.js';
 import type { Participant, Store } from './store.js';
@@ -405,6 +406,11 @@ export class Portfolios {
     }
     const admins = this.store.orgAdmins();
     const rollup = admins.length ? this.orgDigest(admins[0]!) : '';
+    // The admin digest of the week before (#115), from the audit log, kept for org admins.
+    if (admins.length) {
+      const body = adminDigest(this.store, admins[0]!, { from: new Date(fire - 7 * DAY).toISOString(), to: new Date(fire).toISOString() }).markdown;
+      this.store.db.prepare('INSERT OR IGNORE INTO admin_digests (week, body) VALUES (?, ?)').run(week, body);
+    }
     this.store.db.prepare('INSERT OR IGNORE INTO digests (project_id, week, body) VALUES (NULL, ?, ?)').run(week, rollup);
     this.store.audit.record(null, 'digest.write', { detail: { week, projects: written } });
     this.store.events.emit('controls', { kind: 'digest' });

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Admin digest: what was done with permissions, from the audit log: deploys and pushes approved and by whom (flagged when outside a window or during a freeze), standing approvals granted and used, checked rules hit and overrides with their reasons, secrets requested and used (names only), new members and agents, token rotations, pauses, freezes and budget alerts. Each line names its audit entry. Written every Monday with the weekly digests (org admins: `GET /api/admin-digests`), and open for any date range for the org or a project you administer (Portfolio > Digest; `GET /api/admin-digest`). In the app only: Orco sends no email. Migration 51.
+
 - Incident tickets: open one from a message (its Incident action) or with `open_incident`, linked back to the alert, labelled `incident` and urgent, with the postmortem to write: timeline with timezone, impact, root cause, fix, prevention steps and owner. It cannot close as Done until every section has content and each prevention step names a follow-up ticket. Its other labels are tags: `list_incidents` (and `GET /api/projects/:name/incidents?tag=`) lists incidents by tag with their root cause.
 
 - Checked rules: org admins add rules with a name, a pattern (text or regular expression) and where to check it: plans, approval requests, and code blocks or diffs in agents' messages and ticket comments. A match blocks the plan or approval, naming the rule and telling its owner; in a message it is flagged in the thread. Five examples ship switched off (Docker socket mounts, `ports:` in compose, terminals on servers, skipped hooks, force-pushes to main). Portfolio > Controls; `/api/checked-rules`. Migration 50.

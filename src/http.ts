@@ -34,6 +34,7 @@ import type { ScheduleInput } from './schedules.js';
 import type { TaskResult } from './tasks.js';
 import { briefWork, myWork } from './work.js';
 import { newPlan } from './plans.js';
+import { adminDigest } from './admindigest.js';
 
 declare module 'express-serve-static-core' {
   interface Request {
@@ -1679,6 +1680,24 @@ export function createApp(store: Store, options: AppOptions = {}) {
   });
   api.get('/projects/:name/spend', (req, res) => {
     res.json(store.controls.projectSpend(req.participant!, String(req.params.name), optionalInt(req.query.days) ?? 7));
+  });
+  // The admin digest (#115): any date range, for the org (org admins) or a project (its admins); and past weekly ones.
+  api.get('/admin-digest', (req, res) => {
+    const to = str(req.query.to, 'to') ?? new Date(store.now()).toISOString();
+    const from = str(req.query.from, 'from') ?? new Date(Date.parse(to) - 7 * 86_400_000).toISOString();
+    res.json(adminDigest(store, req.participant!, { from, to, project: str(req.query.project, 'project') ?? null }));
+  });
+  api.get('/admin-digests', (req, res) => {
+    if (!store.isOrgAdmin(req.participant!)) throw new OrcoError('forbidden', 'Only org admins read past admin digests');
+    res.json(store.db.prepare('SELECT week, body FROM admin_digests ORDER BY week DESC LIMIT 12').all());
+  });
+  // One audit entry, for a digest's links: people only, under the audit log's own visibility.
+  api.get('/audit/:id', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected an audit entry id');
+    const entry = store.audit.list(req.participant!, { sinceId: id - 1, limit: 1 }).find((e) => e.id === id);
+    if (!entry) throw new OrcoError('not_found', `No audit entry ${id}`);
+    res.json(entry);
   });
   // Incidents (#114): open one (from a message), and list them by tag with their root cause.
   api.post('/projects/:name/incidents', (req, res) => {

@@ -1173,6 +1173,13 @@ export const MIGRATIONS = [
   INSERT INTO checked_rules (name, pattern, regex, scopes, enabled, why) VALUES ('No terminals on servers', '\\b(ssh|mosh|telnet)\\s+[\\w.@-]+|docker\\s+exec\\s+-it|kubectl\\s+exec\\s+-it', 1, 'plan,approval', 0, 'Change servers through deploys, not by hand.');
   INSERT INTO checked_rules (name, pattern, regex, scopes, enabled, why) VALUES ('No skipping hooks', '--no-verify|--no-gpg-sign|HUSKY=0|SKIP=', 1, 'plan,approval,message', 0, 'Hooks run the checks a change must pass.');
   INSERT INTO checked_rules (name, pattern, regex, scopes, enabled, why) VALUES ('No force-push to main', 'push\\s+(-f|--force|--force-with-lease)\\b.*\\b(main|master)\\b|push\\s+.*\\b(main|master)\\b.*\\s(-f|--force)\\b|\\+(main|master)\\b', 1, 'plan,approval,message', 0, 'Rewriting main loses other people''s work.');
+  `,  // 51: the weekly admin digest of what was done with permissions (#115).
+  `
+  CREATE TABLE admin_digests (
+    week TEXT PRIMARY KEY,
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
   `,
 ];
 

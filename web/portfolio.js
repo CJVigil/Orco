@@ -347,7 +347,9 @@ export function createPortfolio(ctx) {
     );
     if (!isAdmin() && !p.digestProject && projects()[0]) p.digestProject = projects()[0].name;
     const preview = p.digestProject || isAdmin() ? await api(`/digests/preview${p.digestProject ? `?project=${encodeURIComponent(p.digestProject)}` : ''}`) : null;
+    const administered = isAdmin() ? [''] : adminOf();
     return [
+      administered.length ? await adminDigestCard(administered) : null,
       el('div', { class: 'pf-filters' }, el('span', { class: 'small muted', text: 'This week so far:' }), choose),
       preview ? el('article', { class: 'plan-card pf-digest' }, richText(preview.body)) : null,
       el('h3', { class: 'small', text: 'Past digests' }),
@@ -356,6 +358,55 @@ export function createPortfolio(ctx) {
         ? past.map((d) => el('details', { class: 'plan-card' }, el('summary', { text: `${d.project ?? 'All projects'} · ${d.week.slice(0, 10)}` }), richText(d.body)))
         : el('p', { class: 'muted small', text: 'None yet.' }),
     ];
+  }
+
+  /**
+   * The admin digest (#115): what was done with permissions in a date range, from the audit log.
+   * Each line names its audit entry; open one to see it in full.
+   */
+  async function adminDigestCard(administered) {
+    const today = new Date();
+    const weekAgo = new Date(today.getTime() - 7 * 86_400_000);
+    const from = el('input', { type: 'date', value: p.adFrom ?? weekAgo.toISOString().slice(0, 10), 'aria-label': 'From' });
+    const to = el('input', { type: 'date', value: p.adTo ?? today.toISOString().slice(0, 10), 'aria-label': 'To' });
+    const where = el('select', { 'aria-label': 'Project' }, administered.map((name) => el('option', { value: name, text: name || 'Every project', selected: name === (p.adProject ?? administered[0]) ? true : null })));
+    const show = () => {
+      p.adFrom = from.value;
+      p.adTo = to.value;
+      p.adProject = where.value;
+      void load();
+    };
+    let digest;
+    try {
+      const q = new URLSearchParams({ from: `${p.adFrom ?? from.value}T00:00:00Z`, to: `${p.adTo ?? to.value}T23:59:59Z`, ...((p.adProject ?? administered[0]) ? { project: p.adProject ?? administered[0] } : {}) });
+      digest = await api(`/admin-digest?${q}`);
+    } catch (err) {
+      return el('p', { class: 'error', text: err.message });
+    }
+    const openEntry = async (id) => {
+      try {
+        const entry = await api(`/audit/${id}`);
+        alert(JSON.stringify(entry, null, 2));
+      } catch (err) {
+        notify(err.message);
+      }
+    };
+    return el(
+      'section',
+      { class: 'plan-card' },
+      el('h3', { text: 'Admin digest' }),
+      el('div', { class: 'inline-form' }, where, from, el('span', { class: 'muted small', text: 'to' }), to, el('button', { class: 'small', type: 'button', text: 'Show', onclick: show })),
+      digest.sections.map((s) =>
+        el(
+          'div',
+          { class: 'ad-section' },
+          el('strong', { class: 'small', text: `${s.title} (${s.lines.length})` }),
+          s.lines.length
+            ? el('ul', { class: 'small' }, s.lines.slice(0, 50).map((l) => el('li', {}, `${new Date(l.at).toLocaleString()}${l.project ? ` · ${l.project}` : ''} · ${l.text} `, el('button', { class: 'link-button', type: 'button', text: `#${l.auditId}`, onclick: () => void openEntry(l.auditId) }))))
+            : el('p', { class: 'muted small', text: 'None.' }),
+        ),
+      ),
+    );
   }
 
   /* Controls */
