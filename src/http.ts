@@ -36,6 +36,7 @@ import type { TaskResult } from './tasks.js';
 import { briefWork, myWork } from './work.js';
 import { newPlan } from './plans.js';
 import { adminDigest } from './admindigest.js';
+import { contextPack, setPackBudget } from './pack.js';
 import { dayReport, reportMarkdown, runReports, scheduleReport } from './report.js';
 
 declare module 'express-serve-static-core' {
@@ -1682,6 +1683,13 @@ export function createApp(store: Store, options: AppOptions = {}) {
   });
   api.get('/projects/:name/spend', (req, res) => {
     res.json(store.controls.projectSpend(req.participant!, String(req.params.name), optionalInt(req.query.days) ?? 7));
+  });
+  // Handoff context packs (#121): a ticket's pack, and an agent's pack size (its owner sets it).
+  api.get('/tickets/:ref/pack', (req, res) => {
+    res.json(contextPack(store, req.participant!, String(req.params.ref)));
+  });
+  api.post('/agents/:name/pack-size', (req, res) => {
+    res.json({ chars: setPackBudget(store, req.participant!, String(req.params.name), Number(req.body?.chars)) });
   });
   // Policies as a file (#120): what is in force and from where (org admins), reload, and the locked settings.
   api.get('/policy', (req, res) => {

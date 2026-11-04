@@ -63,6 +63,8 @@ Never leave a task accepted and silent: close it, ask, or set a reminder.
 - A ticket with `waits_on` (build order: a working skeleton before any UI) cannot start yet; pick another.
 - `list_tickets` / `get_ticket` to read. The list is one line per ticket; ask for `fields` only when you need more.
   `get_ticket` shows the last 10 activity entries (`activity_limit` for more); with `since`, only what changed.
+- `ticket_pack` when you pick up a ticket (reassigned, or after a restart or compaction): the original ask, handoff,
+  outcomes and latest answers in one read. Do not redo what it says was tried.
 - `start_ticket` to begin one in a single call (claims it, sets In Progress, returns the handoff and project notes).
 - `claim_ticket` to take an unassigned one; if it fails, someone else got it: pick another.
 - `comment_ticket` for findings, `update_ticket` to move status. Leave a `handoff` note when you stop

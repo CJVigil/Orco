@@ -1644,7 +1644,7 @@ export class Tickets {
     const ref = refOf(row);
     // The task message is parsed for @mentions; ticket text must not ping people, so the title's @ is
     // swapped for a look-alike. Agents read the rest with get_ticket (see the MCP instructions).
-    const request = `Work on ticket ${ref}: ${row.title.replace(/@/g, '＠')}`;
+    const request = `Work on ticket ${ref}: ${row.title.replace(/@/g, '＠')}\nStart with ticket_pack ${ref}: the original request, the handoff, what was tried and the latest answers, in one read.`;
     try {
       const task = this.store.tasks.create(actor, { agent: row.assignee!, room: `${row.project}/${room.name}`, request });
       this.store.db.prepare('UPDATE tickets SET task_id = ? WHERE id = ?').run(task.id, row.id);

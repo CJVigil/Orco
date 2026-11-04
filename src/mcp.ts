@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import { sessionLink } from './tickets.js';
 import { dayReport } from './report.js';
+import { contextPack } from './pack.js';
 import { McpServer, ResourceTemplate, type ToolAnnotations } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import type { Presence } from './presence.js';
@@ -85,6 +86,7 @@ const UNTRUSTED_NOTE =
 
 const READ_ONLY_TOOLS = new Set([
   'whoami',
+  'ticket_pack',
   'day_report',
   'list_incidents',
   'list_artifacts',
@@ -1593,6 +1595,19 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
   );
 
   server.registerTool(
+    'ticket_pack',
+    {
+      annotations: annotate('ticket_pack'),
+      description:
+        'The context pack for a ticket you pick up (assigned, reassigned, or after a restart or compaction): the original request verbatim, ' +
+        'the handoff note, open criteria and blockers, task outcomes and answers, and the newest comments, with authors and times, ' +
+        'within your pack size. It says what it left out and how to read it. Read this before redoing anything.',
+      inputSchema: z.object({ ticket: z.string() }),
+    },
+    async ({ ticket }) => run(() => contextPack(store, me, ticket)),
+  );
+
+  server.registerTool(
     'start_ticket',
     {
       annotations: annotate('start_ticket'),
@@ -1609,6 +1624,7 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         return {
           note: UNTRUSTED_NOTE,
           ticket: { ...full, activity: full.activity.slice(-10) },
+          context_pack: contextPack(store, me, t.ref).text,
           project_notes: store.notes.list(me, t.project).map((n) => ({ title: n.title, body: n.body })),
         };
       }),

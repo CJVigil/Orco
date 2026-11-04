@@ -1222,6 +1222,9 @@ export const MIGRATIONS = [
   ALTER TABLE projects ADD COLUMN default_mode TEXT NOT NULL DEFAULT 'supervised';
   ALTER TABLE projects ADD COLUMN mode_cap TEXT;
   ALTER TABLE projects ADD COLUMN mode_cap_by INTEGER REFERENCES participants(id);
+  `,  // 55: how big an agent's handoff context packs may be (#121).
+  `
+  ALTER TABLE participants ADD COLUMN pack_chars INTEGER;
   `,
 ];
 
