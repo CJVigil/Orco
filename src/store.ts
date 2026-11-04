@@ -1332,6 +1332,13 @@ export class Store {
     return [...targets.values()];
   }
 
+  /** A message the actor can see, or not_found (#129). */
+  messageFor(actor: Participant, id: number): Message {
+    const row = this.db.prepare(`${MESSAGE_SELECT} WHERE m.id = ?`).get(id) as MessageRow | undefined;
+    if (!row || !this.canSeeRoomId(actor, row.room_id)) throw new OrcoError('not_found', `No message ${id}, or it is in a room you cannot see`);
+    return this.toMessage(row);
+  }
+
   message(id: number): Message {
     const row = this.db.prepare(`${MESSAGE_SELECT} WHERE m.id = ?`).get(id) as unknown as MessageRow;
     return this.toMessage(row);

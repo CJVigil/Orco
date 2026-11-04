@@ -887,6 +887,12 @@ export function createApp(store: Store, options: AppOptions = {}) {
   api.post('/projects/:project/rooms', (req, res) => {
     res.status(201).json(store.createRoom(req.participant!, String(req.params.project), String(req.body?.name ?? '')));
   });
+  // One message, for #!m/<id> links (#129): where it is, if the reader can see it.
+  api.get('/messages/:id', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a message id');
+    res.json(store.messageFor(req.participant!, id));
+  });
   api.get('/messages', (req, res) => {
     const me = req.participant!;
     const threadId = optionalInt(req.query.thread_id);

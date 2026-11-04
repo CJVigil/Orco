@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Links to tickets, messages and tasks: an open ticket has its own address (`#~shop/SHO-12`), which survives a reload and still opens after sign-in, including through a sign-in provider. `#!m/<id>` opens a message in its room or thread, and `#!t/<id>` opens a task's card. A hidden or unknown target says so. Board and list filters and grouping go in the address, so a filtered view can be bookmarked, and each person's last filters are remembered per project. Copy link is on tickets, messages and task cards. When `ORCO_PUBLIC_URL` is set (and is not localhost), `get_ticket`, `create_ticket`, `post` and `create_task` include a `url`. New `GET /api/messages/:id`.
+
 - Answer an agent's question with a photo: answer boxes in Needs you and on the question card have a camera button. A photo can be the whole answer, or go with a picked option or with text. It shrinks and uploads as soon as it is picked, and goes on the answer message the agent receives. The answer also lists the photo ids (`answerAttachments`, shown in `get_task`), and the agent opens them with `view_image`. Migration 56.
 - Fixed: question updates threw an error in the browser ("task is not defined"), so a ticket showing the task did not refresh.
 

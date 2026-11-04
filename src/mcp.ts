@@ -1,3 +1,4 @@
+import { messageLink, taskLink, ticketLink, withUrl } from './links.js';
 import { createRequire } from 'node:module';
 import { sessionLink } from './tickets.js';
 import { dayReport } from './report.js';
@@ -321,6 +322,7 @@ function formatTicket(t: Ticket, since?: number) {
   return {
     ...formatTicketSummary(t),
     project: t.project,
+    ...withUrl(ticketLink(t.project, t.ref)),
     description: skip && !changed('description') ? '(unchanged)' : t.description,
     handoff: skip && !changed('handoff') ? '(unchanged)' : t.handoff,
     criteria_items: t.criteriaItems,
@@ -352,6 +354,7 @@ function formatWritten(result: Written, full?: boolean) {
       ? formatTicket(t)
       : {
           ...formatTicketSummary(t),
+          ...withUrl(ticketLink(t.project, t.ref)),
           ...(t.criteriaItems.length ? { criteria_items: t.criteriaItems } : {}),
           ...(t.closedAs ? { closed_as: { reason: t.closedAs.reason, ticket: t.closedAs.ticket.ref } } : {}),
           last_activity_id: t.lastActivityId,
@@ -658,7 +661,8 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
           }),
         );
         const note = writingNote(text);
-        return note ? { ...posted, note } : posted;
+        const linked = { ...posted, ...withUrl(messageLink(posted.id)) };
+        return note ? { ...linked, note } : linked;
       }),
   );
 
@@ -966,15 +970,16 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
       }),
     },
     async ({ agent, room, request, parent_task_id, budget_minutes, budget_cents, expires_in_minutes, idempotency_key }) =>
-      run(() =>
-        formatTask(
+      run(() => {
+        const task = formatTask(
           store.once(me, idempotency_key, 'task', (id) => store.tasks.get(me, id), () => {
             const expiresAt = expires_in_minutes ? store.now() + expires_in_minutes * 60_000 : null;
             const task = store.tasks.create(me, { agent, room, request, parentId: parent_task_id, budgetMinutes: budget_minutes, budgetCents: budget_cents, expiresAt });
             return { id: task.id, result: task };
           }),
-        ),
-      ),
+        );
+        return { ...task, ...withUrl(taskLink(task.id)) };
+      }),
   );
 
   server.registerTool(

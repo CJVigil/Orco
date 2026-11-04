@@ -5913,3 +5913,23 @@ body.lightbox-open {
   gap: 0.4rem;
   margin: 0.35rem 0;
 }
+
+/* Copy link (#129) */
+#panel-title .copy-link {
+  margin-left: 0.35rem;
+  padding: 0.1rem 0.3rem;
+  vertical-align: middle;
+}
+
+.task-card .link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.task-card .link-button:hover {
+  text-decoration: underline;
+}

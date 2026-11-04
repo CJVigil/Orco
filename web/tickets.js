@@ -183,10 +183,63 @@ export function createTickets(ctx) {
 
   /* Loading */
 
-  async function show(project, tab) {
+  /*
+   * Addresses (#129): the board's filters and grouping live in the address (#~shop/board?assignee=ana),
+   * so a filtered view can be bookmarked or sent, and each person's last filters per project are
+   * remembered in this browser. An open ticket is #~shop/SHO-12.
+   */
+  const FILTERS_KEY = (project) => `orco.filters.${project}`;
+  const filtersFrom = (query) => {
+    const params = new URLSearchParams(query);
+    const out = { ...EMPTY_FILTERS };
+    for (const key of Object.keys(EMPTY_FILTERS)) if (params.get(key)) out[key] = params.get(key).slice(0, 200);
+    return out;
+  };
+  const storedFilters = (project) => {
+    try {
+      const raw = JSON.parse(localStorage.getItem(FILTERS_KEY(project)) || 'null');
+      return raw && typeof raw === 'object' ? filtersFrom(new URLSearchParams(raw)) : null;
+    } catch {
+      return null;
+    }
+  };
+  const filterQuery = () => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(t.filters)) if (value) params.set(key, value);
+    if (t.groupBy) params.set('group', t.groupBy);
+    return params.toString();
+  };
+  /** Puts the current view in the address without navigating (no hashchange), and remembers the filters. */
+  function syncAddress() {
+    if (!t.project || !root || root.hidden) return;
+    try {
+      const kept = Object.fromEntries(Object.entries(t.filters).filter(([, v]) => v));
+      localStorage.setItem(FILTERS_KEY(t.project), JSON.stringify(kept));
+    } catch {
+      // Private windows: the address still carries them.
+    }
+    const open = panel() === 'ticket' && t.open ? t.open : null;
+    const query = open ? '' : filterQuery();
+    const hash = open ? `#~${t.openProject || t.project}/${open}` : `#~${t.project}/${t.tab}${query ? `?${query}` : ''}`;
+    if (location.hash !== hash) history.replaceState(history.state, '', hash);
+  }
+
+  async function show(project, tab, { query = null } = {}) {
     if (t.project !== project) {
-      t.filters = { ...EMPTY_FILTERS };
+      t.filters = query !== null ? filtersFrom(query) : storedFilters(project) ?? { ...EMPTY_FILTERS };
+      t.groupBy = undefined;
       t.plan = null;
+    } else if (query !== null) {
+      t.filters = filtersFrom(query);
+    }
+    const group = query !== null ? new URLSearchParams(query).get('group') : null;
+    if (group && ['folder', 'parent', 'none'].includes(group)) {
+      t.groupBy = group;
+      try {
+        localStorage.setItem(GROUP_KEY(project), group);
+      } catch {
+        // Kept for this page.
+      }
     }
     t.project = project;
     t.tab = TABS.some(([key]) => key === tab) ? tab : 'board';
@@ -420,6 +473,7 @@ export function createTickets(ctx) {
   function renderTab() {
     const body = $('ticket-body');
     if (!body || !t.plan) return;
+    syncAddress();
     if (typing(body) || dragging) {
       t.pendingTab = true;
       return;
@@ -1213,7 +1267,9 @@ export function createTickets(ctx) {
     await planFor(ticket.project, refresh && t.replan);
     t.replan = false;
     if (panel() !== 'ticket' || t.open !== ref) return;
+    t.openProject = ticket.project;
     renderDetail(ticket);
+    if (!refresh) syncAddress();
     // A ticket you open goes to Recent in the sidebar (#96).
     if (!refresh) ctx.onTicketOpen?.(ticket);
   }
@@ -1246,7 +1302,10 @@ export function createTickets(ctx) {
       event.preventDefault();
       void t.addFiles?.([...event.dataTransfer.files]);
     };
-    $('panel-title').textContent = ticket.ref;
+    $('panel-title').replaceChildren(
+      ticket.ref,
+      el('button', { class: 'ghost small copy-link', type: 'button', title: 'Copy a link to this ticket', 'aria-label': `Copy a link to ${ticket.ref}`, onclick: () => ctx.copyLink?.(`~${ticket.project}/${ticket.ref}`, `Link to ${ticket.ref}`) }, icon('link')),
+    );
     const plan = plans.get(ticket.project);
     const change = (field, transform = (v) => v) => (value) => void save(ticket, { [field]: transform(value) });
 
@@ -3228,5 +3287,5 @@ export function createTickets(ctx) {
   /** The ticket open in the panel, for commands and the palette (#93). */
   const openRef = () => (panel() === 'ticket' && t.open ? { ref: t.open, project: t.openProject } : null);
 
-  return { show, onEvent, onTask, onNotes, onSchedules, onFiles, inboxRow, openTicket, openNewTicket, navFolders, openRef, planFor, get project() { return t.project; } };
+  return { show, syncAddress, onEvent, onTask, onNotes, onSchedules, onFiles, inboxRow, openTicket, openNewTicket, navFolders, openRef, planFor, get project() { return t.project; } };
 }

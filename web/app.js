@@ -310,6 +310,7 @@ function renderMessage(message, previous, { inThread = false } = {}) {
         'div',
         { class: 'msg-actions' },
         el('button', { class: 'ghost small', type: 'button', text: 'Reply in thread', onclick: () => openThread(message) }),
+        el('button', { class: 'ghost small', type: 'button', text: 'Copy link', title: 'Copy a link to this message', onclick: () => void copyLink(`!m/${message.id}`) }),
         // An outage reported here becomes an incident with its postmortem to write (#114).
         message.projectId !== null && state.me.kind === 'user' ? el('button', { class: 'ghost small', type: 'button', text: 'Incident', title: 'Open an incident ticket from this message', onclick: () => void startIncident(message) }) : null,
       ),
@@ -894,7 +895,7 @@ function taskCard(message) {
   const card = el(
     'div',
     { class: `task-card task-${taskState}` },
-    el('span', { class: 'task-id', text: `Task #${id}` }),
+    el('button', { class: 'task-id link-button', type: 'button', title: 'Copy a link to this task', text: `Task #${id}`, onclick: () => void copyLink(`!t/${id}`, `Link to task #${id}`) }),
     el('span', { class: 'muted', text: `→ ${assignee}` }),
     chain.length > 1 ? el('span', { class: 'muted small', title: chain.join(' → '), text: `from ${chain[0]} via ${chain.slice(1).join(', ')}` }) : null,
     stalled
@@ -1881,9 +1882,48 @@ function renderMessages({ keepScroll = false } = {}) {
   renderWorkStatus();
 }
 
+/** #~<project>[/<tab>|/<REF>][?filters] (#129). */
 function ticketsRoute() {
-  const match = /^#~([a-z0-9][a-z0-9-]{0,31})(?:\/([a-z]+))?$/.exec(location.hash);
-  return match && state.projects.some((p) => p.name === match[1]) ? { project: match[1], tab: match[2] || 'board' } : null;
+  const match = /^#~([a-z0-9][a-z0-9-]{0,31})(?:\/([A-Za-z0-9]+(?:-\d+)?))?(?:\?(.*))?$/.exec(location.hash);
+  if (!match || !state.projects.some((p) => p.name === match[1])) return null;
+  const ref = match[2] && /^[A-Za-z][A-Za-z0-9]*-\d+$/.test(match[2]) ? match[2].toUpperCase() : null;
+  return { project: match[1], tab: ref ? 'board' : match[2] || 'board', ref, query: match[3] ?? null };
+}
+
+/** The address of a place in the app, for Copy link (#129). */
+function appAddress(route) {
+  return `${location.origin}${location.pathname}#${route}`;
+}
+
+async function copyLink(route, what = 'Link') {
+  try {
+    await navigator.clipboard.writeText(appAddress(route));
+    toast(`${what} copied`);
+  } catch {
+    prompt('Copy this link', appAddress(route));
+  }
+}
+
+/** #!m/<id> and #!t/<id>: a message or a task, opened where it lives (#129). */
+async function openLink(kind, id) {
+  let target;
+  try {
+    if (kind === 'm') {
+      const message = await api(`/messages/${id}`);
+      target = { room: message.room, id: message.id, threadId: message.threadId };
+    } else {
+      const task = await api(`/tasks/${id}`);
+      target = { room: task.room, id: task.messageId, threadId: null };
+    }
+  } catch (err) {
+    history.replaceState(null, '', '#!needs');
+    await selectRoom();
+    toast(`${kind === 'm' ? 'Message' : 'Task'} ${id}: ${err.message}`);
+    return;
+  }
+  history.replaceState(null, '', `#${target.room}`);
+  await selectRoom();
+  await jumpTo(target);
 }
 
 function setView(view) {
@@ -1917,6 +1957,8 @@ function overlayRoute() {
 
 async function selectRoom() {
   if (overlayRoute()) return;
+  const link = /^#!(m|t)\/(\d+)$/.exec(location.hash);
+  if (link) return openLink(link[1], Number(link[2]));
   state.viewHash = location.hash || undefined;
   if (location.hash === '#!needs') {
     setView('needs');
@@ -1940,12 +1982,13 @@ async function selectRoom() {
     setView('tickets');
     state.room = state.rooms.find((r) => r.project === route.project && r.name === 'general') || state.rooms.find((r) => r.project === route.project);
     state.loadedRef = null;
-    const showing = tickets.show(route.project, route.tab);
+    const showing = tickets.show(route.project, route.tab, { query: route.query });
     renderNav();
     renderRoomTitle();
     if (state.panel === 'thread' || state.panel === 'locks') closePanel();
     else if (state.panel === 'members') void showMembers();
     await showing;
+    if (route.ref) await tickets.openTicket(route.ref);
     return;
   }
   const room = roomFromHash();
@@ -2004,6 +2047,8 @@ function closePanel() {
   clearInterval(lockTimer);
   $('panel').hidden = true;
   $('app').classList.remove('panel-full');
+  // A closed ticket takes its address with it (#129).
+  if (state.view === 'tickets') tickets.syncAddress();
 }
 
 /*
@@ -3808,6 +3853,13 @@ async function start() {
   $('me-avatar').replaceWith(Object.assign(avatar(state.me.name, state.me.kind), { id: 'me-avatar' }));
   await loadStructure();
   // People land on what needs them, unless a link says where to go.
+  try {
+    const back = sessionStorage.getItem('orco.returnTo');
+    sessionStorage.removeItem('orco.returnTo');
+    if (back && /^#[~!]?[\w~!/?=&%.,:+-]*$/.test(back) && (!location.hash || location.hash === '#!signin=ok')) history.replaceState(null, '', back);
+  } catch {
+    // No stored address.
+  }
   if (!location.hash && state.me.kind === 'user' && state.projects.length > 0) history.replaceState(null, '', '#!needs');
   await selectRoom();
   if (state.me.kind === 'user' && state.projects.length === 0 && !guide.stepsDismissed()) void guide.showSteps();
@@ -3871,7 +3923,15 @@ async function showLogin() {
   const oidc = setup.oidc;
   if (oidc) {
     const parts = [
-      el('button', { class: 'primary', type: 'button', text: `Sign in with ${oidc.label}`, onclick: () => location.assign('auth/oidc/start') }),
+      el('button', { class: 'primary', type: 'button', text: `Sign in with ${oidc.label}`, onclick: () => {
+        // The provider's redirect drops the #address; keep it so a shared link still opens after sign-in (#129).
+        try {
+          if (location.hash.length > 1) sessionStorage.setItem('orco.returnTo', location.hash);
+        } catch {
+          // Lands on the default view.
+        }
+        location.assign('auth/oidc/start');
+      } }),
     ];
     if (oidc.pending) {
       parts.push(
@@ -4023,6 +4083,7 @@ const portfolio = createPortfolio({
 
 const tickets = createTickets({
   api,
+  copyLink: (route, what) => void copyLink(route, what),
   el,
   icon,
   avatar,
