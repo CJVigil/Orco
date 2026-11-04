@@ -51,6 +51,25 @@ describe('questions', () => {
     assert.equal(ping.question?.state, 'open');
   });
 
+  it('takes a photo as the whole answer, and the agent gets it with the answer (#128)', () => {
+    const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
+    const task = acceptedTask();
+    const q = store.questions.ask(anaClaude, task.id, 'What does the label say?');
+    const photo = store.attachments.upload(ben, 'api/general', PNG, 'label.png');
+    const answered = store.questions.answer(ben, q.id, '', [], [photo.id]);
+    assert.equal(answered.answer, '(a file attached)');
+    assert.deepEqual(answered.answerAttachments, [photo.id]);
+    const ping = store.unseenMentions(anaClaude).at(-1)!;
+    assert.deepEqual(ping.attachments.map((a) => a.id), [photo.id]);
+    assert.deepEqual(store.attachments.get(anaClaude, photo.id).data, PNG);
+    assert.deepEqual(store.tasks.get(anaClaude, task.id).question?.answerAttachments, [photo.id]);
+    // Someone else's upload cannot be slipped into an answer.
+    const q2 = store.questions.ask(anaClaude, task.id, 'And the other one?');
+    const anas = store.attachments.upload(ana, 'api/general', PNG, 'x.png');
+    assert.equal(code(() => store.questions.answer(ben, q2.id, '', [], [anas.id])), 'not_found');
+    assert.equal(code(() => store.questions.answer(ben, q2.id, '', [])), 'invalid');
+  });
+
   it('can ask the agent owner instead', () => {
     const task = acceptedTask();
     assert.equal(store.questions.ask(anaClaude, task.id, 'May I restart the db?', 'owner').target, 'ana');

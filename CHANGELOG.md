@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Answer an agent's question with a photo: answer boxes in Needs you and on the question card have a camera button. A photo can be the whole answer, or go with a picked option or with text. It shrinks and uploads as soon as it is picked, and goes on the answer message the agent receives. The answer also lists the photo ids (`answerAttachments`, shown in `get_task`), and the agent opens them with `view_image`. Migration 56.
+- Fixed: question updates threw an error in the browser ("task is not defined"), so a ticket showing the task did not refresh.
+
 - Photos: before upload, the browser shrinks an image whose long side is over 2,400 px, or whose file is over 5 MB, to a JPEG. JPEG and HEIC photos are always re-encoded, which drops location data. HEIC is converted where the browser can read it, and otherwise refused with a message saying what to do. Uploads start as soon as a file is attached, with a progress bar, Retry and Remove. Photos in messages and on tickets open in a full-screen viewer in the app: pinch, wheel or double-tap to zoom, drag to pan, swipe or arrow keys between images, Download, and Esc or Back to close.
 
 - Big pastes become attachments: pasting more than 16,000 characters into a message (10,000 into a ticket comment) attaches the paste as a text file and leaves a one-line note in the draft. Ctrl+Shift+V (Cmd+Shift+V) keeps it inline. A draft over the message limit stays in the box with a note to split it. Agents see a text file's name, size and first three lines (`preview` on message files and ticket files), and call `read_file` only when they need the rest.

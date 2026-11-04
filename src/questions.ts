@@ -45,6 +45,8 @@ export interface Question {
   recommended: string | null;
   multiSelect: boolean;
   answer: string | null;
+  /** Attachments sent with the answer (#128); open images with view_image, files with read_file. */
+  answerAttachments: number[];
   answeredBy: string | null;
   state: QuestionState;
   /** When the person (or agent) it was asked of first looked at it. */
@@ -67,6 +69,7 @@ export interface QuestionSummary {
   recommended: string | null;
   multiSelect: boolean;
   answer: string | null;
+  answerAttachments?: number[];
   answeredBy: string | null;
   seenAt: string | null;
 }
@@ -94,6 +97,7 @@ interface QuestionRow {
   recommended: string | null;
   multi_select: number;
   answer: string | null;
+  answer_attachments: string | null;
   answered_by: string | null;
   state: QuestionState;
   seen_at: string | null;
@@ -104,7 +108,7 @@ interface QuestionRow {
 const QUESTION_SELECT = `
   SELECT q.id, q.task_id, t.room_id, r.project_id, p.name AS project, r.name AS room, q.message_id, t.message_id AS thread_id,
          q.asker_id, ak.name AS asker, q.target_id, tg.name AS target, tg.owner_id AS target_owner_id,
-         ak.owner_id AS assignee_owner_id, q.audience, q.kind, q.verdict, q.question, q.options, q.recommended, q.multi_select, q.answer, ab.name AS answered_by, q.state,
+         ak.owner_id AS assignee_owner_id, q.audience, q.kind, q.verdict, q.question, q.options, q.recommended, q.multi_select, q.answer, q.answer_attachments, ab.name AS answered_by, q.state,
          q.seen_at, q.created_at, q.answered_at
   FROM questions q
   JOIN tasks t ON t.id = q.task_id
@@ -150,6 +154,7 @@ function toQuestion(row: QuestionRow): Question {
     recommended: row.recommended,
     multiSelect: row.multi_select === 1,
     answer: row.answer,
+    answerAttachments: row.answer_attachments ? (JSON.parse(row.answer_attachments) as number[]) : [],
     answeredBy: row.answered_by,
     state: row.state,
     seenAt: row.seen_at,
@@ -173,6 +178,7 @@ function toSummary(q: Question): QuestionSummary {
     recommended: q.recommended,
     multiSelect: q.multiSelect,
     answer: q.answer,
+    ...(q.answerAttachments.length ? { answerAttachments: q.answerAttachments } : {}),
     answeredBy: q.answeredBy,
     seenAt: q.seenAt,
   };
@@ -243,7 +249,7 @@ export class Questions {
    * Answers a question: free text, or for a multiple-choice one the picked labels (any of them when it
    * allows several), with free text alongside as "Other".
    */
-  answer(actor: Participant, id: number, text: string, picked: string[] = []): Question {
+  answer(actor: Participant, id: number, text: string, picked: string[] = [], attachmentIds: number[] = []): Question {
     const row = this.openRow(actor, id);
     if (row.kind === 'plan') throw new OrcoError('invalid', `Question ${id} is a plan; approve or reject it`);
     const options = row.options ? (JSON.parse(row.options) as QuestionOption[]) : [];
@@ -253,10 +259,14 @@ export class Questions {
     if (unknown.length) throw new OrcoError('invalid', `Not an option: ${unknown.join(', ')}. The options are ${options.map((o) => o.label).join(', ')}`);
     if (chosen.length > 1 && row.multi_select !== 1) throw new OrcoError('invalid', `Question ${id} takes one choice`);
     const other = text.trim();
-    const answer = chosen.length ? `${chosen.join(', ')}${other ? `. Other: ${other}` : ''}` : other;
+    const ids = [...new Set(attachmentIds.map(Number).filter((n) => Number.isInteger(n) && n > 0))];
+    // A photo can be the whole answer (#128).
+    const sent = ids.length ? `(${ids.length === 1 ? 'a file' : `${ids.length} files`} attached)` : '';
+    const words = chosen.length ? `${chosen.join(', ')}${other ? `. Other: ${other}` : ''}` : other;
+    const answer = words && sent ? `${words} ${sent}` : words || sent;
     if (!answer) throw new OrcoError('invalid', 'The answer is empty');
     if (answer.length > MAX_ANSWER) throw new OrcoError('invalid', `Answers can be at most ${MAX_ANSWER} characters`);
-    return this.resolve(actor, row, answer, null, `Answer to your question on task #${row.task_id}: ${answer}`, 'question.answer');
+    return this.resolve(actor, row, answer, null, `Answer to your question on task #${row.task_id}: ${answer}`, 'question.answer', ids);
   }
 
   /** Approves a plan, optionally edited, or rejects it with a reason. */
@@ -294,23 +304,25 @@ export class Questions {
     return row;
   }
 
-  private resolve(actor: Participant, row: QuestionRow, answer: string, verdict: PlanVerdict | null, message: string, action: string): Question {
+  private resolve(actor: Participant, row: QuestionRow, answer: string, verdict: PlanVerdict | null, message: string, action: string, attachmentIds: number[] = []): Question {
     const id = row.id;
     this.store.post(actor, toQuestion(row).room, `@${row.asker} ${message}`, row.message_id, {
       skipRateLimit: true,
+      // The answer's attachments go on the message it posts in the thread, so the asker sees them with it.
+      attachmentIds,
       onInsert: () => {
         this.store.db
           .prepare(
-            "UPDATE questions SET state = 'answered', answer = ?, verdict = ?, answered_by = ?, answered_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+            "UPDATE questions SET state = 'answered', answer = ?, answer_attachments = ?, verdict = ?, answered_by = ?, answered_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
           )
-          .run(answer, verdict, actor.id, id);
+          .run(answer, attachmentIds.length ? JSON.stringify(attachmentIds) : null, verdict, actor.id, id);
       },
     });
     const answered = this.byId(id)!;
     this.store.audit.record(actor, action, {
       projectId: answered.projectId,
       subject: `question:${id}`,
-      detail: { taskId: row.task_id, answer, verdict },
+      detail: { taskId: row.task_id, answer, verdict, ...(attachmentIds.length ? { attachments: this.store.attachments.auditDetail(attachmentIds) } : {}) },
     });
     // The answer lands where the work is tracked: on the task's ticket, and (from a person) as a decision
     // other agents can look up instead of asking again.

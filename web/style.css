@@ -5905,3 +5905,11 @@ body.lightbox-open {
     display: none;
   }
 }
+
+/* Photos with an answer (#128) */
+.answer-photos {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.35rem 0;
+}

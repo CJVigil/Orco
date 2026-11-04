@@ -1225,6 +1225,9 @@ export const MIGRATIONS = [
   `,  // 55: how big an agent's handoff context packs may be (#121).
   `
   ALTER TABLE participants ADD COLUMN pack_chars INTEGER;
+  `,  // 56: photos (and other attachments) sent with a question's answer (#128), as a JSON id list.
+  `
+  ALTER TABLE questions ADD COLUMN answer_attachments TEXT;
   `,
 ];
 

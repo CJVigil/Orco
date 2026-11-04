@@ -1033,7 +1033,8 @@ export function createApp(store: Store, options: AppOptions = {}) {
     const id = optionalInt(req.params.id);
     if (id === undefined) throw new OrcoError('invalid', 'Expected a question id');
     const choices = Array.isArray(req.body?.choices) ? (req.body.choices as unknown[]).map(String) : [];
-    res.json(store.questions.answer(req.participant!, id, str(req.body?.answer, 'answer') ?? '', choices));
+    const attachmentIds = Array.isArray(req.body?.attachmentIds) ? (req.body.attachmentIds as unknown[]).map(Number) : [];
+    res.json(store.questions.answer(req.participant!, id, str(req.body?.answer, 'answer') ?? '', choices, attachmentIds));
   });
   api.post('/questions/:id/resume', (req, res) => {
     const id = optionalInt(req.params.id);

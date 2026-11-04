@@ -1100,10 +1100,64 @@ function answerBox(question, onDone) {
   const options = question.options ?? [];
   const picked = new Set();
   const input = el('input', { class: 'answer-input', placeholder: options.length ? 'Other (optional)' : 'Your answer', 'aria-label': options.length ? 'Other answer' : 'Answer', maxlength: '4000' });
+  // Photos with the answer (#128): alone, with a picked option, or with text. They upload as soon as
+  // they are picked, to the question's room, and go on the answer the asker receives.
+  const photos = [];
+  const strip = el('div', { class: 'answer-photos', hidden: true });
+  const drawPhotos = () => {
+    strip.hidden = photos.length === 0;
+    strip.replaceChildren(
+      ...photos.map((p) =>
+        el(
+          'div',
+          { class: `pending-item ${p.status}`, title: p.error || p.file.name },
+          el('img', { src: p.url, alt: p.file.name }),
+          p.status === 'uploading' ? el('div', { class: 'upload-bar' }, el('span', { style: `width: ${Math.round(p.progress * 100)}%` })) : null,
+          p.status === 'failed' ? el('button', { type: 'button', class: 'retry', 'aria-label': `Retry ${p.file.name}`, title: `${p.error} · Retry`, onclick: () => upload(p) }, icon('retry')) : null,
+          el('button', { type: 'button', class: 'remove', 'aria-label': `Remove ${p.file.name}`, onclick: () => (URL.revokeObjectURL(p.url), photos.splice(photos.indexOf(p), 1), drawPhotos()) }, icon('x')),
+        ),
+      ),
+    );
+  };
+  const upload = (p) => {
+    p.status = 'uploading';
+    p.progress = 0;
+    p.promise = uploadWithProgress(p.file, question.room, (x) => {
+      p.progress = x;
+      drawPhotos();
+    }).then(
+      (id) => ((p.id = id), (p.status = 'done'), drawPhotos()),
+      (err) => ((p.status = 'failed'), (p.error = err.message), drawPhotos()),
+    );
+    drawPhotos();
+  };
+  const picker = el('input', { type: 'file', accept: 'image/*', multiple: true, hidden: true });
+  picker.addEventListener('change', async () => {
+    for (const file of [...picker.files]) {
+      if (photos.length >= 4) {
+        toast('Up to 4 photos with an answer');
+        break;
+      }
+      try {
+        const ready = await prepareImage(file);
+        const p = { file: ready, url: URL.createObjectURL(ready), status: 'uploading', progress: 0 };
+        photos.push(p);
+        upload(p);
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+    picker.value = '';
+  });
+  const photoButton = el('button', { class: 'ghost small answer-photo', type: 'button', title: 'Answer with a photo', 'aria-label': 'Add a photo', onclick: () => picker.click() }, icon('camera'));
   const send = async () => {
-    if (!input.value.trim() && picked.size === 0) return;
+    if (!input.value.trim() && picked.size === 0 && photos.length === 0) return;
     try {
-      await api(`/questions/${question.id}/answer`, { method: 'POST', body: { answer: input.value, choices: [...picked] } });
+      await Promise.all(photos.map((p) => p.promise));
+      const failed = photos.find((p) => p.status !== 'done');
+      if (failed) throw new Error(`${failed.file.name} did not upload: ${failed.error}. Retry or remove it.`);
+      await api(`/questions/${question.id}/answer`, { method: 'POST', body: { answer: input.value, choices: [...picked], attachmentIds: photos.map((p) => p.id) } });
+      for (const p of photos) URL.revokeObjectURL(p.url);
       onDone?.();
     } catch (err) {
       alert(err.message);
@@ -1151,7 +1205,8 @@ function answerBox(question, onDone) {
     'div',
     { class: 'answer-wrap' },
     choices,
-    el('div', { class: 'answer-box' }, input, voiceButton(input, el, icon, (text) => toast(text)), el('button', { class: 'primary small', type: 'button', text: options.length && question.multiSelect ? 'Send' : 'Answer', onclick: () => void send() })),
+    strip,
+    el('div', { class: 'answer-box' }, input, picker, photoButton, voiceButton(input, el, icon, (text) => toast(text)), el('button', { class: 'primary small', type: 'button', text: options.length && question.multiSelect ? 'Send' : 'Answer', onclick: () => void send() })),
   );
 }
 
@@ -1239,13 +1294,14 @@ function onQuestion(question) {
   for (const list of [state.messages, state.threadMessages]) {
     for (const message of list) {
       if (message.question && message.question.id === question.id) {
-        message.question = { ...message.question, state: question.state, answer: question.answer, answeredBy: question.answeredBy, verdict: question.verdict, seenAt: question.seenAt };
+        message.question = { ...message.question, state: question.state, answer: question.answer, answerAttachments: question.answerAttachments, answeredBy: question.answeredBy, verdict: question.verdict, seenAt: question.seenAt };
         touched = true;
       }
     }
   }
   scheduleInbox();
-  tickets.onTask(task);
+  // A ticket showing this task refreshes (this used to pass an undefined `task` and throw).
+  tickets.onTask({ id: question.taskId });
   if (!touched) return;
   renderMessages({ keepScroll: true });
   if (state.panel === 'thread') renderThread({ keepScroll: true });
