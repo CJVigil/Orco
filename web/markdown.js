@@ -1,6 +1,7 @@
 // A small, safe Markdown renderer. It never produces HTML strings: it calls `h(tag, props, children)`
 // to build elements, and every piece of message text ends up as a text node.
 
+import { quoteSource } from './quotes.js';
 const INLINE = [
   { type: 'code', re: /`([^`\n]+)`/ },
   { type: 'link', re: /\[([^\]\n]{1,200})\]\((https?:\/\/[^\s)]+)\)/ },
@@ -200,6 +201,13 @@ export function renderMarkdown(text, opts) {
     if (QUOTE.test(line)) {
       const quoted = [];
       while (i < lines.length && QUOTE.test(lines[i])) quoted.push(QUOTE.exec(lines[i++])[1]);
+      // A quote of a message or comment (#123): its last line names the source, shown as a link back.
+      const source = quoted.length > 1 ? quoteSource(quoted[quoted.length - 1]) : null;
+      if (source && opts.quote) {
+        const excerpt = quoted.slice(0, -1).join('\n');
+        blocks.push(h('blockquote', { class: 'quote' }, [...renderMarkdown(excerpt, { ...opts, headline: false }), opts.quote(source, excerpt)]));
+        continue;
+      }
       blocks.push(h('blockquote', {}, renderMarkdown(quoted.join('\n'), { ...opts, headline: false })));
       continue;
     }

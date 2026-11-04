@@ -1841,7 +1841,7 @@ export function createTickets(ctx) {
         const person = a.actorKind === 'user';
         return el(
           'li',
-          { class: `activity-comment ${person ? 'by-person' : 'by-agent'}` },
+          { class: `activity-comment ${person ? 'by-person' : 'by-agent'}`, 'data-activity': String(a.id), 'data-ticket': ticket.ref },
           avatar(who, a.actorKind),
           el(
             'div',

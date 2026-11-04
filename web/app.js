@@ -3,6 +3,7 @@ import { commandSuggestions, parseCommand } from './commands.js';
 import { createPalette } from './palette.js';
 import { icon } from './icons.js';
 import { voiceButton } from './voice.js';
+import { quoteText } from './quotes.js';
 import { codeChildren, renderMarkdown } from './markdown.js';
 import * as notify from './notify.js';
 import { createGuide } from './guide.js';
@@ -193,6 +194,14 @@ function richText(text, { headline = false } = {}) {
       return el('span', { class: `mention${self ? ' mention-self' : ''}`, text: `@${name}`, title: everyone ? 'Everyone in this room' : self ? 'You' : name });
     },
     ticket: ticketLink,
+    quote: (source, excerpt) =>
+      el('button', {
+        class: 'quote-source',
+        type: 'button',
+        title: 'Show the original',
+        text: `— ${source.kind === 'message' ? `message ${source.id}` : source.kind === 'comment' ? `comment on ${source.ref}` : source.ref}`,
+        onclick: () => void jumpToQuote(source, excerpt),
+      }),
   });
 }
 
@@ -2595,6 +2604,91 @@ async function loadFreezes() {
       ),
     ),
   );
+}
+
+/*
+ * Quote a line (#123): select text in a message or a ticket comment and press Quote; the draft gets
+ * the excerpt and where it came from. A quote's source link jumps there and highlights the excerpt,
+ * but only when it appears once in the source: repeated text is never highlighted in the wrong place.
+ */
+const quoteButton = el('button', { class: 'quote-float primary small', type: 'button', text: 'Quote', hidden: true });
+document.body.append(quoteButton);
+let quoting = null;
+
+document.addEventListener('selectionchange', () => {
+  const sel = document.getSelection();
+  const text = sel && !sel.isCollapsed ? sel.toString().trim() : '';
+  const anchor = sel?.anchorNode?.parentElement;
+  const msg = anchor?.closest?.('.msg[data-id]');
+  const comment = anchor?.closest?.('[data-activity]');
+  if (!text || text.length > 1500 || (!msg && !comment)) {
+    quoting = null;
+    quoteButton.hidden = true;
+    return;
+  }
+  quoting = comment
+    ? { excerpt: text, source: { kind: 'comment', activityId: Number(comment.dataset.activity), ref: comment.dataset.ticket }, into: () => $('panel-body').querySelector('.comment-box textarea') }
+    : { excerpt: text, source: { kind: 'message', id: Number(msg.dataset.id) }, into: () => (msg.closest('#panel') ? $('thread-text') : $('composer-text')) };
+  const rect = sel.getRangeAt(0).getBoundingClientRect();
+  quoteButton.style.top = `${Math.max(8, rect.top + window.scrollY - 36)}px`;
+  quoteButton.style.left = `${Math.min(window.innerWidth - 80, Math.max(8, rect.left + window.scrollX))}px`;
+  quoteButton.hidden = false;
+});
+
+quoteButton.addEventListener('mousedown', (event) => event.preventDefault());
+quoteButton.addEventListener('click', () => {
+  if (!quoting) return;
+  const box = quoting.into();
+  if (!box) return toast('Open the place to reply first');
+  const block = quoteText(quoting.excerpt, quoting.source);
+  box.value = box.value.trim() ? `${box.value.replace(/\s*$/, '\n\n')}${block}` : block;
+  box.dispatchEvent(new Event('input', { bubbles: true }));
+  box.focus();
+  box.setSelectionRange(box.value.length, box.value.length);
+  document.getSelection()?.removeAllRanges();
+  quoteButton.hidden = true;
+});
+
+/** Finds the excerpt's single place in an element and highlights it; returns false when it is not there exactly once. */
+function highlightOnce(root, excerpt) {
+  const nodes = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let all = '';
+  while (walker.nextNode()) {
+    nodes.push({ node: walker.currentNode, start: all.length });
+    all += walker.currentNode.nodeValue;
+  }
+  const want = excerpt.replace(/\s+/g, ' ').trim();
+  const flat = all.replace(/\s/g, ' ');
+  const at = flat.indexOf(want);
+  if (at < 0 || flat.indexOf(want, at + 1) >= 0 || !globalThis.CSS?.highlights) return false;
+  const find = (offset) => {
+    const n = [...nodes].reverse().find((x) => x.start <= offset);
+    return [n.node, offset - n.start];
+  };
+  const range = new Range();
+  range.setStart(...find(at));
+  range.setEnd(...find(at + want.length));
+  CSS.highlights.set('quote', new Highlight(range));
+  setTimeout(() => CSS.highlights.delete('quote'), 4000);
+  return true;
+}
+
+async function jumpToQuote(source, excerpt) {
+  let target = null;
+  if (source.kind === 'message') {
+    target = document.querySelector(`.msg[data-id="${source.id}"]`);
+    if (!target) return toast(`Message ${source.id} is not on screen here; it may be in another room or further back`);
+  } else {
+    await tickets.openTicket(source.ref);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    target = source.kind === 'comment' ? $('panel-body').querySelector(`[data-activity="${source.activityId}"]`) : $('panel-body').querySelector('.ticket-text');
+    if (!target) return toast('The original is no longer there');
+  }
+  target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  target.classList.add('quote-flash');
+  setTimeout(() => target.classList.remove('quote-flash'), 2000);
+  highlightOnce(target, excerpt);
 }
 
 /** A mic beside a text box (#122): speech goes in the draft only. */

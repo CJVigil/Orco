@@ -5714,3 +5714,36 @@ button.recent-link {
 .voice-row > textarea {
   flex: 1;
 }
+
+/* Quote a line (#123) */
+.quote-float {
+  position: absolute;
+  z-index: 50;
+  box-shadow: var(--shadow);
+}
+
+blockquote.quote .quote-source {
+  display: block;
+  margin-top: 0.15rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+blockquote.quote .quote-source:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.quote-flash {
+  background: var(--mention-bg) !important;
+  transition: background 0.4s;
+}
+
+::highlight(quote) {
+  background: color-mix(in srgb, var(--listen) 35%, transparent);
+}

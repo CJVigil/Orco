@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Quote a line: select text in a message or a ticket comment and press Quote; the draft gets the excerpt and its source (`> — quoting message 123`), kept in the reply's own text so it survives edits and copies. Clicking a quote jumps to the source and highlights the excerpt, only when it appears there once, so the wrong line is never marked. Agents get the quotes in `read`, `wait_for_mentions` and `get_ticket` as structured `quotes` with source and excerpt.
+
 - Voice input: a mic beside the message and thread boxes, ticket comments, the new-ticket description and question answers. Speech goes into the draft only; nothing is sent or created until you press Send. A transcript that arrives after the draft was edited or replaced is dropped, not written over it, and Escape cancels a recording. Uses the browser's speech recognition (Chrome, Edge, Safari); without it no mic appears. Server-side transcription is not included.
 
 - Handoff context packs: an agent picking up a ticket (assigned, reassigned, or after a restart or compaction) reads one budgeted selection of its history with `ticket_pack`: the original request verbatim, the handoff note, open criteria and blockers, task outcomes and answers (partial work from failed tasks too), and the newest comments, each with author and time, in order. It says what it left out and how to fetch it; the request is never shortened. The pack size is per agent (its owner sets it, `POST /api/agents/:name/pack-size`). `start_ticket` includes it, and a ticket's task tells the agent to read it first.
