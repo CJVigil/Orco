@@ -32,7 +32,7 @@ import type { Wake } from './reminders.js';
 import type { Review } from './reviews.js';
 import type { ScheduleInput } from './schedules.js';
 import type { TaskResult } from './tasks.js';
-import { myWork } from './work.js';
+import { briefWork, myWork } from './work.js';
 
 declare module 'express-serve-static-core' {
   interface Request {
@@ -1669,7 +1669,44 @@ export function createApp(store: Store, options: AppOptions = {}) {
   });
 
   api.get('/my-work', (req, res) => {
-    res.json(myWork(store, req.participant!));
+    const work = myWork(store, req.participant!);
+    // format=brief: a few lines for a session's opening context (the Claude Code plugin's hook, #102).
+    if (req.query.format === 'brief') res.type('text/plain').send(briefWork(work));
+    else res.json(work);
+  });
+  // What reached you after a moment (ISO time): new mentions and answers to you, without marking
+  // anything seen. The Claude Code plugin's hooks poll it between turns (#102).
+  api.get('/activity', (req, res) => {
+    const me = req.participant!;
+    const now = new Date(store.now()).toISOString();
+    const after = typeof req.query.after === 'string' && !Number.isNaN(Date.parse(req.query.after)) ? new Date(req.query.after).toISOString() : now;
+    const mentions = store.unseenMentions(me).filter((m) => m.createdAt > after);
+    const answers = store.db
+      .prepare(
+        `SELECT 'question' AS kind, q.id AS ref, p.name AS by, q.answer AS text, q.answered_at AS at
+           FROM questions q JOIN participants p ON p.id = q.answered_by
+          WHERE q.asker_id = ? AND q.answered_at > ?
+         UNION ALL
+         SELECT 'ticket', pr.ticket_key || '-' || t.number, p.name, ta.body, ta.created_at
+           FROM ticket_activity ta JOIN tickets t ON t.id = ta.ticket_id JOIN projects pr ON pr.id = t.project_id
+           JOIN participants p ON p.id = ta.actor_id
+          WHERE t.assignee_id = ? AND ta.kind = 'comment' AND ta.actor_id != ? AND p.kind = 'user' AND ta.created_at > ?
+         ORDER BY at LIMIT 20`,
+      )
+      .all(me.id, after, me.id, me.id, after) as { kind: string; ref: string | number; by: string; text: string | null; at: string }[];
+    const visible = answers.filter((a) => a.kind === 'question' || (() => {
+      try {
+        store.tickets.idOf(me, String(a.ref));
+        return true;
+      } catch {
+        return false;
+      }
+    })());
+    res.json({
+      now,
+      mentions: mentions.map((m) => ({ id: m.id, room: m.room, author: m.author, text: m.text.slice(0, 200) })),
+      answers: visible.map((a) => ({ kind: a.kind, ref: a.kind === 'question' ? `question #${a.ref}` : String(a.ref), by: a.by, text: (a.text ?? '').slice(0, 200), at: a.at })),
+    });
   });
   api.get('/inbox', (req, res) => {
     const me = req.participant!;

@@ -35,6 +35,8 @@ export const CLIENT_USAGE = `Client commands (talk to a running server; set ORCO
   watch                         Like wait with --json and no timeout, retrying through network errors and restarts:
                                 prints the new mentions as JSON lines and exits. Each mention is delivered once;
                                 with --after ID (the last one you handled) the rest come back until acknowledged.
+                                --max-hours N gives up after N hours (exit 2); --text prints them as text. Run it in
+                                the background so an agent wakes only when someone mentions it.
   ack <message-id>              Mark your mentions up to that message as handled, without replying
   post <room> <text|-> [--thread ID] [--file PATH]...   Post a message (- reads stdin)
   read <room> [--thread ID] [--limit N]
@@ -230,6 +232,8 @@ export async function runClient(argv: string[], io: ClientIO): Promise<number> {
       label: { type: 'string', multiple: true },
       timeout: { type: 'string' },
       after: { type: 'string' },
+      'max-hours': { type: 'string' },
+      text: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -325,7 +329,10 @@ export async function runClient(argv: string[], io: ClientIO): Promise<number> {
         // The server hands out each mention once and remembers what it handed out, so a restart of
         // the server or this command never replays one, and mentions sent while away are not missed.
         const watching = command === 'watch';
-        const timeout = watching ? 0 : (int(values.timeout, '--timeout') ?? 0) * 1000;
+        // watch --max-hours N gives up (exit 2) after N hours, so a background watcher does not run forever.
+        const maxHours = watching && values['max-hours'] !== undefined ? Number(values['max-hours']) : undefined;
+        if (maxHours !== undefined && !(maxHours > 0)) throw new ClientError('--max-hours is a positive number');
+        const timeout = watching ? (maxHours ?? 0) * 3600_000 : (int(values.timeout, '--timeout') ?? 0) * 1000;
         const deadline = timeout ? Date.now() + timeout : Infinity;
         let failures = 0;
         for (;;) {
@@ -349,7 +356,8 @@ export async function runClient(argv: string[], io: ClientIO): Promise<number> {
             continue;
           }
           if (!mentions.length) continue;
-          if (watching) for (const m of mentions) io.out(JSON.stringify(m));
+          if (watching && values.text) io.out(mentions.map((m) => formatMessage(m)).join('\n\n'));
+          else if (watching) for (const m of mentions) io.out(JSON.stringify(m));
           else print(mentions.length === 1 ? mentions[0] : mentions, () => mentions.map((m) => formatMessage(m)).join('\n\n'));
           return 0;
         }

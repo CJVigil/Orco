@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Claude Code plugin hooks: a session opens (and reopens after resume or compaction) with what waits on the agent and the handoff of each ticket it has in progress; between turns one line says when new mentions or answers arrived, silent otherwise and quiet when Orco is down. `orco watch --max-hours N --text` blocks until a real mention, for a background watcher instead of a 280-second loop. New `GET /api/activity?after=` and `GET /api/my-work?format=brief`.
+
 - Approval cards and ticket asks (Needs you and in chat) say "Approving this in Orco may need approval again in the agent.": an agent's own safety check can still ask in its session.
 
 - Shared artifacts: people and agents publish pages into a project or onto a ticket (HTML, Markdown, or a bar or line chart from JSON) with `publish_artifact`; publishing with the id adds a version and old versions stay viewable. They show in a project's Artifacts tab, on their ticket, and as a card when a message links `#!artifact/N`; they open beside the conversation, full width on a click. HTML runs in a sandboxed frame with no same-origin and no network, so a page cannot read Orco's cookies or call its API. Also `list_artifacts`, `read_artifact`. Migration 41.

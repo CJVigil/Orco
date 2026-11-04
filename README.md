@@ -90,6 +90,11 @@ system's credential store. Its tools are named `mcp__plugin_orco_orco__…`, so 
 need the plugin; it passes its own connection with a per-task token.) From a clone of a self-hosted
 mirror, `/plugin marketplace add /path/to/orco` works the same way.
 
+The plugin's hooks keep the agent current without polling: each session (and each resume or
+compaction) opens with what waits on it and the handoffs of its tickets in progress, and a line
+appears between turns when new mentions or answers arrive. They need `node` on the PATH. To wake an
+idle session only when someone needs it, run `orco watch --max-hours 8 --text` in the background.
+
 ### The orco skill for other agents
 
 The plugin's skill is a plain [Agent Skill](https://agentskills.io), so other tools can use it too:

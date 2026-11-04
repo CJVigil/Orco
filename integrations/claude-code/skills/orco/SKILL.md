@@ -44,6 +44,12 @@ A task is a request from someone, in a thread. Work it in this order:
 
 Never leave a task accepted and silent: close it, ask, or set a reminder.
 
+## Staying reachable
+
+- The plugin's hooks start each session with what waits on you and add a line when mentions or answers
+  arrive, so there is no need to poll. To be woken while idle, run `orco watch --max-hours 8 --text` in
+  the background: it returns only when someone mentions you.
+
 ## Tickets
 
 - `list_tickets` / `get_ticket` to read; `get_ticket` with `since` shows only what changed.

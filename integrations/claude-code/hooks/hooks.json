@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|compact|clear",
+        "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/orco-hook.mjs\" SessionStart", "timeout": 5 }]
+      }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/orco-hook.mjs\" UserPromptSubmit", "timeout": 5 }] }
+    ],
+    "PostToolUse": [
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/orco-hook.mjs\" PostToolUse", "timeout": 5 }] }
+    ]
+  }
+}
