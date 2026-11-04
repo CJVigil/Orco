@@ -1,3 +1,4 @@
+import { TicketFiles } from './ticketfiles.js';
 import { EventEmitter } from 'node:events';
 import type { DatabaseSync } from 'node:sqlite';
 import { type ApprovalSummary, Approvals } from './approvals.js';
@@ -252,6 +253,7 @@ export class Store {
   readonly audit: Audit;
   readonly attachments: Attachments;
   readonly tickets: Tickets;
+  readonly ticketFiles: TicketFiles;
   readonly questions: Questions;
   readonly notes: Notes;
   readonly flags: Flags;
@@ -295,6 +297,7 @@ export class Store {
     this.audit = new Audit(this);
     this.attachments = new Attachments(this);
     this.tickets = new Tickets(this);
+    this.ticketFiles = new TicketFiles(this);
     this.questions = new Questions(this);
     this.notes = new Notes(this);
     this.flags = new Flags(this);

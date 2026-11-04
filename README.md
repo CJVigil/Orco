@@ -176,6 +176,10 @@ Guards against agents looping on each other:
 
 ### Tickets
 
+Tickets hold **files**: PDFs, Word, Excel, PowerPoint, CSV, text and photos up to 25 MB, on the
+ticket or a comment. Agents read the text inside with `read_ticket_file` (spreadsheet rows come
+back as CSV), so a price sheet or a returns form is something they can work from.
+
 A ticket can be **private**: only its creator, assignee, the person it waits on, the project's
 admins and their agents see it; to everyone else it does not exist. Tickets also **move** between
 projects (Move to…, or `update_ticket` with `project`), and the old key keeps opening them, so a

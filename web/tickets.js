@@ -727,6 +727,71 @@ export function createTickets(ctx) {
 
   let dragging = null;
 
+  /* Files on tickets (#98) */
+
+  /** The files a comment came with, as small chips (the strip above has them all). */
+  function commentFiles(ticket, a) {
+    const files = (ticket.files ?? []).filter((f) => f.activityId === a.id);
+    if (!files.length) return null;
+    return el('div', { class: 'comment-files' }, files.map((f) => el('a', { class: 'pending-chip', href: `/api/ticket-files/${f.id}`, target: '_blank', rel: 'noopener' }, icon('file'), el('span', { text: f.name }))));
+  }
+
+  async function uploadTicketFile(project, file) {
+    const res = await fetch(`/api/ticket-files?project=${encodeURIComponent(project)}&name=${encodeURIComponent(file.name || 'file')}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: file,
+      credentials: 'same-origin',
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(res.status === 413 ? 'Files on tickets can be at most 25 MB' : data.error || res.statusText);
+    return data;
+  }
+
+  const fileSize = (n) => (n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`);
+
+  /** Everything attached to the ticket and its comments: name, who and when; images and PDFs preview here. */
+  function filesStrip(ticket) {
+    if (!ticket.files?.length) return null;
+    return el(
+      'div',
+      { class: 'files-strip' },
+      el('div', { class: 'small muted files-head', text: `Files (${ticket.files.length})` }),
+      ticket.files.map((f) => {
+        const url = `/api/ticket-files/${f.id}`;
+        const previewable = f.mime.startsWith('image/') || f.mime === 'application/pdf';
+        const preview = el('div', { class: 'file-preview', hidden: true });
+        return el(
+          'div',
+          { class: 'ticket-file' },
+          el(
+            'div',
+            { class: 'ticket-file-row' },
+            f.mime.startsWith('image/') ? el('img', { class: 'file-thumb', src: url, alt: '', loading: 'lazy' }) : icon('file'),
+            el('span', { class: 'file-name', title: f.name, text: f.name }),
+            el('span', { class: 'muted small', text: `${fileSize(f.size)} · ${f.by} · ${ago(f.at)}` }),
+            previewable
+              ? el('button', {
+                  class: 'ghost small',
+                  type: 'button',
+                  text: 'Preview',
+                  onclick: (event) => {
+                    preview.hidden = !preview.hidden;
+                    event.target.textContent = preview.hidden ? 'Preview' : 'Hide';
+                    if (!preview.hidden && !preview.firstChild) {
+                      preview.append(f.mime === 'application/pdf' ? el('iframe', { src: url, title: f.name }) : el('img', { src: url, alt: f.name }));
+                    }
+                  },
+                })
+              : null,
+            el('a', { class: 'ghost small button-link', href: `${url}?download=1`, download: f.name, text: 'Download' }),
+          ),
+          preview,
+        );
+      }),
+    );
+  }
+
   /** Private or shared, and Move to… another project (#97), at the foot of an open ticket. */
   function accessRow(ticket) {
     const others = [...new Set(rooms().map((r) => r.project).filter((p) => p && p !== ticket.project))];
@@ -995,6 +1060,15 @@ export function createTickets(ctx) {
     t.openProject = ticket.project;
     const body = $('panel-body');
     const draft = body.querySelector('.comment-box textarea')?.value ?? '';
+    // Files dropped anywhere on the open ticket go with the next comment (#98).
+    body.ondragover = (event) => {
+      if (panel() === 'ticket' && event.dataTransfer?.types.includes('Files')) event.preventDefault();
+    };
+    body.ondrop = (event) => {
+      if (panel() !== 'ticket' || !event.dataTransfer?.files.length) return;
+      event.preventDefault();
+      void t.addFiles?.([...event.dataTransfer.files]);
+    };
     $('panel-title').textContent = ticket.ref;
     const plan = plans.get(ticket.project);
     const change = (field, transform = (v) => v) => (value) => void save(ticket, { [field]: transform(value) });
@@ -1613,7 +1687,8 @@ export function createTickets(ctx) {
             'div',
             { class: 'comment-main' },
             el('div', { class: 'comment-head' }, el('strong', { text: who }), el('span', { class: `who-chip ${person ? 'person' : 'agent'}`, text: person ? 'Person' : a.actorKind === 'agent' ? 'Agent' : 'Orco' }), el('span', { class: 'muted small', text: ago(a.createdAt) })),
-            person ? el('div', { class: 'md ticket-text' }, richText(a.body, { headline: true })) : folded(a.body, { firstLineOnly: true, headline: true }),
+            a.body ? (person ? el('div', { class: 'md ticket-text' }, richText(a.body, { headline: true })) : folded(a.body, { firstLineOnly: true, headline: true })) : null,
+            commentFiles(ticket, a),
           ),
         );
       }
@@ -1633,7 +1708,51 @@ export function createTickets(ctx) {
     });
     const box = el('textarea', { rows: '2', placeholder: 'Leave a comment, or / for commands', 'aria-label': 'Comment' });
     box.value = draft;
+    // Files waiting to go with the next comment (#98), kept per ticket while the panel redraws.
+    const pending = (t.pendingFiles ??= new Map()).get(ticket.ref) ?? [];
+    t.pendingFiles.set(ticket.ref, pending);
+    const chips = el('div', { class: 'pending-files' });
+    const drawChips = () =>
+      chips.replaceChildren(
+        ...pending.map((f) =>
+          el(
+            'span',
+            { class: `pending-chip${f.id ? '' : ' uploading'}` },
+            icon('file'),
+            el('span', { text: f.id ? f.name : `${f.name} · uploading…` }),
+            el('button', { class: 'ghost small', type: 'button', 'aria-label': `Remove ${f.name}`, text: '×', onclick: () => (pending.splice(pending.indexOf(f), 1), drawChips()) }),
+          ),
+        ),
+      );
+    t.addFiles = async (list) => {
+      for (const file of list) {
+        const item = { name: file.name, id: null };
+        pending.push(item);
+        drawChips();
+        try {
+          item.id = (await uploadTicketFile(ticket.project, file)).id;
+        } catch (err) {
+          pending.splice(pending.indexOf(item), 1);
+          notify(`${file.name}: ${err.message}`);
+        }
+        drawChips();
+      }
+    };
+    drawChips();
+    const picker = el('input', { type: 'file', multiple: true, hidden: true, onchange: () => (void t.addFiles([...picker.files]), (picker.value = '')) });
     const send = async () => {
+      if (pending.some((f) => !f.id)) return notify('Wait for the upload to finish');
+      const ids = pending.map((f) => f.id);
+      if (ids.length && !box.value.trim()) {
+        try {
+          const updated = await api(`/tickets/${ticket.ref}/comments`, { method: 'POST', body: { text: '', attachmentIds: ids } });
+          pending.length = 0;
+          renderDetail(updated);
+        } catch (err) {
+          notify(err.message);
+        }
+        return;
+      }
       if (!box.value.trim()) return;
       // A slash command acts on this ticket instead of posting (#93): /next "call Michael".
       const command = parseCommand(box.value);
@@ -1647,8 +1766,9 @@ export function createTickets(ctx) {
         return;
       }
       try {
-        const updated = await api(`/tickets/${ticket.ref}/comments`, { method: 'POST', body: { text: box.value } });
+        const updated = await api(`/tickets/${ticket.ref}/comments`, { method: 'POST', body: { text: box.value, attachmentIds: ids } });
         box.value = '';
+        pending.length = 0;
         renderDetail(updated);
       } catch (err) {
         notify(err.message);
@@ -1661,7 +1781,19 @@ export function createTickets(ctx) {
         void send();
       }
     });
-    const commentBox = el('div', { class: 'comment-box' }, box, el('div', { class: 'row-end' }, el('button', { class: 'primary small', type: 'button', text: 'Comment', onclick: () => void send() })));
+    const commentBox = el(
+      'div',
+      { class: 'comment-box' },
+      box,
+      chips,
+      el(
+        'div',
+        { class: 'row-end' },
+        picker,
+        el('button', { class: 'ghost small', type: 'button', title: 'Attach files: PDF, Word, Excel, PowerPoint, CSV, text or images, up to 25 MB (or drop them on the ticket)', 'aria-label': 'Attach files', onclick: () => picker.click() }, icon('paperclip')),
+        el('button', { class: 'primary small', type: 'button', text: 'Comment', onclick: () => void send() }),
+      ),
+    );
     ctx.attachCommands?.(box, 'ticket');
     ctx.attachTicketRefs?.(box);
     return el(
@@ -1674,6 +1806,7 @@ export function createTickets(ctx) {
         el('span', { class: 'spacer' }),
         el('label', { class: 'check small' }, el('input', { type: 'checkbox', checked: peopleOnly, onchange: (event) => (setPeopleOnly(event.target.checked), renderDetail(ticket)) }), 'People only'),
       ),
+      filesStrip(ticket),
       el('ol', { class: 'activity' }, foldRuns(items, entries)),
       commentBox,
       el('p', { class: 'muted small detail-foot', text: `Opened by ${ticket.creator} ${ago(ticket.createdAt)} · updated ${ago(ticket.updatedAt)}` }),

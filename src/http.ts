@@ -7,6 +7,7 @@ import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpHandler } from '@modelcontextprotocol/server';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { MAX_ATTACHMENT_BYTES } from './attachments.js';
+import { MAX_TICKET_FILE_BYTES } from './ticketfiles.js';
 import { buildMcpServer } from './mcp.js';
 import { roomMatcher } from './rooms.js';
 import { OAUTH_SCOPE, OAuth } from './oauth.js';
@@ -214,6 +215,7 @@ function ticketInput(body: Record<string, unknown> | undefined): TicketInput {
     waitingAsk: str(b.waitingAsk, 'waitingAsk'),
     waitingOptions: b.waitingOptions === null ? null : list(b.waitingOptions, 'waitingOptions', 'string'),
     private: b.private === undefined ? undefined : b.private === true,
+    attachmentIds: list(b.attachmentIds, 'attachmentIds', 'number'),
   };
 }
 
@@ -910,6 +912,28 @@ export function createApp(store: Store, options: AppOptions = {}) {
       }),
     );
   });
+  // Files on tickets (#98): listed per ticket, served by id. Images and PDFs show inline, the rest downloads.
+  api.get('/tickets/:ref/files', (req, res) => {
+    res.json(store.ticketFiles.list(req.participant!, String(req.params.ref)));
+  });
+  api.get('/ticket-files/:id', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a file id');
+    const file = store.ticketFiles.get(req.participant!, id);
+    const inline = file.mime.startsWith('image/') || file.mime === 'application/pdf';
+    const name = file.name.replace(/["\\\r\n]/g, '');
+    res.set({
+      'Content-Type': file.mime.startsWith('text/') ? `${file.mime}; charset=utf-8` : file.mime,
+      'Content-Length': String(file.size),
+      'Content-Disposition': `${inline && req.query.download === undefined ? 'inline' : 'attachment'}; filename="${name}"; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+      // A PDF needs the browser's own viewer, which a sandboxed page cannot use; it still runs no page script.
+      'Content-Security-Policy': file.mime === 'application/pdf' ? "default-src 'none'; object-src 'self'" : "default-src 'none'; sandbox",
+      'X-Content-Type-Options': 'nosniff',
+      'Cache-Control': 'private, max-age=31536000, immutable',
+      ETag: `"${file.sha256}"`,
+    });
+    res.send(file.data);
+  });
   api.get('/attachments/:id', (req, res) => {
     const id = optionalInt(req.params.id);
     if (id === undefined) throw new OrcoError('invalid', 'Expected an attachment id');
@@ -1285,7 +1309,9 @@ export function createApp(store: Store, options: AppOptions = {}) {
     res.json(store.tickets.replyWaiting(req.participant!, String(req.params.ref), String(req.body?.reply ?? '')));
   });
   api.post('/tickets/:ref/comments', (req, res) => {
-    res.status(201).json(store.tickets.comment(req.participant!, String(req.params.ref), str(req.body?.text, 'text') ?? ''));
+    const ids = req.body?.attachmentIds;
+    if (ids !== undefined && (!Array.isArray(ids) || ids.some((v) => !Number.isInteger(v)))) throw new OrcoError('invalid', 'attachmentIds must be a list of ids');
+    res.status(201).json(store.tickets.comment(req.participant!, String(req.params.ref), str(req.body?.text, 'text') ?? '', ids ?? []));
   });
   api.post('/tickets/:ref/claim', (req, res) => {
     res.json(store.tickets.claim(req.participant!, String(req.params.ref), { start: req.body?.start !== false }));
@@ -1987,6 +2013,24 @@ export function createApp(store: Store, options: AppOptions = {}) {
       const data = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
       const name = typeof req.query.name === 'string' ? req.query.name : undefined;
       res.status(201).json(store.attachments.upload(req.participant!, String(req.query.room ?? ''), data, name));
+    },
+  );
+
+  app.post(
+    '/api/ticket-files',
+    auth,
+    rejectCrossSiteUpload,
+    (req, res, next) =>
+      express.raw({ type: () => true, limit: MAX_TICKET_FILE_BYTES + 1 })(req, res, (err?: unknown) => {
+        if ((err as { type?: string } | undefined)?.type === 'entity.too.large') {
+          return next(new OrcoError('invalid', `Files on tickets can be at most ${MAX_TICKET_FILE_BYTES / 1024 / 1024} MB`));
+        }
+        next(err);
+      }),
+    (req, res) => {
+      const data = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+      const name = typeof req.query.name === 'string' ? req.query.name : undefined;
+      res.status(201).json(store.ticketFiles.upload(req.participant!, String(req.query.project ?? ''), data, name));
     },
   );
 

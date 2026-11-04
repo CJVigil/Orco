@@ -5162,3 +5162,93 @@ button.recent-link {
 .detail-access select {
   width: auto;
 }
+
+/* Files on tickets (#98) */
+.files-strip {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0.25rem 0 0.75rem;
+}
+
+.ticket-file {
+  border-radius: 6px;
+  background: var(--bg-raised);
+}
+
+.ticket-file-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.4rem 0.3rem 0.6rem;
+  min-width: 0;
+  font-size: 0.84rem;
+}
+
+.ticket-file-row .file-name {
+  flex: 1;
+}
+
+.ticket-file-row .muted {
+  white-space: nowrap;
+}
+
+.file-thumb {
+  width: 28px;
+  height: 28px;
+  object-fit: cover;
+  border-radius: 4px;
+  flex: none;
+}
+
+.file-preview img {
+  display: block;
+  max-width: 100%;
+  margin: 0 auto;
+}
+
+.file-preview iframe {
+  display: block;
+  width: 100%;
+  height: 70vh;
+  border: 0;
+}
+
+.pending-files,
+.comment-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.pending-files:empty {
+  display: none;
+}
+
+.pending-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  max-width: 100%;
+  padding: 0.1rem 0.25rem 0.1rem 0.45rem;
+  border-radius: 6px;
+  background: var(--bg-hover);
+  color: var(--text);
+  font-size: 0.8rem;
+  text-decoration: none;
+}
+
+.pending-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pending-chip.uploading {
+  opacity: 0.6;
+}
+
+@media (max-width: 480px) {
+  .ticket-file-row .muted {
+    display: none;
+  }
+}

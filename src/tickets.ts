@@ -1,3 +1,4 @@
+import type { TicketFile } from './ticketfiles.js';
 import { OrcoError } from './errors.js';
 import type { Participant, Project, Store } from './store.js';
 import { OPEN_STATES, stepsOf, type Task, type TaskState } from './tasks.js';
@@ -191,6 +192,8 @@ export interface TicketLink {
 }
 
 export interface Ticket extends TicketSummary {
+  /** Files on the ticket and its comments (#98). */
+  files: TicketFile[];
   description: string;
   creator: string;
   /** Where whoever works this ticket left off: done, next, branch or PR, gotchas. */
@@ -223,6 +226,8 @@ export interface Ticket extends TicketSummary {
 }
 
 export interface TicketInput {
+  /** Uploads (POST /api/ticket-files) to attach to the ticket (#98). */
+  attachmentIds?: number[];
   /** Private (#97): only its creator, assignee, waiting-on person, project admins and their agents see it. */
   private?: boolean;
   title?: string;
@@ -526,6 +531,7 @@ export class Tickets {
     const criteria = (input.criteriaAdd ?? []).map((text) => text.trim()).filter(Boolean);
     if (criteria.length > MAX_CRITERIA) throw new OrcoError('invalid', `A ticket can have at most ${MAX_CRITERIA} criteria`);
     for (const text of criteria) if (text.length > MAX_CRITERION) throw new OrcoError('invalid', `A criterion can be at most ${MAX_CRITERION} characters`);
+    if (input.attachmentIds?.length) this.store.ticketFiles.check(actor, proj.id, input.attachmentIds);
     const blockers = [...new Set(input.blockedByAdd ?? [])].map((ref) => this.byRef(actor, ref));
     const handoff = (input.handoff ?? '').trim();
     const blockedReason = (input.blockedReason ?? '').trim().replace(/\s+/g, ' ');
@@ -560,6 +566,7 @@ export class Tickets {
       }
       if (blockedReason) this.store.db.prepare('UPDATE tickets SET blocked_reason = ? WHERE id = ?').run(blockedReason, id);
       if (input.private) this.store.db.prepare('UPDATE tickets SET private = 1 WHERE id = ?').run(id);
+      if (input.attachmentIds?.length) this.store.ticketFiles.attach(id, null, input.attachmentIds);
       this.activity(id, actor, 'created', null, null);
       this.store.commit();
     } catch (err) {
@@ -652,6 +659,13 @@ export class Tickets {
       params.push(value);
     };
 
+    let files: number[] = [];
+    if (input.attachmentIds?.length) {
+      this.store.ticketFiles.check(actor, row.project_id, input.attachmentIds);
+      files = input.attachmentIds;
+      const names = files.map((id) => (this.store.db.prepare('SELECT name FROM ticket_files WHERE id = ?').get(id) as { name: string }).name);
+      changes.push({ field: 'files', from: null, to: names.join(', ') });
+    }
     if (input.private !== undefined && (input.private ? 1 : 0) !== row.private) {
       // Who can see a ticket is a person's call: its creator or a project admin.
       if (actor.kind !== 'user' || (actor.id !== row.creator_id && this.store.roleIn(actor, row.project_id) !== 'admin')) {
@@ -866,7 +880,7 @@ export class Tickets {
       if (!Number.isFinite(input.sort)) throw new OrcoError('invalid', 'Sort must be a number');
       set('sort', input.sort);
     }
-    if (sets.length === 0 && newLabels === undefined && !criteria.apply && !links.apply) return { ticket: this.detail(actor, row.id) };
+    if (sets.length === 0 && newLabels === undefined && !criteria.apply && !links.apply && files.length === 0) return { ticket: this.detail(actor, row.id) };
 
     const openTask = row.task_id !== null && OPEN_STATES.includes(taskState(row)!);
     // Canceling the ticket stops its agent too, when this person may cancel that task.
@@ -899,6 +913,7 @@ export class Tickets {
       }
       criteria.apply?.();
       links.apply?.();
+      if (files.length) this.store.ticketFiles.attach(row.id, null, files);
       if (!sets.length) this.store.db.prepare(`UPDATE tickets SET updated_at = ${NOW_SQL} WHERE id = ?`).run(row.id);
       if (changes.length) this.activity(row.id, actor, 'change', null, { changes });
       this.store.commit();
@@ -1019,14 +1034,16 @@ export class Tickets {
     };
   }
 
-  comment(actor: Participant, ref: string, body: string): Ticket {
+  comment(actor: Participant, ref: string, body: string, attachmentIds: number[] = []): Ticket {
     const row = this.byRef(actor, ref);
     this.store.assertWrite(actor, row.project_id);
     const text = body.trim();
-    if (!text) throw new OrcoError('invalid', 'Comment is empty');
+    if (!text && attachmentIds.length === 0) throw new OrcoError('invalid', 'Comment is empty');
     if (text.length > MAX_COMMENT) throw new OrcoError('invalid', `Comment is over ${MAX_COMMENT} characters`);
+    if (attachmentIds.length) this.store.ticketFiles.check(actor, row.project_id, attachmentIds);
     this.store.checkRate(actor, 'post');
-    this.activity(row.id, actor, 'comment', text, null);
+    const activityId = this.activity(row.id, actor, 'comment', text || null, attachmentIds.length ? { files: attachmentIds } : null);
+    if (attachmentIds.length) this.store.ticketFiles.attach(row.id, activityId, attachmentIds);
     this.store.db.prepare(`UPDATE tickets SET updated_at = ${NOW_SQL} WHERE id = ?`).run(row.id);
     this.store.audit.record(actor, 'ticket.comment', { projectId: row.project_id, subject: `ticket:${refOf(row)}`, detail: { text } });
     this.changed(row);
@@ -1716,6 +1733,7 @@ export class Tickets {
         .prepare('UPDATE tickets SET project_id = ?, number = ?, status_id = ?, milestone_id = NULL, cycle_id = NULL, folder_id = NULL, parent_id = NULL, sort = ? WHERE id = ?')
         .run(target.id, number, status.id, this.topSort(status.id), row.id);
       this.store.db.prepare('UPDATE tickets SET parent_id = NULL WHERE parent_id = ? AND project_id != ?').run(row.id, target.id);
+      this.store.db.prepare('UPDATE ticket_files SET project_id = ? WHERE ticket_id = ?').run(target.id, row.id);
       this.store.db.prepare('DELETE FROM ticket_labels WHERE ticket_id = ?').run(row.id);
       const link = this.store.db.prepare('INSERT INTO ticket_labels (ticket_id, label_id) VALUES (?, ?)');
       for (const l of keep) link.run(row.id, l.id);
@@ -1789,6 +1807,7 @@ export class Tickets {
         .forTicket(id)
         .map((a) => ({ id: a.id, summary: a.summary, scope: a.scope, state: a.state, decidedBy: a.decidedBy, validUntil: a.validUntil, inForce: a.inForce, actionKind: a.actionKind, standing: a.standing })),
       children: this.summaries(children, actor),
+      files: this.store.ticketFiles.forTicket(id),
       activity: activity.map((a) => ({
         id: a.id,
         actor: a.actor,
@@ -1966,10 +1985,11 @@ export class Tickets {
     }
   }
 
-  private activity(ticketId: number, actor: Participant | null, kind: TicketActivity['kind'], body: string | null, detail: unknown): void {
-    this.store.db
+  private activity(ticketId: number, actor: Participant | null, kind: TicketActivity['kind'], body: string | null, detail: unknown): number {
+    const { lastInsertRowid } = this.store.db
       .prepare('INSERT INTO ticket_activity (ticket_id, actor_id, kind, body, detail) VALUES (?, ?, ?, ?, ?)')
       .run(ticketId, actor?.id ?? null, kind, body, detail === null ? null : JSON.stringify(detail));
+    return Number(lastInsertRowid);
   }
 
   private changed(row: { project_id: number; ticket_key: string; number: number }): void {

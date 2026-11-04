@@ -990,6 +990,22 @@ export const MIGRATIONS = [
     moved_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     PRIMARY KEY (ticket_key, number)
   );
+  `,  // 40: files on tickets and their comments (#98).
+  `
+  CREATE TABLE ticket_files (
+    id INTEGER PRIMARY KEY,
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    ticket_id INTEGER REFERENCES tickets(id) ON DELETE CASCADE,
+    activity_id INTEGER REFERENCES ticket_activity(id),
+    uploader_id INTEGER NOT NULL REFERENCES participants(id),
+    name TEXT NOT NULL,
+    mime TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    sha256 TEXT NOT NULL,
+    data BLOB NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX ticket_files_ticket ON ticket_files (ticket_id);
   `,
 ];
 
