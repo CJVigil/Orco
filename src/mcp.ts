@@ -541,6 +541,7 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         const work = myWork(store, me);
         return {
           note: UNTRUSTED_NOTE,
+          ...(work.freezes.length ? { freezes: work.freezes.map((f) => ({ project: f.project ?? 'every project', until: f.until, reason: f.reason, by: f.by, note: 'No deploys or pushes until then.' })) } : {}),
           next: work.next,
           questions_for_you: work.questionsForYou.map((q) => ({ id: q.id, kind: q.kind, task_id: q.taskId, from: q.asker, question: q.question, room: q.room })),
           stalled_tasks_you_asked_for: work.stalled.map(formatTask),

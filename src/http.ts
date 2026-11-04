@@ -1680,6 +1680,34 @@ export function createApp(store: Store, options: AppOptions = {}) {
   api.get('/projects/:name/spend', (req, res) => {
     res.json(store.controls.projectSpend(req.participant!, String(req.params.name), optionalInt(req.query.days) ?? 7));
   });
+  // Deploy windows and freezes (#112).
+  api.get('/freezes', (req, res) => {
+    res.json(store.windows.visibleFreezes(req.participant!));
+  });
+  api.post('/freezes', (req, res) => {
+    const b = req.body ?? {};
+    res.status(201).json(store.windows.freeze(req.participant!, { project: str(b.project, 'project') ?? null, reason: String(b.reason ?? ''), until: String(b.until ?? '') }));
+  });
+  api.post('/freezes/:id/end', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a freeze id');
+    store.windows.unfreeze(req.participant!, id);
+    res.status(204).end();
+  });
+  api.get('/deploy-windows', (req, res) => {
+    const project = str(req.query.project, 'project');
+    res.json({ timeZone: store.windows.timeZone, windows: store.windows.windows(project ? store.visibleProject(req.participant!, project).id : null) });
+  });
+  api.post('/deploy-windows', (req, res) => {
+    const b = req.body ?? {};
+    res.status(201).json(store.windows.addWindow(req.participant!, { project: str(b.project, 'project') ?? null, spec: String(b.spec ?? ''), mode: b.mode === 'deny' ? 'deny' : 'allow', refuse: b.refuse === true }));
+  });
+  api.delete('/deploy-windows/:id', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a window id');
+    store.windows.removeWindow(req.participant!, id);
+    res.status(204).end();
+  });
   // Area owners (#111): who reviews a folder or label before Done or a deploy, and their delegates.
   api.get('/projects/:name/owners', (req, res) => {
     res.json(store.owners.list(req.participant!, String(req.params.name)));
@@ -1901,6 +1929,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
         scope: typeof scope === 'string' || Array.isArray(scope) ? scope : undefined,
         validForHours: optionalInt(valid_for_hours),
         kind: typeof kind === 'string' ? kind : undefined,
+        override: typeof req.body?.override === 'string' ? req.body.override : undefined,
         approver: approver === 'owner' || approver === 'members' ? approver : undefined,
         ttlSeconds: optionalInt(ttl_seconds),
       }),

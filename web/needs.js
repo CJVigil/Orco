@@ -21,7 +21,7 @@ export function createNeeds(ctx) {
         kind: 'Approve',
         title: a.summary,
         detail: `${a.requester} in #${a.room}${a.ticket ? ` · ${a.ticket}` : ''}`,
-        body: () => [a.scope ? exactBlock(`Scope:\n${a.scope}`) : null, exactBlock(a.details)],
+        body: () => [a.warning ? el('p', { class: 'approval-warning small', text: `⚠ ${a.warning}` }) : null, a.scope ? exactBlock(`Scope:\n${a.scope}`) : null, exactBlock(a.details)],
         choices: () =>
           approvalChoices({ id: a.id, kind: a.kind, requester: a.requester, requesterHuman: a.requesterOwner ?? a.requester, ticket: a.ticket, actionKind: a.actionKind }, () => void reload()),
         note: AGAIN,

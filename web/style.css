@@ -5491,3 +5491,15 @@ button.recent-link {
   display: grid;
   gap: 0.2rem;
 }
+
+/* Freezes and deploy windows (#112) */
+.freeze-banner {
+  padding: 0.4rem 1.25rem;
+  background: color-mix(in srgb, var(--danger) 14%, var(--bg));
+  font-size: 0.86rem;
+}
+
+.approval-warning {
+  margin: 0.25rem 0;
+  color: var(--listen);
+}

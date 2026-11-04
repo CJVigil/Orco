@@ -1,3 +1,4 @@
+import type { Freeze } from './windows.js';
 import type { Question } from './questions.js';
 import type { Review } from './reviews.js';
 import type { Message, Participant, Store } from './store.js';
@@ -29,6 +30,8 @@ export interface MyWork {
   memory: string[];
   /** Tasks cancelled since you last heard, so you can stop work on them. */
   cancelled: { taskId: number; room: string; note: string | null }[];
+  /** Deploy and push freezes in force (#112). */
+  freezes: Freeze[];
 }
 
 /**
@@ -85,7 +88,8 @@ export function myWork(store: Store, me: Participant): MyWork {
     store.tasks.markSeen(me, tasks.map((t) => t.id));
     store.questions.markSeen(me, questionsForYou.map((q) => q.id));
   }
-  return { next: next.slice(0, 8), questionsForYou, waitingOnYou, stalled, tasks, tickets, mentions, reviews, memory, cancelled };
+  const freezes = store.windows.visibleFreezes(me);
+  return { next: next.slice(0, 8), questionsForYou, waitingOnYou, stalled, tasks, tickets, mentions, reviews, memory, cancelled, freezes };
 }
 
 /** my_work as a few lines for a session's opening context (#102): what waits on you, then your handoffs. */
@@ -99,6 +103,7 @@ export function briefWork(work: MyWork): string {
     work.cancelled.length ? count(work.cancelled.length, 'cancelled task') + ' to stop' : '',
   ].filter(Boolean);
   lines.push(waiting.length ? `Orco: ${waiting.join(', ')}.` : 'Orco: nothing waits on you right now.');
+  for (const f of work.freezes) lines.push(`FREEZE${f.project ? ` in ${f.project}` : ''}: no deploys or pushes until ${f.until} (${f.by}: ${f.reason}).`);
   for (const q of work.questionsForYou.slice(0, 5)) lines.push(`- Question #${q.id} from ${q.asker}: ${q.question.slice(0, 160)}`);
   for (const t of work.tasks.slice(0, 5)) lines.push(`- Task #${t.id} (${t.state}): ${t.request.split('\n')[0]!.slice(0, 160)}`);
   const started = work.tickets.filter((t) => t.status.category === 'started');

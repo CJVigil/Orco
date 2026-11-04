@@ -1,3 +1,4 @@
+import { DeployWindows } from './windows.js';
 import { Owners } from './owners.js';
 import { Checklists } from './checklists.js';
 import { OrderRules } from './order.js';
@@ -268,6 +269,7 @@ export class Store {
   readonly order: OrderRules;
   readonly checklists: Checklists;
   readonly owners: Owners;
+  readonly windows: DeployWindows;
   readonly questions: Questions;
   readonly notes: Notes;
   readonly flags: Flags;
@@ -319,6 +321,7 @@ export class Store {
     this.order = new OrderRules(this);
     this.checklists = new Checklists(this);
     this.owners = new Owners(this);
+    this.windows = new DeployWindows(this);
     this.questions = new Questions(this);
     this.notes = new Notes(this);
     this.flags = new Flags(this);

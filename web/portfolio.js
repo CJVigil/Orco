@@ -367,7 +367,46 @@ export function createPortfolio(ctx) {
     if (!p.policyProject && administered[0] && !admin) p.policyProject = administered[0];
     const policy = p.policyProject || admin ? await api(`/policy${p.policyProject ? `?project=${encodeURIComponent(p.policyProject)}` : ''}`) : null;
     const scope = admin ? await api('/scope/settings') : null;
-    return [pausesCard(state.pauses, administered, agents), budgetsCard(state.budgets, administered, agents), scope ? scopeCard(scope) : null, admin ? peopleCard(setup.proxy ?? (setup.oidc ? { label: setup.oidc.label } : null)) : null, admin ? modelsCard(models) : null, admin ? onyxCard(onyx) : null, policy ? policyCard(policy, administered) : null, admin ? groupsCard(groups) : null];
+    const deploy = administered.length || admin ? await Promise.all([api('/freezes'), api('/deploy-windows')]) : null;
+    return [pausesCard(state.pauses, administered, agents), deploy ? deployCard(deploy[0], deploy[1], administered, admin) : null, budgetsCard(state.budgets, administered, agents), scope ? scopeCard(scope) : null, admin ? peopleCard(setup.proxy ?? (setup.oidc ? { label: setup.oidc.label } : null)) : null, admin ? modelsCard(models) : null, admin ? onyxCard(onyx) : null, policy ? policyCard(policy, administered) : null, admin ? groupsCard(groups) : null];
+  }
+
+  /** Freezes and deploy windows (#112): start or end a freeze, and the weekly windows deploys keep to. */
+  function deployCard(freezes, windows, administered, admin) {
+    const scopes = [...(admin ? [['', 'Every project']] : []), ...administered.map((name) => [name, name])];
+    const where = () => el('select', { 'aria-label': 'Where' }, scopes.map(([value, text]) => el('option', { value, text })));
+    const fWhere = where();
+    const reason = el('input', { placeholder: 'Release weekend: no pushes', maxlength: '200', 'aria-label': 'Reason', required: true });
+    const until = el('input', { type: 'datetime-local', 'aria-label': 'Until', required: true });
+    const wWhere = where();
+    const spec = el('input', { placeholder: 'Wed 13:00-17:00', maxlength: '60', 'aria-label': 'Days and hours', required: true });
+    const mode = el('select', { 'aria-label': 'Kind' }, el('option', { value: 'allow', text: 'Deploys only then' }), el('option', { value: 'deny', text: 'Never then' }));
+    const refuse = el('input', { type: 'checkbox' });
+    const post = (path, body) => async (event) => {
+      event.preventDefault();
+      try {
+        await api(path, { method: 'POST', body: body() });
+        void load();
+      } catch (err) {
+        notify(err.message);
+      }
+    };
+    return el(
+      'section',
+      { class: 'plan-card' },
+      el('h3', { text: 'Freezes and deploy windows' }),
+      freezes.length
+        ? freezes.map((f) =>
+            el('div', { class: 'order-rule small' }, el('strong', { text: f.project ?? 'Every project' }), el('span', { text: ` frozen until ${new Date(f.until).toLocaleString()} · ${f.by}: ${f.reason}` }), el('button', { class: 'ghost small', type: 'button', text: 'End', onclick: () => void api(`/freezes/${f.id}/end`, { method: 'POST', body: {} }).then(() => load(), (err) => notify(err.message)) })),
+          )
+        : el('p', { class: 'small muted', text: 'No freeze in force.' }),
+      el('form', { class: 'inline-form', onsubmit: post('/freezes', () => ({ project: fWhere.value || null, reason: reason.value, until: new Date(until.value).toISOString() })) }, fWhere, reason, until, el('button', { class: 'small', type: 'submit', text: 'Freeze' })),
+      el('p', { class: 'small muted', text: `Windows are in ${windows.timeZone} time. Outside one, a deploy or push approval is flagged for the approver, or refused if you tick Refuse.` }),
+      windows.windows.map((w) =>
+        el('div', { class: 'order-rule small' }, el('span', { text: `${w.project ?? 'Every project'}: ${w.mode === 'allow' ? 'deploys only' : 'never'} ${w.spec}${w.refuse ? ' (refused outside)' : ''}` }), el('button', { class: 'ghost small', type: 'button', text: 'Remove', onclick: () => void api(`/deploy-windows/${w.id}`, { method: 'DELETE' }).then(() => load(), (err) => notify(err.message)) })),
+      ),
+      el('form', { class: 'inline-form', onsubmit: post('/deploy-windows', () => ({ project: wWhere.value || null, spec: spec.value, mode: mode.value, refuse: refuse.checked })) }, wWhere, mode, spec, el('label', { class: 'check small' }, refuse, 'Refuse'), el('button', { class: 'small', type: 'submit', text: 'Add window' })),
+    );
   }
 
   /** The scope gate (#108): whether new projects start in Scope, and the template's sections. Org admins. */

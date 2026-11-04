@@ -1136,6 +1136,26 @@ export const MIGRATIONS = [
     until_day TEXT NOT NULL
   );
   ALTER TABLE reviews ADD COLUMN guide TEXT;
+  `,  // 49: deploy windows and freezes, and the warning an approval carries (#112).
+  `
+  CREATE TABLE deploy_windows (
+    id INTEGER PRIMARY KEY,
+    project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+    spec TEXT NOT NULL,
+    mode TEXT NOT NULL CHECK (mode IN ('allow', 'deny')),
+    refuse INTEGER NOT NULL DEFAULT 0,
+    created_by INTEGER NOT NULL REFERENCES participants(id)
+  );
+  CREATE TABLE freezes (
+    id INTEGER PRIMARY KEY,
+    project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+    reason TEXT NOT NULL,
+    until TEXT NOT NULL,
+    set_by INTEGER NOT NULL REFERENCES participants(id),
+    created_at TEXT NOT NULL,
+    ended_at TEXT
+  );
+  ALTER TABLE approvals ADD COLUMN warning TEXT;
   `,
 ];
 

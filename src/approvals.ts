@@ -34,6 +34,8 @@ export interface Approval {
   actionKind: string | null;
   /** Approved as "don't ask again for this kind on this ticket" until validUntil (#95). */
   standing: boolean;
+  /** Outside the deploy window, or an override, shown to the approver (#112). */
+  warning: string | null;
 }
 
 export interface ApprovalSummary {
@@ -75,6 +77,7 @@ interface ApprovalRow {
   action_kind: string | null;
   standing: number;
   decided_by_id: number | null;
+  warning: string | null;
 }
 
 const APPROVAL_SELECT = `
@@ -82,7 +85,7 @@ const APPROVAL_SELECT = `
          ap.requester_id, rq.name AS requester, rq.owner_id AS requester_owner_id, rqo.name AS requester_owner,
          ap.approver_id, av.name AS approver, ap.summary, ap.details, ap.state, d.name AS decided_by, ap.note,
          ap.created_at, ap.expires_at, ap.decided_at, ap.ticket_id, tp.ticket_key || '-' || tk.number AS ticket, ap.scope,
-         ap.valid_hours, ap.valid_until, ap.action_kind, ap.standing, ap.decided_by AS decided_by_id
+         ap.valid_hours, ap.valid_until, ap.action_kind, ap.standing, ap.decided_by AS decided_by_id, ap.warning
   FROM approvals ap
   LEFT JOIN tickets tk ON tk.id = ap.ticket_id
   LEFT JOIN projects tp ON tp.id = tk.project_id
@@ -133,6 +136,7 @@ function toApproval(row: ApprovalRow, now: number = Date.now()): Approval {
     inForce: row.state === 'approved' && (row.valid_until === null || row.valid_until > now),
     actionKind: row.action_kind,
     standing: row.standing === 1 && row.state === 'approved' && row.valid_until !== null && row.valid_until > now,
+    warning: row.warning,
   };
 }
 
@@ -155,6 +159,8 @@ export class Approvals {
       validForHours?: number;
       /** A short label for the kind of action ("push to main"), so a person can say "don't ask again" for it on the ticket. */
       kind?: string;
+      /** An admin's reason to go ahead during a freeze or outside a deploy window (#112). */
+      override?: string;
     },
   ): Approval {
     const summary = input.summary.trim();
@@ -199,6 +205,8 @@ export class Approvals {
       }
     }
 
+    // Deploy windows and freezes (#112): refused during a freeze, flagged (or refused) outside a window.
+    const warning = this.store.windows.check(actor, room.projectId, `${actionKind ?? ''}\n${summary}\n${details ?? ''}`, input.override);
     const approver = mode === 'owner' ? this.store.participantById(actor.ownerId!) : null;
     const notify = approver ? [approver.name] : this.deciders(actor, room).map((p) => p.name);
     const ping = notify.length ? `${notify.map((n) => `@${n}`).join(' ')} ` : '';
@@ -206,13 +214,14 @@ export class Approvals {
       `${ping}Approval needed${ticket ? ` on ${ticket.ref}` : ''}: ${summary}`,
       ...(scope ? [`Scope:\n${scope}`] : []),
       ...(validHours ? [`In force for ${validHours} hours once approved.`] : []),
+      ...(warning ? [`⚠ ${warning}`] : []),
       ...(details ? [details] : []),
     ];
     let id = 0;
     this.store.post(actor, room.ref, lines.join('\n'), undefined, {
       onInsert: (messageId) => {
         id = this.insert('action', room, messageId, actor, approver?.id ?? null, summary, details, ttl * 1000);
-        this.store.db.prepare('UPDATE approvals SET ticket_id = ?, scope = ?, valid_hours = ?, action_kind = ? WHERE id = ?').run(ticket?.id ?? null, scope, validHours, actionKind, id);
+        this.store.db.prepare('UPDATE approvals SET ticket_id = ?, scope = ?, valid_hours = ?, action_kind = ?, warning = ? WHERE id = ?').run(ticket?.id ?? null, scope, validHours, actionKind, warning, id);
       },
     });
     if (ticket) this.store.tickets.note(ticket.id, actor, 'change', null, { changes: [{ field: 'approval', from: null, to: `requested #${id}: ${summary}` }] });

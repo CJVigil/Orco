@@ -2525,8 +2525,32 @@ function onMessage(message) {
 
 let presenceTimer = null;
 
+/** Freezes in force (#112): one line at the top, who set it, why, and until when. */
+async function loadFreezes() {
+  let freezes = [];
+  try {
+    freezes = await api('/freezes');
+  } catch {
+    return;
+  }
+  const banner = $('freeze-banner');
+  banner.hidden = freezes.length === 0;
+  banner.replaceChildren(
+    ...freezes.map((f) =>
+      el(
+        'div',
+        { class: 'freeze-line' },
+        el('strong', { text: `Freeze${f.project ? ` in ${f.project}` : ''}:` }),
+        ` no deploys or pushes until ${formatTime(f.until)}. ${f.by}: ${f.reason}`,
+      ),
+    ),
+  );
+}
+
 function connect() {
   const events = new EventSource('/api/events');
+  void loadFreezes();
+  events.addEventListener('controls', () => void loadFreezes());
   const dot = $('connection');
   events.addEventListener('ready', () => {
     dot.classList.add('live');
