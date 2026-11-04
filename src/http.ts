@@ -1,3 +1,4 @@
+import { AREA_TEXT, AREAS, LEVEL_TEXT, restArea } from './tooltable.js';
 import { at, basePath } from './basepath.js';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync, openSync, readFileSync } from 'node:fs';
@@ -132,6 +133,16 @@ function authenticate(store: Store, presence: Presence, oauth?: OAuth, proxyIden
     }
     req.participant = participant;
     req.viaCookie = bearer === undefined;
+    // An agent's REST writes are held to the same level as its MCP tools (#131).
+    if (participant.kind === 'agent' && req.baseUrl === '/api') {
+      const area = restArea(req.method, req.path);
+      const access = store.toolLevels.access(participant);
+      if (area === 'all' ? access.areas.length < AREAS.length : !access.areas.includes(area)) {
+        const what = area === 'all' ? 'this action' : AREA_TEXT[area];
+        res.status(403).json({ error: `${participant.name} is set to ${LEVEL_TEXT[access.level]}, which does not include ${what}. Its owner can change that.` });
+        return;
+      }
+    }
     // The bridge uses the agent's token, but its calls say nothing about whether the agent is alive.
     if (req.headers['x-orco-bridge'] !== '1') {
       presence.touch(participant.id);
@@ -1713,6 +1724,17 @@ export function createApp(store: Store, options: AppOptions = {}) {
     const log = existsSync(updateLog()) ? readFileSync(updateLog(), 'utf8') : '';
     res.json({ version: VERSION, log: log.split('\n').slice(-60).join('\n') });
   });
+  // What each agent may do (#131): its owner (or an org admin) sets the level; org admins cap it.
+  api.post('/agents/:name/tool-level', (req, res) => {
+    res.json(store.toolLevels.set(req.participant!, String(req.params.name), str(req.body?.level, 'level') ?? '', req.body?.areas));
+  });
+  api.get('/tool-cap', (_req, res) => {
+    res.json({ cap: store.toolLevels.cap() });
+  });
+  api.post('/tool-cap', (req, res) => {
+    const level = req.body?.level === null || req.body?.level === '' ? null : str(req.body?.level, 'level') ?? null;
+    res.json({ cap: store.toolLevels.setCap(req.participant!, level) });
+  });
   // Handoff context packs (#121): a ticket's pack, and an agent's pack size (its owner sets it).
   api.get('/tickets/:ref/pack', (req, res) => {
     res.json(contextPack(store, req.participant!, String(req.params.ref)));
@@ -2127,6 +2149,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
           hosted: store.hosted.of(participant),
           lost: store.tasks.lostPolicy(participant),
           safetyFilter: store.safety.level(participant),
+          toolAccess: store.toolLevels.access(participant),
           paused: store.controls.pausedFor(participant, null)?.scope === 'agent',
         };
       }),

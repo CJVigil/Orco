@@ -1212,6 +1212,72 @@ function answerBox(question, onDone) {
   );
 }
 
+/*
+ * What an agent may do in Orco (#131): the server registers only the tools its level allows and
+ * refuses the same writes over REST. Custom picks areas; an org admin's cap narrows every level.
+ */
+const TOOL_LEVELS = [
+  ['read_only', 'Read only', 'Reads rooms, tickets and files; cannot post or change anything'],
+  ['comment', 'Comment', 'Reads, posts, asks and answers, and reports on its own tasks'],
+  ['work_tickets', 'Work tickets', 'Also creates and changes tickets and project files, and takes locks'],
+  ['full', 'Full', 'Also gives tasks to other agents, schedules tasks and uses secrets'],
+  ['custom', 'Custom…', 'Choose the areas'],
+];
+const TOOL_AREAS = [
+  ['self', 'Its own notes, reminders and task progress'],
+  ['post', 'Post, ask, answer, request approvals'],
+  ['tickets', 'Tickets and project files'],
+  ['locks', 'Locks'],
+  ['tasks', 'Tasks for other agents'],
+  ['schedules', 'Scheduled tasks'],
+  ['secrets', 'Secrets'],
+];
+
+function toolLevelPicker(agent) {
+  const access = agent.toolAccess ?? { level: 'full', areas: [], cap: null };
+  const save = async (level, areas) => {
+    try {
+      await api(`/agents/${encodeURIComponent(agent.name)}/tool-level`, { method: 'POST', body: { level, areas } });
+      toast(`${agent.name} is now ${TOOL_LEVELS.find(([k]) => k === level)?.[1] ?? level}. It sees the change when it next connects.`);
+    } catch (err) {
+      alert(err.message);
+    }
+    void showMyAgents();
+  };
+  const custom = el(
+    'div',
+    { class: 'tool-areas', hidden: access.level !== 'custom' },
+    TOOL_AREAS.map(([key, label]) =>
+      el('label', { class: 'check small' }, el('input', { type: 'checkbox', value: key, checked: access.level === 'custom' && access.areas.includes(key) }), label),
+    ),
+    el('button', {
+      class: 'ghost small',
+      type: 'button',
+      text: 'Save areas',
+      onclick: () => void save('custom', [...custom.querySelectorAll('input:checked')].map((i) => i.value)),
+    }),
+  );
+  const pick = el(
+    'select',
+    {
+      'aria-label': `What ${agent.name} may do`,
+      onchange: (event) => {
+        if (event.target.value === 'custom') custom.hidden = false;
+        else void save(event.target.value);
+      },
+    },
+    TOOL_LEVELS.map(([key, label, hint]) => el('option', { value: key, selected: access.level === key, title: hint }, label)),
+  );
+  return el(
+    'div',
+    { class: 'tool-level' },
+    pick,
+    el('span', { class: 'small muted', text: TOOL_LEVELS.find(([k]) => k === access.level)?.[2] ?? '' }),
+    access.cap ? el('span', { class: 'small muted', text: `Capped at ${TOOL_LEVELS.find(([k]) => k === access.cap.level)?.[1]} by ${access.cap.by}` }) : null,
+    custom,
+  );
+}
+
 function progressMeter(percent) {
   const fill = el('span', { class: 'meter-fill' });
   fill.style.width = `${percent}%`;
@@ -1456,7 +1522,7 @@ async function showMyAgents() {
             open: openAgentSettings.has(agent.name),
             ontoggle: (event) => (event.target.open ? openAgentSettings.add(agent.name) : openAgentSettings.delete(agent.name)),
           },
-          el('summary', { class: 'small', text: `Settings · ${POLICY_TEXT[agent.taskPolicy] ?? agent.taskPolicy} · ${FILTER_SHORT[agent.safetyFilter ?? 'strict']}` }),
+          el('summary', { class: 'small', text: `Settings · ${POLICY_TEXT[agent.taskPolicy] ?? agent.taskPolicy} · ${FILTER_SHORT[agent.safetyFilter ?? 'strict']}${agent.toolAccess && agent.toolAccess.level !== 'full' ? ` · ${TOOL_LEVELS.find(([k]) => k === agent.toolAccess.level)?.[1] ?? agent.toolAccess.level}` : ''}` }),
           el(
             'div',
             { class: 'agent-more-body' },
@@ -1470,6 +1536,8 @@ async function showMyAgents() {
             connections.length
               ? el('div', { class: 'trusted' }, el('span', { class: 'small muted', text: 'Connected apps:' }), el('ul', { class: 'connections' }, connections))
               : null,
+            el('label', { class: 'small', text: 'What it may do in Orco' }),
+            toolLevelPicker(agent),
             el('label', { class: 'small', text: 'Who may give it tasks' }),
             select,
             el(

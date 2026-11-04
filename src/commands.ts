@@ -1,3 +1,4 @@
+import { AREA_TEXT, AREAS, type Area, LEVEL_TEXT, LEVELS, READ_ONLY_TOOLS, TOOLS } from './tooltable.js';
 import * as svc from './service.js';
 import { fileURLToPath } from 'node:url';
 import { update } from './updater.js';
@@ -43,6 +44,7 @@ Server commands (run where the database lives):
   audit export [--since N]   Print the audit log as JSON lines
   backup <file>              Write a consistent copy of the database, safe while serving
   restore <file> [--force]   Replace the database with a backup (stop the server first)
+  tools                      Every MCP tool, what it touches, and which agent levels may call it
   service install|status|start|stop|restart|logs [N]|uninstall
                              Keep the server running at boot or sign-in (systemd, launchd or a Windows
                              logon task), restarted after a crash with backoff; one log file
@@ -355,6 +357,20 @@ export function main(): void {
         process.exitCode = 1;
       },
     );
+    return;
+  }
+
+  // orco tools (#131): every MCP tool, what it touches, and which levels may call it. No server needed.
+  if (command === 'tools') {
+    const order = ['read_only', 'comment', 'work_tickets', 'full'] as const;
+    const who = (area: Area) => order.filter((l) => (LEVELS[l] as readonly Area[]).includes(area)).map((l) => LEVEL_TEXT[l]);
+    const width = Math.max(...Object.keys(TOOLS).map((n) => n.length));
+    for (const area of AREAS) {
+      const names = Object.entries(TOOLS).filter(([, a]) => a === area).map(([n]) => n).sort();
+      console.log(`\n${area}: ${AREA_TEXT[area]}  (${who(area).join(', ')})`);
+      for (const name of names) console.log(`  ${name.padEnd(width)}  ${READ_ONLY_TOOLS.has(name) ? 'read-only' : 'writes'}`);
+    }
+    console.log(`\n${Object.keys(TOOLS).length} tools. Set an agent's level in its settings, or POST /api/agents/<name>/tool-level.`);
     return;
   }
 

@@ -1,5 +1,6 @@
 import { PolicyFiles } from './policyfile.js';
 import { Modes } from './modes.js';
+import { ToolLevels, type ToolAccess } from './tooltable.js';
 import { Guests } from './guests.js';
 import { Incidents } from './incidents.js';
 import { CheckedRules } from './rules.js';
@@ -137,6 +138,8 @@ export interface Capabilities {
   projects: string[];
   canPlan: boolean;
   taskPolicy?: TaskPolicy;
+  /** What this agent may do in Orco (#131): its level and the areas it has after any org cap. */
+  toolAccess?: ToolAccess;
   trusted?: string[];
   whoCanAssignYou?: string;
   limits?: { postsPerMinute: number; tasksPerMinute: number; maxTaskDepth: number };
@@ -279,6 +282,7 @@ export class Store {
   readonly incidents: Incidents;
   readonly guests: Guests;
   readonly modes: Modes;
+  readonly toolLevels: ToolLevels;
   readonly policyFile: PolicyFiles;
   readonly questions: Questions;
   readonly notes: Notes;
@@ -336,6 +340,7 @@ export class Store {
     this.incidents = new Incidents(this);
     this.guests = new Guests(this);
     this.modes = new Modes(this);
+    this.toolLevels = new ToolLevels(this);
     this.policyFile = new PolicyFiles(this);
     this.questions = new Questions(this);
     this.notes = new Notes(this);
@@ -511,6 +516,7 @@ export class Store {
     return {
       ...base,
       taskPolicy: settings.taskPolicy,
+      toolAccess: this.toolLevels.access(actor),
       trusted: settings.trusted,
       whoCanAssignYou: whoCanAssign,
       canPlan: false,

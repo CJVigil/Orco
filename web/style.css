@@ -5990,3 +5990,21 @@ body.lightbox-open {
   color: #fff;
   border: 0;
 }
+
+/* What an agent may do (#131) */
+.tool-level {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.tool-areas {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.tool-areas button {
+  justify-self: start;
+}

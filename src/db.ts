@@ -1228,6 +1228,10 @@ export const MIGRATIONS = [
   `,  // 56: photos (and other attachments) sent with a question's answer (#128), as a JSON id list.
   `
   ALTER TABLE questions ADD COLUMN answer_attachments TEXT;
+  `,  // 57: what each agent may do in Orco (#131): a level, or custom areas; null is full.
+  `
+  ALTER TABLE participants ADD COLUMN tool_level TEXT;
+  ALTER TABLE participants ADD COLUMN tool_areas TEXT;
   `,
 ];
 
