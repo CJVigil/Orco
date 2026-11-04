@@ -4,6 +4,7 @@
 import { parseCommand } from './commands.js';
 import { voiceButton } from './voice.js';
 import { catchBigPastes } from './paste.js';
+import { openLightbox, prepareImage } from './photos.js';
 
 const TABS = [
   ['board', 'Board'],
@@ -874,7 +875,22 @@ export function createTickets(ctx) {
           el(
             'div',
             { class: 'ticket-file-row' },
-            f.mime.startsWith('image/') ? el('img', { class: 'file-thumb', src: url, alt: '', loading: 'lazy' }) : icon('file'),
+            f.mime.startsWith('image/')
+              ? el(
+                  'button',
+                  {
+                    class: 'thumb-button',
+                    type: 'button',
+                    title: `View ${f.name}`,
+                    'aria-label': `View ${f.name}`,
+                    onclick: () => {
+                      const photos = ticket.files.filter((x) => x.mime.startsWith('image/'));
+                      openLightbox(el, icon, photos.map((x) => ({ url: `api/ticket-files/${x.id}`, name: x.name })), photos.indexOf(f));
+                    },
+                  },
+                  el('img', { class: 'file-thumb', src: url, alt: '', loading: 'lazy' }),
+                )
+              : icon('file'),
             el('span', { class: 'file-name', title: f.name, text: f.name }),
             el('span', { class: 'muted small', text: `${fileSize(f.size)} · ${f.by} · ${ago(f.at)}` }),
             previewable
@@ -1892,7 +1908,10 @@ export function createTickets(ctx) {
         pending.push(item);
         drawChips();
         try {
-          item.id = (await uploadTicketFile(ticket.project, file)).id;
+          // Photos shrink and lose their location data first, as in messages (#127).
+          const ready = /^image\/(jpeg|png|webp|hei[cf])$/i.test(file.type) || /\.hei[cf]$/i.test(file.name || '') ? await prepareImage(file) : file;
+          item.name = ready.name;
+          item.id = (await uploadTicketFile(ticket.project, ready)).id;
         } catch (err) {
           pending.splice(pending.indexOf(item), 1);
           notify(`${file.name}: ${err.message}`);

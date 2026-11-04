@@ -30,6 +30,8 @@ const ICONS = {
   'bell-off': ['M6 16V11a6 6 0 0 1 9.5-4.9', 'M18 11v5l1.5 2H8', 'M10 20.5a2 2 0 0 0 4 0', 'M3 3l18 18'],
   file: ['M6 3h8l4 4v14H6z', 'M14 3v4h4', 'M9 12h6', 'M9 16h6'],
   clock: ['M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18z', 'M12 7v5l3 2'],
+  download: ['M12 4v11', 'M7 10l5 5l5-5', 'M5 20h14'],
+  retry: ['M20 11a8 8 0 1 0-2.3 5.7', 'M20 5v6h-6'],
 };
 
 const SVG = 'http://www.w3.org/2000/svg';

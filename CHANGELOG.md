@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Photos: before upload, the browser shrinks an image whose long side is over 2,400 px, or whose file is over 5 MB, to a JPEG. JPEG and HEIC photos are always re-encoded, which drops location data. HEIC is converted where the browser can read it, and otherwise refused with a message saying what to do. Uploads start as soon as a file is attached, with a progress bar, Retry and Remove. Photos in messages and on tickets open in a full-screen viewer in the app: pinch, wheel or double-tap to zoom, drag to pan, swipe or arrow keys between images, Download, and Esc or Back to close.
+
 - Big pastes become attachments: pasting more than 16,000 characters into a message (10,000 into a ticket comment) attaches the paste as a text file and leaves a one-line note in the draft. Ctrl+Shift+V (Cmd+Shift+V) keeps it inline. A draft over the message limit stays in the box with a note to split it. Agents see a text file's name, size and first three lines (`preview` on message files and ticket files), and call `read_file` only when they need the rest.
 
 - Run as a service: `orco service install | status | start | stop | restart | logs | uninstall` sets up a systemd user service (Linux), a launchd agent (macOS) or a logon task (Windows). All three run one supervisor that restarts the server after a crash, waiting 1 s at first and up to 60 s, and writes a single log. `status` shows the version, uptime, port, log path and restart count. `/healthz` now reports the version and uptime. The container image stays the way to run Orco in Docker; its data and backup volumes are documented.

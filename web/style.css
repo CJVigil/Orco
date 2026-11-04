@@ -5755,3 +5755,153 @@ blockquote.quote .quote-source:hover {
   white-space: pre-wrap;
   font-family: var(--mono);
 }
+
+/* Photos (#127): upload progress, and the full-screen viewer */
+.pending-item .upload-bar {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: 4px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(5, 8, 20, 0.45);
+  overflow: hidden;
+}
+
+.pending-item .upload-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.15s;
+}
+
+.pending-item .upload-note {
+  position: absolute;
+  inset: auto 0 0 0;
+  padding: 0.1rem 0.25rem;
+  background: rgba(5, 8, 20, 0.6);
+  color: #fff;
+  font-size: 0.7rem;
+}
+
+.pending-item.failed {
+  border-color: var(--danger, #d33);
+}
+
+.pending-item.failed img {
+  opacity: 0.5;
+}
+
+.pending-item button.retry {
+  top: auto;
+  right: auto;
+  left: 50%;
+  bottom: 50%;
+  transform: translate(-50%, 50%);
+  background: var(--danger, #d33);
+}
+
+.thumb-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: zoom-in;
+}
+
+body.lightbox-open {
+  overflow: hidden;
+}
+
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: rgba(0, 0, 0, 0.92);
+  outline: none;
+}
+
+.lightbox-stage {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  touch-action: none;
+  cursor: zoom-in;
+}
+
+.lightbox.zoomed .lightbox-stage {
+  cursor: grab;
+}
+
+.lightbox-image {
+  max-width: 100vw;
+  max-height: 100vh;
+  max-height: 100dvh;
+  object-fit: contain;
+  transform-origin: center;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.lightbox-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: max(0.5rem, env(safe-area-inset-top)) 0.75rem 0.5rem;
+  background: linear-gradient(rgba(0, 0, 0, 0.6), transparent);
+  color: #fff;
+}
+
+.lightbox-count {
+  font-size: 0.85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lightbox-button {
+  display: grid;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+.lightbox-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 2.75rem;
+  height: 4rem;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  font-size: 2rem;
+}
+
+.lightbox-nav.prev {
+  left: 0.5rem;
+}
+
+.lightbox-nav.next {
+  right: 0.5rem;
+}
+
+.lightbox.zoomed .lightbox-nav {
+  display: none;
+}
+
+@media (hover: none) {
+  .lightbox-nav {
+    display: none;
+  }
+}

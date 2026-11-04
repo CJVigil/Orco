@@ -4,6 +4,7 @@ import { createPalette } from './palette.js';
 import { icon } from './icons.js';
 import { voiceButton } from './voice.js';
 import { quoteText } from './quotes.js';
+import { openLightbox, prepareImage } from './photos.js';
 import { catchBigPastes, MAX_MESSAGE_CHARS } from './paste.js';
 import { codeChildren, renderMarkdown } from './markdown.js';
 import * as notify from './notify.js';
@@ -277,7 +278,7 @@ function renderMessage(message, previous, { inThread = false } = {}) {
       ? el(
           'div',
           { class: 'images' },
-          images.map((image) =>
+          images.map((image, i) =>
             el(
               'a',
               {
@@ -285,10 +286,11 @@ function renderMessage(message, previous, { inThread = false } = {}) {
                 target: '_blank',
                 rel: 'noopener',
                 title: image.name,
+                // Opens in the app's viewer (#127): zoom, pan, swipe between this message's images.
                 onclick: (event) => {
                   if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
                   event.preventDefault();
-                  void openViewer({ kind: 'image', file: image });
+                  openLightbox(el, icon, images.map((im) => ({ url: `api/attachments/${im.id}`, name: im.name })), i);
                 },
               },
               el('img', { src: `api/attachments/${image.id}`, alt: image.name, loading: 'lazy' }),
@@ -2883,7 +2885,6 @@ function autosize(textarea) {
 }
 
 const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_TEXT_BYTES = 1024 * 1024;
 const MAX_IMAGES = 4;
 const TEXT_NAME = /\.(txt|log|md|diff|patch|json|csv|tsv|ya?ml|toml|ini|conf|cfg|env\.example|sql|py|rb|go|rs|java|kt|c|h|cpp|cs|ts|tsx|jsx|css|scss|sh|ps1|xml)$/i;
@@ -2892,16 +2893,28 @@ function isTextFile(file) {
   return (file.type.startsWith('text/') && file.type !== 'text/html') || file.type === 'application/json' || TEXT_NAME.test(file.name || '');
 }
 
-async function uploadImage(file, room) {
-  const res = await fetch(`api/attachments?room=${encodeURIComponent(room)}&name=${encodeURIComponent(file.name || 'file')}`, {
-    method: 'POST',
-    headers: { 'Content-Type': file.type || 'application/octet-stream' },
-    body: file,
-    credentials: 'same-origin',
+
+/** Uploads with progress (#127): onProgress gets 0..1. */
+function uploadWithProgress(file, room, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `api/attachments?room=${encodeURIComponent(room)}&name=${encodeURIComponent(file.name || 'file')}`);
+    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+    xhr.withCredentials = true;
+    xhr.upload.onprogress = (event) => event.lengthComputable && onProgress(event.loaded / event.total);
+    xhr.onload = () => {
+      let data = {};
+      try {
+        data = JSON.parse(xhr.responseText);
+      } catch {
+        // Not JSON.
+      }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data.id);
+      else reject(new Error(data.error || xhr.statusText || 'Upload failed'));
+    };
+    xhr.onerror = () => reject(new Error('The upload did not reach the server; check the connection and retry'));
+    xhr.send(file);
   });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || res.statusText);
-  return data.id;
 }
 
 function wireComposer(form, textarea, pendingEl, roomOf, send, options = {}) {
@@ -2916,44 +2929,91 @@ function wireComposer(form, textarea, pendingEl, roomOf, send, options = {}) {
     form.classList.remove('editing');
   };
   const fileInput = form.querySelector('.attach-input');
+  // Each attachment uploads as soon as it is added (#127), to the room it was added in.
+  const startUpload = (item) => {
+    item.status = 'uploading';
+    item.progress = 0;
+    item.error = null;
+    item.room = roomOf();
+    const mine = (item.attempt = (item.attempt || 0) + 1);
+    item.promise = uploadWithProgress(item.file, item.room, (p) => {
+      item.progress = p;
+      const bar = item.node?.querySelector('.upload-bar > span');
+      if (bar) bar.style.width = `${Math.round(p * 100)}%`;
+    }).then(
+      (id) => {
+        if (item.attempt !== mine) return;
+        item.id = id;
+        item.status = 'done';
+        renderPending();
+      },
+      (err) => {
+        if (item.attempt !== mine) return;
+        item.status = 'failed';
+        item.error = err.message;
+        renderPending();
+      },
+    );
+    renderPending();
+  };
+  const remove = (item) => {
+    if (item.url) URL.revokeObjectURL(item.url);
+    item.attempt = -1;
+    pending.splice(pending.indexOf(item), 1);
+    renderPending();
+  };
   const renderPending = () => {
     pendingEl.replaceChildren(
-      ...pending.map((item, i) =>
-        el(
+      ...pending.map((item) => {
+        const name = item.file.name || 'image';
+        item.node = el(
           'div',
-          { class: 'pending-item' },
-          item.url ? el('img', { src: item.url, alt: item.file.name || 'image' }) : el('span', { class: 'pending-file', title: item.file.name }, icon('file'), el('span', { text: item.file.name })),
-          el('button', {
-            type: 'button',
-            'aria-label': `Remove ${item.file.name || 'image'}`,
-            onclick: () => {
-              if (item.url) URL.revokeObjectURL(item.url);
-              pending.splice(i, 1);
-              renderPending();
-            },
-          }, icon('x')),
-        ),
-      ),
+          { class: `pending-item ${item.status || ''}`, title: item.error || name },
+          item.url ? el('img', { src: item.url, alt: name }) : el('span', { class: 'pending-file', title: name }, icon('file'), el('span', { text: name })),
+          item.status === 'uploading' ? el('div', { class: 'upload-bar', role: 'progressbar', 'aria-label': `Uploading ${name}` }, el('span', { style: `width: ${Math.round((item.progress || 0) * 100)}%` })) : null,
+          item.status === 'preparing' ? el('div', { class: 'upload-note small', text: 'Shrinking…' }) : null,
+          item.status === 'failed'
+            ? el('button', { type: 'button', class: 'retry', title: `${item.error} · Retry`, 'aria-label': `Retry ${name}`, onclick: () => startUpload(item) }, icon('retry'))
+            : null,
+          el('button', { type: 'button', class: 'remove', 'aria-label': `Remove ${name}`, onclick: () => remove(item) }, icon('x')),
+        );
+        return item.node;
+      }),
     );
+    pendingEl.hidden = pending.length === 0;
   };
-  const addFiles = (files) => {
-    for (const file of files) {
-      const image = IMAGE_TYPES.includes(file.type);
-      if (!image && !isTextFile(file)) {
-        alert(`${file.name || 'That file'} is not an image (PNG, JPEG, GIF, WebP) or a text file.`);
+  const addFiles = async (files) => {
+    for (const original of files) {
+      const image = IMAGE_TYPES.includes(original.type) || /^image\/hei[cf]$/i.test(original.type) || /\.hei[cf]$/i.test(original.name || '');
+      if (!image && !isTextFile(original)) {
+        alert(`${original.name || 'That file'} is not an image (PNG, JPEG, GIF, WebP, HEIC) or a text file.`);
         continue;
       }
-      if (file.size > (image ? MAX_IMAGE_BYTES : MAX_TEXT_BYTES)) {
-        alert(`${file.name || 'That file'} is over ${image ? '5 MB' : '1 MB'}.`);
+      if (!image && original.size > MAX_TEXT_BYTES) {
+        alert(`${original.name || 'That file'} is over 1 MB.`);
         continue;
       }
       if (pending.length >= MAX_IMAGES) {
         alert('You can attach up to 4 files.');
         break;
       }
-      pending.push({ file, url: image ? URL.createObjectURL(file) : null });
+      const item = { file: original, url: null, status: image ? 'preparing' : null };
+      pending.push(item);
+      renderPending();
+      if (image) {
+        try {
+          item.file = await prepareImage(original);
+        } catch (err) {
+          pending.splice(pending.indexOf(item), 1);
+          renderPending();
+          alert(err.message);
+          continue;
+        }
+        if (!pending.includes(item)) continue;
+        item.url = URL.createObjectURL(item.file);
+      }
+      startUpload(item);
     }
-    renderPending();
   };
   form.querySelector('.attach').addEventListener('click', () => fileInput.click());
   fileInput.addEventListener('change', () => {
@@ -3030,7 +3090,14 @@ function wireComposer(form, textarea, pendingEl, roomOf, send, options = {}) {
     try {
       const room = roomOf();
       const ids = [];
-      for (const item of pending) ids.push(await uploadImage(item.file, room));
+      for (const item of [...pending]) {
+        if (item.status === 'preparing') throw new Error('A photo is still being prepared; send again in a moment');
+        // An upload made for another room (the room changed since) goes again, to this one.
+        if (item.room !== room) startUpload(item);
+        await item.promise;
+        if (item.status !== 'done') throw new Error(`${item.file.name || 'A file'} did not upload: ${item.error}. Retry or remove it.`);
+        ids.push(item.id);
+      }
       const message = await send(text, ids);
       textarea.value = '';
       autosize(textarea);
