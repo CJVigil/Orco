@@ -2339,6 +2339,15 @@ export function createApp(store: Store, options: AppOptions = {}) {
   );
 
   // Incoming webhooks: no session, the secret in the URL is the credential. Bodies are kept small.
+  // Prompt links (#118): /new and /ask open the app with a draft from the query; they create nothing.
+  for (const kind of ['new', 'ask']) {
+    app.get(`/${kind}`, (req, res) => {
+      const keys = kind === 'new' ? ['project', 'title', 'body', 'folder', 'assignee'] : ['agent', 'prompt', 'ticket'];
+      const query = new URLSearchParams(Object.entries(req.query).filter((e): e is [string, string] => keys.includes(e[0]) && typeof e[1] === 'string')).toString().slice(0, 6000);
+      res.redirect(302, `/#!${kind}?${query}`);
+    });
+  }
+
   // Guests (#117): the link's token is the credential, bound to the first browser by a cookie.
   const guestLink = (req: Request, res: Response) => {
     const cookieName = (id: number) => `orco_guest_${id}`;

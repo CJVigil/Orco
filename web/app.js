@@ -325,6 +325,35 @@ const DIFF_NAME = /\.(diff|patch)$/i;
 // Terminal colour codes in logs are noise in a browser.
 const ANSI = /\u001b\[[0-9;]*[A-Za-z]/g;
 
+/**
+ * Prompt links (#118): /new?project=&title=&body=&folder=&assignee= opens a new-ticket draft, and
+ * /ask?agent=&prompt=&ticket= puts a task for an agent in the composer. Nothing is created or sent
+ * until the reader presses Create or Send, and the reader's own access applies.
+ */
+async function openPromptLink(spec) {
+  const [kind, query] = spec.split('?');
+  const q = new URLSearchParams(query);
+  const cut = (v, n) => (v ?? '').slice(0, n);
+  if (kind === 'new') {
+    const project = q.get('project') ?? state.room?.project;
+    if (!project || !state.projects.some((p) => p.name === project)) return toast(`You are not in a project named ${project ?? '(none)'}`);
+    await tickets.openNewTicket({ project, title: cut(q.get('title'), 200), description: cut(q.get('body'), 5000), folder: q.get('folder') || undefined, assignee: q.get('assignee') || undefined });
+    return;
+  }
+  const agent = (q.get('agent') ?? '').replace(/^@/, '');
+  const ticket = q.get('ticket') ?? '';
+  const project = /^[A-Za-z]/.test(ticket) ? state.projects.find((p) => ticket.toUpperCase().startsWith(`${(p.ticketKey ?? '').toUpperCase()}-`))?.name : null;
+  const room = state.rooms.find((r) => r.project === (project ?? state.room?.project ?? null) && r.name === 'general') ?? state.room;
+  if (room && room.ref !== state.room?.ref) {
+    location.hash = `#${room.ref}`;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+  const box = $('composer-text');
+  box.value = `/task @${agent} ${cut(q.get('prompt'), 4000)}${ticket ? ` (${ticket})` : ''}`;
+  box.focus();
+  toast('A task draft from a link: read it, then press Send');
+}
+
 async function startIncident(message) {
   const project = message.room.split('/')[0];
   const title = prompt('What is the incident? (one line)', message.text.split('\n')[0].slice(0, 120));
@@ -1811,6 +1840,7 @@ function overlayRoute() {
   if (/^#pair(=.*)?$/.test(location.hash)) void guide.connectComputer();
   else if (location.hash === '#!help') guide.showHelp();
   else if (/^#!artifact\/\d+$/.test(location.hash)) void openArtifact(Number(location.hash.split('/')[1]));
+  else if (/^#!(new|ask)\?/.test(location.hash)) void openPromptLink(location.hash.slice(2));
   else return false;
   history.replaceState(null, '', state.viewHash || location.pathname + location.search);
   return Boolean(state.room);

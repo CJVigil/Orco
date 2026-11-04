@@ -68,3 +68,14 @@ describe('guest links (#117)', () => {
     assert.equal((await fetch(`${base}/guest-api/${token}`, { headers: { cookie } })).status, 404);
   });
 });
+
+describe('prompt links (#118)', () => {
+  it('redirect into the app with the draft, creating nothing', async () => {
+    const res = await fetch(`${base}/new?project=floor&title=Printer%20jam&folder=Kiosk&evil[x]=1`, { redirect: 'manual' });
+    assert.equal(res.status, 302);
+    assert.equal(res.headers.get('location'), '/#!new?project=floor&title=Printer+jam&folder=Kiosk');
+    assert.equal(store.tickets.list(carlos, { project: 'floor', query: 'Printer jam' }).length, 0, 'nothing is created');
+    const ask = await fetch(`${base}/ask?agent=carlos-bot&prompt=check%20the%20logs&ticket=FLO-1`, { redirect: 'manual' });
+    assert.equal(ask.headers.get('location'), '/#!ask?agent=carlos-bot&prompt=check+the+logs&ticket=FLO-1');
+  });
+});

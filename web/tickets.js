@@ -2001,6 +2001,12 @@ export function createTickets(ctx) {
 
   /* New ticket */
 
+  /** A prompt link (#118): /new or /ask with the draft in the query, empty fields left out. */
+  function promptLink(kind, params) {
+    const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v));
+    return `${location.origin}/${kind}?${q}`;
+  }
+
   async function openNewTicket(defaults = {}) {
     const project = defaults.project ?? t.project;
     const plan = await planFor(project);
@@ -2008,11 +2014,14 @@ export function createTickets(ctx) {
     t.open = null;
     const title = el('input', { name: 'title', required: true, maxlength: '200', placeholder: 'Title', 'aria-label': 'Title', autocomplete: 'off' });
     const description = el('textarea', { name: 'description', rows: '5', placeholder: 'Description (Markdown)', 'aria-label': 'Description' });
+    // A prompt link (#118) fills the draft; nothing is created until the reader presses Create.
+    title.value = (defaults.title ?? '').slice(0, 200);
+    description.value = (defaults.description ?? '').slice(0, 5000);
     const fields = {
       status: select(defaults.status ?? plan.statuses.find((s) => s.category === 'backlog' || s.category === 'unstarted')?.name, plan.statuses.map((s) => [s.name, s.name]), () => {}, { 'aria-label': 'Status' }),
       priority: select('none', PRIORITY_ORDER.map((p) => [p, PRIORITY_LABEL[p]]), () => {}, { 'aria-label': 'Priority' }),
       assignee: select(
-        '',
+        defaults.assignee && plan.members.some((m) => m.name === defaults.assignee) ? defaults.assignee : '',
         [['', 'Unassigned'], ...plan.members.filter((p) => p.kind === 'user').map((p) => [p.name, p.name]), ...plan.members.filter((p) => p.kind === 'agent').map((p) => [p.name, `${p.name} (agent)`])],
         () => {},
         { 'aria-label': 'Assignee' },
@@ -2091,7 +2100,20 @@ export function createTickets(ctx) {
       error,
       el('div', { class: 'row-end' }, el('button', { class: 'ghost', type: 'button', text: 'Cancel', onclick: closePanel }), el('button', { class: 'primary', type: 'submit', text: 'Create ticket' })),
     );
-    $('panel-body').replaceChildren(form);
+    $('panel-body').replaceChildren(
+      form,
+      el('button', {
+        class: 'ghost small copy-link',
+        type: 'button',
+        title: 'A link that opens this draft for whoever follows it; it creates nothing by itself',
+        text: 'Copy as link',
+        onclick: () => {
+          const url = promptLink('new', { project, title: title.value, body: description.value, folder: fields.folder?.value ?? '', assignee: fields.assignee.value });
+          if (url.length > 2000) return notify('That draft is too long for a link; shorten the description');
+          void navigator.clipboard.writeText(url).then(() => notify('Link copied: it opens this draft, nothing more'), () => prompt('Copy this link:', url));
+        },
+      }),
+    );
     title.focus();
   }
 
