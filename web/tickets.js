@@ -11,6 +11,7 @@ const TABS = [
   ['notes', 'Notes'],
   ['files', 'Files'],
   ['artifacts', 'Artifacts'],
+  ['spend', 'Spend'],
   ['schedules', 'Schedules'],
   ['integrations', 'Integrations'],
   ['settings', 'Settings'],
@@ -198,13 +199,14 @@ export function createTickets(ctx) {
   async function load() {
     const project = t.project;
     const p = encodeURIComponent(project);
-    const [plan, tickets, notes, schedules, files, artifacts, integrations] = await Promise.all([
+    const [plan, tickets, notes, schedules, files, artifacts, spend, integrations] = await Promise.all([
       api(`/projects/${p}/plan`),
       fetchTickets(),
       t.tab === 'notes' ? api(`/projects/${p}/notes`) : Promise.resolve(t.notes ?? []),
       t.tab === 'schedules' ? api(`/schedules?project=${p}`) : Promise.resolve(t.schedules ?? []),
       t.tab === 'files' ? api(`/projects/${p}/files`) : Promise.resolve(t.files ?? []),
       t.tab === 'artifacts' ? api(`/artifacts?project=${p}`) : Promise.resolve(t.artifacts ?? []),
+      t.tab === 'spend' ? api(`/projects/${p}/spend?days=7`) : Promise.resolve(t.spend ?? null),
       t.tab === 'integrations'
         ? Promise.all([api(`/hooks?project=${p}`), api(`/projects/${p}/secrets`), api(`/leases?project=${p}`)]).then(([hooks, secrets, leases]) => ({ hooks, secrets, leases }))
         : Promise.resolve(t.integrations ?? null),
@@ -215,6 +217,7 @@ export function createTickets(ctx) {
     t.schedules = schedules;
     t.files = files;
     t.artifacts = artifacts;
+    t.spend = spend;
     t.integrations = integrations;
     plans.set(project, plan);
     // A filter on a folder that was removed or renamed would show nothing; drop it.
@@ -416,7 +419,7 @@ export function createTickets(ctx) {
       return;
     }
     t.pendingTab = false;
-    const views = { board: renderBoard, list: renderList, milestones: renderMilestones, cycles: renderCycles, notes: renderNotes, files: renderFiles, artifacts: renderArtifacts, schedules: renderSchedules, integrations: renderIntegrations, settings: renderSettings };
+    const views = { board: renderBoard, list: renderList, milestones: renderMilestones, cycles: renderCycles, notes: renderNotes, files: renderFiles, artifacts: renderArtifacts, spend: renderSpend, schedules: renderSchedules, integrations: renderIntegrations, settings: renderSettings };
     body.replaceChildren(...[views[t.tab]()].flat(Infinity).filter((node) => node !== null && node !== undefined));
   }
 
@@ -1821,7 +1824,7 @@ export function createTickets(ctx) {
       ticket.artifacts?.length ? el('div', { class: 'files-strip' }, el('div', { class: 'small muted files-head', text: `Artifacts (${ticket.artifacts.length})` }), ticket.artifacts.map(artifactRow)) : null,
       el('ol', { class: 'activity' }, foldRuns(items, entries)),
       commentBox,
-      el('p', { class: 'muted small detail-foot', text: `Opened by ${ticket.creator} ${ago(ticket.createdAt)} · updated ${ago(ticket.updatedAt)}` }),
+      el('p', { class: 'muted small detail-foot', text: `Opened by ${ticket.creator} ${ago(ticket.createdAt)} · updated ${ago(ticket.updatedAt)}${ticket.spend && (ticket.spend.tokens || ticket.spend.cents) ? ` · agents spent ${spendText(ticket.spend)}` : ''}` }),
       accessRow(ticket),
     );
   }
@@ -2264,6 +2267,29 @@ export function createTickets(ctx) {
         ),
       ),
     );
+  }
+
+  /* Spend (#106): what agents spent this week, by ticket, folder, person, agent and day. */
+
+  const tokensText = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
+  const dollars = (cents) => `$${(cents / 100).toFixed(2)}`;
+  const spendText = (r) => [r.cents ? dollars(r.cents) : null, r.tokens ? `${tokensText(r.tokens)} tokens` : null].filter(Boolean).join(' · ') || '—';
+
+  function renderSpend() {
+    const sp = t.spend;
+    if (!sp) return null;
+    if (!sp.tickets.length && !sp.agents.length) return el('p', { class: 'muted plan-intro', text: 'No agent spend in the last 7 days. Agents with the Orco plugin report it as their sessions run.' });
+    const table = (title, rows, label) =>
+      rows.length
+        ? el('div', { class: 'plan-card spend-card' }, el('h3', { text: title }), rows.map((r) => el('div', { class: 'spend-row' }, label(r), el('span', { class: 'muted small', text: spendText(r) }))))
+        : null;
+    return [
+      table('Most expensive tickets this week', sp.tickets, (r) => el('button', { class: 'link-button', type: 'button', text: `${r.ref} ${r.title}`, onclick: () => void openTicket(r.ref) })),
+      table('By folder', sp.folders, (r) => el('span', { text: r.name })),
+      table('By person', sp.people, (r) => el('span', { text: r.name })),
+      table('By agent', sp.agents, (r) => el('span', { text: r.name })),
+      table('By day', sp.byDay, (r) => el('span', { class: 'mono', text: r.name })),
+    ];
   }
 
   /** The project's published pages (#99), newest first. */

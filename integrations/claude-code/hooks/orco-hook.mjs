@@ -39,6 +39,13 @@ async function main() {
     process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput: { ...input.tool_input, session_url: sessionUrl } } }));
     return;
   }
+  if (event === 'Stop' || event === 'SessionEnd') {
+    // Totals so far for this session (#106); Orco books only the growth, so reporting each turn is fine.
+    const usage = transcriptUsage(input.transcript_path);
+    if (!usage || (!usage.tokens && !usage.costUsd)) return;
+    await post('/api/usage', { session, tokens: usage.tokens, ...(usage.costUsd ? { costUsd: usage.costUsd } : {}) });
+    return;
+  }
   if (event === 'SessionStart') {
     const text = await get('/api/my-work?format=brief', 'text');
     const now = new Date().toISOString();
@@ -67,6 +74,44 @@ async function get(path, kind) {
   } catch {
     return null;
   }
+}
+
+async function post(path, body) {
+  try {
+    await fetch(`${base}${path}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(1500) });
+  } catch {
+    // Reported again at the next turn's end.
+  }
+}
+
+/** Tokens (input, output and cache) and any cost Claude Code recorded, summed over a transcript. */
+function transcriptUsage(path) {
+  if (!path) return null;
+  let text;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
+  const seen = new Set();
+  let tokens = 0;
+  let costUsd = 0;
+  for (const line of text.split('\n')) {
+    if (!line.includes('"usage"') && !line.includes('costUSD')) continue;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const id = entry.message?.id ?? entry.uuid;
+    if (id && seen.has(id)) continue;
+    if (id) seen.add(id);
+    const u = entry.message?.usage;
+    if (u) tokens += (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
+    if (typeof entry.costUSD === 'number') costUsd += entry.costUSD;
+  }
+  return { tokens, costUsd: Math.round(costUsd * 10000) / 10000 };
 }
 
 function emit(event, text) {

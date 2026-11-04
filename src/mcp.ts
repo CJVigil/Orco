@@ -319,6 +319,7 @@ function formatTicket(t: Ticket, since?: number) {
     ...(t.closedAs ? { closed_as: { reason: t.closedAs.reason, ticket: t.closedAs.ticket.ref } } : {}),
     ...(t.replaces.length ? { replaces: t.replaces.map((r) => ({ ticket: r.ref, reason: r.reason })) } : {}),
     ...(t.decisions.length ? { decisions: t.decisions } : {}),
+    ...(t.spend.tokens || t.spend.cents ? { spend: { tokens: t.spend.tokens, usd: t.spend.cents / 100 } } : {}),
     ...(t.approvals.length ? { approvals: t.approvals.map((a) => ({ id: a.id, summary: a.summary, scope: a.scope, state: a.state, decided_by: a.decidedBy, valid_until: a.validUntil, in_force: a.inForce })) } : {}),
     children: t.children.map(formatTicketSummary),
     activity: t.activity.map((a) => ({ at: a.createdAt, by: a.actor, kind: a.kind, text: a.body, detail: a.detail })),
@@ -1497,6 +1498,24 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
       const ref = decodeURIComponent(String(Array.isArray(variables.ref) ? variables.ref[0] : variables.ref));
       return { contents: [{ uri: uri.href, mimeType: 'text/markdown', text: ticketMarkdown(ref) }] };
     },
+  );
+
+  server.registerTool(
+    'report_usage',
+    {
+      annotations: annotate('report_usage'),
+      description:
+        'Report what this session has used so far (totals, not increments): tokens and, if you know it, the cost in dollars. ' +
+        'It is booked on the ticket you name, or on your one ticket in progress, so people see what each ticket cost. ' +
+        'Reporting again for the same session books only the growth. The plugin does this for you when a session ends.',
+      inputSchema: z.object({
+        session: z.string().max(200).describe('Your session id'),
+        tokens: z.number().int().min(0),
+        cost_usd: z.number().min(0).optional(),
+        ticket: z.string().optional(),
+      }),
+    },
+    async ({ session, tokens, cost_usd, ticket }) => run(() => store.controls.reportUsage(me, { session, tokens, costUsd: cost_usd, ticket })),
   );
 
   server.registerTool(

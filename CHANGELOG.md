@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Spend per ticket: agents report a session's tokens and cost (`report_usage`, `POST /api/usage`; the Claude Code plugin does it at the end of each turn from the session transcript), booked on the ticket named or the agent's one ticket in progress, only the growth each time. A ticket shows what agents spent on it, and each project has a Spend tab: the most expensive tickets this week, and totals by folder, person, agent and day (`GET /api/projects/:name/spend`). Budgets show what is left, where an even month would be, and the day the cap runs out at this pace; whoever set the budget hears once when that falls before month end. Migration 43.
+
 - Agent comments, ticket changes (handoffs included) and task results take `session_url`, the Claude session that did the work; the ticket shows a small Open session link on those entries, and a finished task lists it with its links. The Claude Code plugin fills it in on web sessions. Orco keeps the link only, never transcript content.
 
 - Tickets are MCP resources (`orco://ticket/SHO-12`: description, handoff, criteria, files and the latest comments), so Claude Code can @-mention them; an agent's own open tickets are listed and refs complete. `start_ticket` claims a ticket (or keeps it if it is yours), sets it In Progress and returns it with the project notes in one call. Plugin commands `/orco:ticket <ref>` (read only) and `/orco:start <ref>`.

@@ -1669,6 +1669,14 @@ export function createApp(store: Store, options: AppOptions = {}) {
     res.status(204).end();
   });
 
+  // Usage an agent session reports, booked on its ticket (#106); spend in a project by ticket, folder, person, agent and day.
+  api.post('/usage', (req, res) => {
+    const b = req.body ?? {};
+    res.json(store.controls.reportUsage(req.participant!, { session: String(b.session ?? ''), tokens: Number(b.tokens ?? 0), costUsd: b.costUsd === undefined ? null : Number(b.costUsd), ticket: str(b.ticket, 'ticket') }));
+  });
+  api.get('/projects/:name/spend', (req, res) => {
+    res.json(store.controls.projectSpend(req.participant!, String(req.params.name), optionalInt(req.query.days) ?? 7));
+  });
   // MCP tool use per tool over the last days (#103), for org admins.
   api.get('/tool-usage', (req, res) => {
     res.json(store.toolUsage.summary(req.participant!, optionalInt(req.query.days) ?? 7));

@@ -5359,3 +5359,27 @@ button.recent-link {
   color: var(--accent);
   text-decoration: underline;
 }
+
+/* Spend (#106) */
+.spend-card h3 {
+  margin: 0;
+  font-size: 0.86rem;
+}
+
+.spend-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.spend-row > :first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.spend-row .muted {
+  white-space: nowrap;
+}

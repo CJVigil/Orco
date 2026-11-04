@@ -14,6 +14,12 @@ export interface Budget {
   /** Whole percent of the cap spent this month. */
   percent: number;
   setBy: string;
+  /** What is left this month, in cents. */
+  remainingCents: number;
+  /** Where spend would be today if spread evenly over the month. */
+  evenCents: number;
+  /** The day the cap runs out at this pace, or null when it lasts the month. */
+  runsOutOn: string | null;
 }
 
 export interface Pause {
@@ -121,12 +127,87 @@ export class Controls {
    * Books money an agent just spent, dated now. Whether it ran on the org's model, and who owned it,
    * are kept with it, so removing the agent or lowering its budget never makes the money unspent.
    */
-  recordSpend(agentId: number, cents: number, context: { taskId?: number; projectId?: number | null; note?: string } = {}): void {
-    if (!(cents > 0)) return;
+  recordSpend(agentId: number, cents: number, context: { taskId?: number; projectId?: number | null; note?: string; ticketId?: number | null; tokens?: number } = {}): void {
+    const tokens = Math.max(0, Math.round(context.tokens ?? 0));
+    if (!(cents > 0) && tokens === 0) return;
     const agent = this.store.participantById(agentId);
+    // Spend on a task that works a ticket counts on the ticket too (#106).
+    const ticketId = context.ticketId ?? (context.taskId !== undefined ? this.store.tickets.ticketIdForTask(context.taskId) : null);
     this.store.db
-      .prepare('INSERT INTO spend (agent_id, owner_id, task_id, project_id, org_model, cents, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(agentId, agent?.ownerId ?? null, context.taskId ?? null, context.projectId ?? null, agent && this.store.hosted.of(agent) ? 1 : 0, cents, context.note ?? '', new Date(this.store.now()).toISOString());
+      .prepare('INSERT INTO spend (agent_id, owner_id, task_id, project_id, org_model, cents, note, created_at, ticket_id, tokens) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(agentId, agent?.ownerId ?? null, context.taskId ?? null, context.projectId ?? null, agent && this.store.hosted.of(agent) ? 1 : 0, Math.max(cents, 0), context.note ?? '', new Date(this.store.now()).toISOString(), ticketId, tokens);
+  }
+
+  /**
+   * Usage an agent reports for its session (#106): totals so far, so a session can report again and
+   * only the growth is booked. It goes on the ticket named, or the agent's one ticket in progress.
+   */
+  reportUsage(actor: Participant, input: { session: string; tokens: number; costUsd?: number | null; ticket?: string | null }): { ticket: string | null; tokens: number; cents: number } {
+    if (actor.kind !== 'agent') throw new OrcoError('forbidden', 'Agents report their own usage');
+    const session = String(input.session ?? '').trim().slice(0, 200);
+    if (!session) throw new OrcoError('invalid', 'session names the session the totals are for');
+    if (!Number.isFinite(input.tokens) || input.tokens < 0 || input.tokens > 1e11) throw new OrcoError('invalid', 'tokens is a count');
+    const cents = input.costUsd === undefined || input.costUsd === null ? 0 : Number(input.costUsd) * 100;
+    if (!Number.isFinite(cents) || cents < 0 || cents > MAX_CENTS) throw new OrcoError('invalid', 'cost_usd is an amount in dollars');
+    let ticketId: number | null = null;
+    let projectId: number | null = null;
+    if (input.ticket) {
+      ticketId = this.store.tickets.idOf(actor, input.ticket);
+    } else {
+      const mine = this.store.tickets.list(actor, { assignee: 'me', categories: ['started'], limit: 2 });
+      if (mine.length === 1) ticketId = mine[0]!.id;
+    }
+    if (ticketId !== null) projectId = (this.store.db.prepare('SELECT project_id FROM tickets WHERE id = ?').get(ticketId) as { project_id: number }).project_id;
+    const before = this.store.db.prepare('SELECT tokens, cents FROM usage_sessions WHERE agent_id = ? AND session = ?').get(actor.id, session) as { tokens: number; cents: number } | undefined;
+    const addTokens = Math.max(0, Math.round(input.tokens) - (before?.tokens ?? 0));
+    const addCents = Math.max(0, cents - (before?.cents ?? 0));
+    this.store.db
+      .prepare(
+        `INSERT INTO usage_sessions (agent_id, session, tokens, cents, updated_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (agent_id, session) DO UPDATE SET tokens = max(tokens, excluded.tokens), cents = max(cents, excluded.cents), updated_at = excluded.updated_at`,
+      )
+      .run(actor.id, session, Math.round(input.tokens), cents, new Date(this.store.now()).toISOString());
+    this.recordSpend(actor.id, addCents, { ticketId, projectId, tokens: addTokens, note: `session ${session.slice(0, 40)}` });
+    const ref = ticketId === null ? null : (this.store.db.prepare("SELECT p.ticket_key || '-' || t.number AS ref FROM tickets t JOIN projects p ON p.id = t.project_id WHERE t.id = ?").get(ticketId) as { ref: string }).ref;
+    return { ticket: ref, tokens: addTokens, cents: Math.round(addCents) };
+  }
+
+  /** What a ticket has cost so far: tokens and cents. */
+  ticketSpend(ticketId: number): { tokens: number; cents: number } {
+    const row = this.store.db.prepare('SELECT coalesce(sum(tokens), 0) AS tokens, coalesce(sum(cents), 0) AS cents FROM spend WHERE ticket_id = ?').get(ticketId) as { tokens: number; cents: number };
+    return { tokens: row.tokens, cents: Math.round(row.cents) };
+  }
+
+  /**
+   * Spend in a project over the last days (#106): the most expensive tickets, and totals by folder,
+   * person (the agent's owner), agent and day. Private tickets the actor cannot see are left out.
+   */
+  projectSpend(actor: Participant, projectName: string, days = 7) {
+    const project = this.store.visibleProject(actor, projectName);
+    const since = new Date(this.store.now() - Math.min(Math.max(days, 1), 92) * 86_400_000).toISOString();
+    const hidden = this.store.tickets.privateFilter(actor);
+    const q = <T>(sql: string, ...params: (string | number)[]) => this.store.db.prepare(sql).all(...params) as unknown as T[];
+    const base = `FROM spend s LEFT JOIN tickets t ON t.id = s.ticket_id WHERE s.project_id = ? AND s.created_at >= ? AND (t.id IS NULL OR ${hidden.sql})`;
+    const params = [project.id, since, ...hidden.params];
+    const tickets = q<{ ref: string; title: string; tokens: number; cents: number }>(
+      `SELECT pr.ticket_key || '-' || t.number AS ref, t.title, sum(s.tokens) AS tokens, sum(s.cents) AS cents ${base} AND t.id IS NOT NULL
+       GROUP BY t.id ORDER BY sum(s.cents) DESC, sum(s.tokens) DESC LIMIT 15`.replace('FROM spend s', 'FROM spend s JOIN projects pr ON pr.id = s.project_id'),
+      ...params,
+    );
+    const by = (column: string, join = '') =>
+      q<{ name: string | null; tokens: number; cents: number }>(
+        `SELECT ${column} AS name, sum(s.tokens) AS tokens, sum(s.cents) AS cents ${base.replace('FROM spend s', `FROM spend s ${join}`)} GROUP BY 1 ORDER BY sum(s.cents) DESC, sum(s.tokens) DESC`,
+        ...params,
+      );
+    const round = <T extends { cents: number }>(rows: T[]) => rows.map((r) => ({ ...r, cents: Math.round(r.cents) }));
+    return {
+      days,
+      tickets: round(tickets),
+      folders: round(by("coalesce(f.name, '(no folder)')", 'LEFT JOIN tickets tf ON tf.id = s.ticket_id LEFT JOIN ticket_folders f ON f.id = tf.folder_id')),
+      people: round(by("coalesce(o.name, '(no owner)')", 'LEFT JOIN participants o ON o.id = s.owner_id')),
+      agents: round(by('a.name', 'JOIN participants a ON a.id = s.agent_id')),
+      byDay: round(by('substr(s.created_at, 1, 10)')),
+    };
   }
 
   /** What a person's agents spent on the org's models this month, removed agents included. */
@@ -184,13 +265,17 @@ export class Controls {
       const row = this.budgetRow(scope, id);
       if (!row) continue;
       const spent = this.spentThisMonth(scope, id);
-      const level = spent >= row.monthly_cents ? 100 : spent >= row.monthly_cents * 0.8 ? 80 : 0;
+      const pace = this.pace(spent, row.monthly_cents);
+      // Level 1: at this pace the cap runs out before the month does, told once (#106).
+      const level = spent >= row.monthly_cents ? 100 : spent >= row.monthly_cents * 0.8 ? 80 : pace.runsOutOn ? 1 : 0;
       if (!level) continue;
       const fresh = this.store.db.prepare('INSERT OR IGNORE INTO budget_alerts (budget_id, month, level) VALUES (?, ?, ?)').run(row.id, month, level);
       if (Number(fresh.changes) === 0) continue;
       const name = scope === 'project' ? `Project ${this.projectName(id)}` : this.store.participantById(id)!.name;
       const what =
-        level === 100
+        level === 1
+          ? `is spending fast: at this pace its monthly budget (${money(row.monthly_cents)}) runs out on ${pace.runsOutOn}. ${money(spent)} spent, ${money(pace.remainingCents)} left.`
+          : level === 100
           ? `has used its monthly budget (${money(spent)} of ${money(row.monthly_cents)}). New tasks wait for your approval until next month or a higher budget.`
           : `has used ${Math.round((spent / row.monthly_cents) * 100)}% of its monthly budget (${money(spent)} of ${money(row.monthly_cents)}).`;
       const assignee = this.store.participantById(task.assignee_id)!;
@@ -312,7 +397,23 @@ export class Controls {
   private toBudget(row: BudgetRow): Budget {
     const spent = this.spentThisMonth(row.scope, row.target_id);
     const target = row.scope === 'project' ? this.projectName(row.target_id) : (this.store.participantById(row.target_id)?.name ?? '?');
-    return { scope: row.scope, target, monthlyCents: row.monthly_cents, spentCents: spent, percent: Math.round((spent / row.monthly_cents) * 100), setBy: row.setter };
+    return { scope: row.scope, target, monthlyCents: row.monthly_cents, spentCents: spent, percent: Math.round((spent / row.monthly_cents) * 100), setBy: row.setter, ...this.pace(spent, row.monthly_cents) };
+  }
+
+  /**
+   * Where spend would be if spread evenly over the month, what remains, and the day the cap runs out
+   * at this pace (null when it lasts the month), so a fast start shows before the 80% alert (#106).
+   */
+  pace(spent: number, monthly: number): { remainingCents: number; evenCents: number; runsOutOn: string | null } {
+    const now = this.store.now();
+    const start = Date.parse(this.monthStart());
+    const d = new Date(start);
+    const end = Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
+    const elapsed = Math.max(now - start, 3600_000);
+    const evenCents = Math.round((monthly * (now - start)) / (end - start));
+    const perMs = spent / elapsed;
+    const out = perMs > 0 ? start + monthly / perMs : Infinity;
+    return { remainingCents: Math.max(0, monthly - spent), evenCents, runsOutOn: out < end && spent < monthly ? new Date(out).toISOString().slice(0, 10) : spent >= monthly ? new Date(now).toISOString().slice(0, 10) : null };
   }
 
   private projectName(id: number): string {

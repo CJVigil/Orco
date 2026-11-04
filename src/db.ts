@@ -1043,6 +1043,20 @@ export const MIGRATIONS = [
     ms INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (day, participant_id, tool)
   );
+  `,  // 43: spend and tokens per ticket, and usage an agent session reports (#106).
+  `
+  ALTER TABLE spend ADD COLUMN ticket_id INTEGER REFERENCES tickets(id) ON DELETE SET NULL;
+  ALTER TABLE spend ADD COLUMN tokens INTEGER NOT NULL DEFAULT 0;
+  CREATE INDEX spend_ticket ON spend (ticket_id, created_at);
+  UPDATE spend SET ticket_id = (SELECT id FROM tickets WHERE tickets.task_id = spend.task_id) WHERE task_id IS NOT NULL;
+  CREATE TABLE usage_sessions (
+    agent_id INTEGER NOT NULL REFERENCES participants(id) ON DELETE CASCADE,
+    session TEXT NOT NULL,
+    tokens INTEGER NOT NULL DEFAULT 0,
+    cents REAL NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (agent_id, session)
+  );
   `,
 ];
 

@@ -195,6 +195,8 @@ export interface TicketLink {
 export interface Ticket extends TicketSummary {
   /** Files on the ticket and its comments (#98). */
   files: TicketFile[];
+  /** What agents have spent on it: tokens and cents (#106). */
+  spend: { tokens: number; cents: number };
   /** Pages published on the ticket (#99). */
   artifacts: Omit<Artifact, 'versions'>[];
   description: string;
@@ -1844,6 +1846,7 @@ export class Tickets {
         .map((a) => ({ id: a.id, summary: a.summary, scope: a.scope, state: a.state, decidedBy: a.decidedBy, validUntil: a.validUntil, inForce: a.inForce, actionKind: a.actionKind, standing: a.standing })),
       children: this.summaries(children, actor),
       files: this.store.ticketFiles.forTicket(id),
+      spend: this.store.controls.ticketSpend(id),
       artifacts: this.store.artifacts.forTicket(id).map(({ versions: _v, ...a }) => a),
       activity: activity.map((a) => ({
         id: a.id,

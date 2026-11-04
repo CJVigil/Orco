@@ -613,6 +613,8 @@ export function createPortfolio(ctx) {
                 {},
                 el('span', { text: `${b.scope === 'project' ? 'Project' : 'Agent'} ${b.target}` }),
                 el('span', { class: `small ${b.percent >= 100 ? 'danger-text' : b.percent >= 80 ? 'warn-text' : 'muted'}`, text: ` ${money(b.spentCents)} of ${money(b.monthlyCents)} (${b.percent}%)` }),
+                // Pace (#106): what is left, where an even month would be, and when it runs out at this rate.
+                el('span', { class: `small ${b.runsOutOn ? 'warn-text' : 'muted'}`, text: ` · ${money(b.remainingCents)} left · even pace ${money(b.evenCents)}${b.runsOutOn ? ` · at this pace it runs out on ${b.runsOutOn}` : ''}` }),
                 el('span', { class: 'spacer' }),
                 el('button', { class: 'ghost small', type: 'button', text: 'Remove', onclick: () => void act(() => api('/budgets', { method: 'POST', body: { scope: b.scope, target: b.target, monthly_cents: null } })) }),
               ),
