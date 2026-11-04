@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Safe updates: `orco update` (and Update in Portfolio > Controls for org admins) backs up the database, builds the new version in a separate worktree, migrates a copy of the database with it and trial-starts it on a spare port, then switches the checkout, restarts the server with `ORCO_RESTART_CMD` and checks `/healthz`. If the new version fails anywhere after the switch, it goes back to the previous version and the backup by itself and says why. A broken release never gets past its trial. For git checkouts on Linux and macOS; container installs pull a new image instead.
+
 - Quote a line: select text in a message or a ticket comment and press Quote; the draft gets the excerpt and its source (`> — quoting message 123`), kept in the reply's own text so it survives edits and copies. Clicking a quote jumps to the source and highlights the excerpt, only when it appears there once, so the wrong line is never marked. Agents get the quotes in `read`, `wait_for_mentions` and `get_ticket` as structured `quotes` with source and excerpt.
 
 - Voice input: a mic beside the message and thread boxes, ticket comments, the new-ticket description and question answers. Speech goes into the draft only; nothing is sent or created until you press Send. A transcript that arrives after the draft was edited or replaced is dropped, not written over it, and Escape cancels a recording. Uses the browser's speech recognition (Chrome, Edge, Safari); without it no mic appears. Server-side transcription is not included.

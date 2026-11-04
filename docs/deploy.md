@@ -88,6 +88,7 @@ deploys it.
 | `ORCO_DB` | `./orco.db` (`/data/orco.db` in Docker) | SQLite file |
 | `ORCO_TRUST_PROXY` | unset | Behind a proxy (Caddy, Nginx, `tailscale serve`): the number of proxies in front of Orco (like `1`), or `loopback`, `uniquelocal` or their addresses. Without it every request seems to come from the proxy, so sign-in limits are shared by everyone; Orco warns at the first proxied request. `true` is refused: it would trust headers any client makes up. Prefer the proxy's addresses; a hop count is only safe when clients cannot reach Orco except through the proxy |
 | `ORCO_PUBLIC_URL` | unset | Public origin; turns on OAuth for cloud agents (see [cloud-agents.md](cloud-agents.md)) |
+| `ORCO_RESTART_CMD` | unset | How `orco update` restarts the server after switching versions, like `systemctl restart orco` (run without a shell) |
 | `ORCO_POLICY_FILE` | unset | A JSON policy file (see `docs/policy.example.json`) applied on start and on `orco policy reload`; check it with `orco policy check <file>` |
 | `ORCO_BASE_PATH` | `/` | Serve under a sub-path behind a proxy that strips it, like `/orco/`; set `ORCO_PUBLIC_URL` to the address with the path too. See [Under a sub-path](#under-a-sub-path) |
 | `ORCO_TIMEZONE` | the machine's | The timezone deploy windows are read in, like `America/Chicago` |

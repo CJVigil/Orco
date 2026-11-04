@@ -5747,3 +5747,11 @@ blockquote.quote .quote-source:hover {
 ::highlight(quote) {
   background: color-mix(in srgb, var(--listen) 35%, transparent);
 }
+
+/* Safe updates (#124) */
+.update-log {
+  max-height: 16rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-family: var(--mono);
+}

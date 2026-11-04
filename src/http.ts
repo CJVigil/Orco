@@ -1,6 +1,7 @@
 import { at, basePath } from './basepath.js';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, openSync, readFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -282,6 +283,8 @@ function optionalInt(value: unknown): number | undefined {
 export interface AppOptions {
   presence?: Presence;
   publicUrl?: string;
+  /** The database file, for the admin's Update button (#124). */
+  dbPath?: string;
   now?: () => number;
   /** While no one has an account: the code that lets the first person set up Orco in the browser. */
   setupCode?: string;
@@ -1683,6 +1686,25 @@ export function createApp(store: Store, options: AppOptions = {}) {
   });
   api.get('/projects/:name/spend', (req, res) => {
     res.json(store.controls.projectSpend(req.participant!, String(req.params.name), optionalInt(req.query.days) ?? 7));
+  });
+  // Safe updates (#124): org admins start `orco update` as its own process and read its log here.
+  const updateLog = () => join(process.cwd(), '.orco-update', 'update.log');
+  api.post('/admin/update', (req, res) => {
+    const me = req.participant!;
+    if (me.kind !== 'user' || !store.isOrgAdmin(me)) throw new OrcoError('forbidden', 'Only org admins update Orco');
+    if (!options.dbPath || !process.argv[1]) throw new OrcoError('invalid', 'This server cannot update itself; run orco update on its machine');
+    mkdirSync(join(process.cwd(), '.orco-update'), { recursive: true });
+    const out = openSync(updateLog(), 'w');
+    const child = spawn(process.execPath, [...process.execArgv, process.argv[1], 'update', '--db', options.dbPath], { detached: true, stdio: ['ignore', out, out], shell: false, cwd: process.cwd() });
+    child.unref();
+    store.audit.record(me, 'server.update', { detail: { pid: child.pid } });
+    res.status(202).json({ started: true });
+  });
+  api.get('/admin/update', (req, res) => {
+    const me = req.participant!;
+    if (me.kind !== 'user' || !store.isOrgAdmin(me)) throw new OrcoError('forbidden', 'Only org admins update Orco');
+    const log = existsSync(updateLog()) ? readFileSync(updateLog(), 'utf8') : '';
+    res.json({ version: VERSION, log: log.split('\n').slice(-60).join('\n') });
   });
   // Handoff context packs (#121): a ticket's pack, and an agent's pack size (its owner sets it).
   api.get('/tickets/:ref/pack', (req, res) => {

@@ -1,3 +1,5 @@
+import { fileURLToPath } from 'node:url';
+import { update } from './updater.js';
 import { checkPolicy, POLICY_VERSION } from './policyfile.js';
 import { Oidc, type OidcConfig } from './oidc.js';
 import { HostedRunner } from './hosted-runner.js';
@@ -40,6 +42,8 @@ Server commands (run where the database lives):
   audit export [--since N]   Print the audit log as JSON lines
   backup <file>              Write a consistent copy of the database, safe while serving
   restore <file> [--force]   Replace the database with a backup (stop the server first)
+  update [--ref R] [--restart "cmd"]   Back up, stage and trial-start the new version, switch, or roll back
+                             (a git checkout; ORCO_RESTART_CMD restarts the server, e.g. systemctl restart orco)
   import <project> <file> --as <user> [--create-labels] [--create-milestones] [--dry-run]
                              File tickets from a JSON or CSV file, as that person
   version                    Print the version
@@ -190,6 +194,10 @@ export function main(): void {
       for: { type: 'string' },
       dir: { type: 'string' },
       project: { type: 'boolean' },
+      ref: { type: 'string' },
+      restart: { type: 'string' },
+      url: { type: 'string' },
+      repo: { type: 'string' },
       help: { type: 'boolean', short: 'h' },
       version: { type: 'boolean', short: 'v' },
     },
@@ -298,6 +306,32 @@ export function main(): void {
     return;
   }
 
+  // orco update (#124): backs up, stages and trial-starts the new version, switches, or rolls back.
+  if (command === 'update') {
+    const restartCmd = values.restart ?? process.env.ORCO_RESTART_CMD;
+    const repoDir = values.repo ?? resolve(dirname(fileURLToPath(import.meta.url)), '..');
+    void update({
+      repo: repoDir,
+      db: values.db,
+      ref: values.ref,
+      restart: restartCmd ? restartCmd.split(/\s+/).filter(Boolean) : undefined,
+      url: values.url ?? process.env.ORCO_PUBLIC_URL ?? `http://127.0.0.1:${values.port}`,
+      log: (line) => console.log(`${new Date().toISOString()} ${line}`),
+    }).then(
+      (r) => {
+        if (r.rolledBack) {
+          console.error(`Rolled back to ${r.from.slice(0, 7)}: ${r.reason}`);
+          process.exitCode = 3;
+        }
+      },
+      (err: Error) => {
+        console.error(`Update stopped before anything changed: ${err.message}`);
+        process.exitCode = 1;
+      },
+    );
+    return;
+  }
+
   // orco policy check <file> (#120): no server or database needed.
   if (command === 'policy' && sub === 'check') {
     const file = args[0];
@@ -329,7 +363,7 @@ export function main(): void {
       const proxyAuth = proxyAuthSetting(process.env.ORCO_AUTH_HEADER, process.env.ORCO_AUTH_LABEL, trust, process.env.ORCO_AUTH_SECRET);
       const oidcConfig = oidcSetting(process.env, publicUrl);
       const oidc = oidcConfig ? new Oidc(oidcConfig) : undefined;
-      const { app, close, closeStreams, oauth } = createApp(store, { publicUrl, setupCode, proxyAuth, oidc });
+      const { app, close, closeStreams, oauth } = createApp(store, { publicUrl, setupCode, proxyAuth, oidc, dbPath: resolve(values.db) });
       const warning = networkFilesystemWarning(values.db);
       if (warning) console.error(warning);
       const backups = backupsFromEnv(store);

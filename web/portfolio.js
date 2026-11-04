@@ -423,7 +423,7 @@ export function createPortfolio(ctx) {
     const deploy = administered.length || admin ? await Promise.all([api('/freezes'), api('/deploy-windows')]) : null;
     return [
       policyFile?.file ? el('p', { class: 'small muted plan-card', text: `Managed by the policy file ${policyFile.file}${policyFile.locked.length ? `: ${policyFile.locked.join(', ')} can only change there` : ''}.` }) : null,
-      pausesCard(state.pauses, administered, agents), deploy ? deployCard(deploy[0], deploy[1], administered, admin) : null, budgetsCard(state.budgets, administered, agents), scope ? scopeCard(scope) : null, rules ? rulesCard(rules) : null, admin ? peopleCard(setup.proxy ?? (setup.oidc ? { label: setup.oidc.label } : null)) : null, admin ? modelsCard(models) : null, admin ? onyxCard(onyx) : null, policy ? policyCard(policy, administered) : null, admin ? groupsCard(groups) : null];
+      pausesCard(state.pauses, administered, agents), deploy ? deployCard(deploy[0], deploy[1], administered, admin) : null, budgetsCard(state.budgets, administered, agents), scope ? scopeCard(scope) : null, rules ? rulesCard(rules) : null, admin ? updateCard() : null, admin ? peopleCard(setup.proxy ?? (setup.oidc ? { label: setup.oidc.label } : null)) : null, admin ? modelsCard(models) : null, admin ? onyxCard(onyx) : null, policy ? policyCard(policy, administered) : null, admin ? groupsCard(groups) : null];
   }
 
   /** Freezes and deploy windows (#112): start or end a freeze, and the weekly windows deploys keep to. */
@@ -461,6 +461,31 @@ export function createPortfolio(ctx) {
         el('div', { class: 'order-rule small' }, el('span', { text: `${w.project ?? 'Every project'}: ${w.mode === 'allow' ? 'deploys only' : 'never'} ${w.spec}${w.refuse ? ' (refused outside)' : ''}` }), el('button', { class: 'ghost small', type: 'button', text: 'Remove', onclick: () => void api(`/deploy-windows/${w.id}`, { method: 'DELETE' }).then(() => load(), (err) => notify(err.message)) })),
       ),
       el('form', { class: 'inline-form', onsubmit: post('/deploy-windows', () => ({ project: wWhere.value || null, spec: spec.value, mode: mode.value, refuse: refuse.checked })) }, wWhere, mode, spec, el('label', { class: 'check small' }, refuse, 'Refuse'), el('button', { class: 'small', type: 'submit', text: 'Add window' })),
+    );
+  }
+
+  /** Safe updates (#124): back up, stage, trial-start, switch, or roll back by itself. */
+  function updateCard() {
+    const log = el('pre', { class: 'small update-log', hidden: true });
+    const poll = async () => {
+      try {
+        const state = await api('/admin/update');
+        log.hidden = !state.log;
+        log.textContent = state.log;
+        if (state.log && !/Updated |Rolling back|Already at|stopped|Rolled back/.test(state.log)) setTimeout(poll, 3000);
+      } catch {
+        // The server is restarting: try again shortly.
+        setTimeout(poll, 3000);
+      }
+    };
+    void poll();
+    return el(
+      'section',
+      { class: 'plan-card' },
+      el('h3', { text: 'Update Orco' }),
+      el('p', { class: 'small muted', text: 'Backs up the database, builds the new version beside this one, migrates a copy and trial-starts it, then switches; if the new version does not come up healthy, it goes back to this one and the backup by itself. Needs a git checkout and ORCO_RESTART_CMD on the server.' }),
+      el('div', { class: 'row-end' }, el('button', { class: 'primary small', type: 'button', text: 'Update', onclick: () => confirm('Update Orco now? It restarts once the new version passes its trial.') && void api('/admin/update', { method: 'POST', body: {} }).then(() => setTimeout(poll, 1000), (err) => notify(err.message)) })),
+      log,
     );
   }
 
