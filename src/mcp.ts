@@ -159,6 +159,7 @@ function compactTicket(t: TicketSummary) {
     ...(t.nextStep ? { next_step: t.nextStep.text } : {}),
     ...(t.folder ? { folder: t.folder.name } : {}),
     ...(t.blocked ? { blocked: true } : {}),
+    ...(t.waitsOn.length ? { waits_on: t.waitsOn.join(', ') } : {}),
     ...(t.waitingOn ? { waiting_on: t.waitingOn.person } : {}),
   };
 }
@@ -284,6 +285,7 @@ function formatTicketSummary(t: TicketSummary) {
     blocked: t.blocked,
     blocked_by: t.blockedBy,
     blocked_reason: t.blockedReason,
+    ...(t.waitsOn.length ? { waits_on: t.waitsOn } : {}),
     criteria: t.criteria.total ? `${t.criteria.done}/${t.criteria.total}` : null,
     ...(t.nextStep ? { next_step: t.nextStep.for ? `${t.nextStep.text} (for ${t.nextStep.for})` : t.nextStep.text } : {}),
     ...(t.waitingOn
@@ -1233,7 +1235,7 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         "A project's ticket key, workflow statuses, labels, milestones (with progress), cycles, folders, members, and its scope. " +
         'While scope.state is "scoping", build tickets stay in Backlog and repos, stacks and deploys are refused: help fill in ' +
         'scoping/SCOPE.md (read_project_file / write_project_file; the sections still empty are in scope.missing) on tickets labelled "scope", ' +
-        'and a person approves it.',
+        'and a person approves it. orderRules are the build order: a ticket whose waits_on is set cannot start yet.',
       inputSchema: z.object({ project: z.string() }),
     },
     async ({ project }) => run(() => store.tickets.plan(me, project)),
@@ -1284,7 +1286,7 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         if (fields?.length === 0) {
           const lines = tickets.map((t) => {
             const c = compactTicket(t);
-            return `${c.ref} [${c.status}] ${c.title}${c.assignee ? ` @${c.assignee}` : ''}${c.folder ? ` (${c.folder})` : ''}${c.blocked ? ' BLOCKED' : ''}${c.waiting_on ? ` waiting on ${c.waiting_on}` : ''}${c.next_step ? ` | next: ${c.next_step}` : ''}`;
+            return `${c.ref} [${c.status}] ${c.title}${c.assignee ? ` @${c.assignee}` : ''}${c.folder ? ` (${c.folder})` : ''}${c.blocked ? ' BLOCKED' : ''}${c.waits_on ? ` waits on ${c.waits_on}` : ''}${c.waiting_on ? ` waiting on ${c.waiting_on}` : ''}${c.next_step ? ` | next: ${c.next_step}` : ''}`;
           });
           return `${UNTRUSTED_NOTE}\n${tickets.length} tickets (fields: "all" or a list like "ref,priority,labels" for more):\n${lines.join('\n')}`;
         }

@@ -183,6 +183,19 @@ Guards against agents looping on each other:
 
 ### Tickets
 
+**Build order.** A working skeleton comes before any UI. The default order, from a project this team
+shipped:
+
+1. The backend data path only (a consumer that just logs events, say), plus a local dev stack. No UI.
+2. Then the data model, integrations and tests.
+3. Then the admin or UI surface.
+4. Hardening before the first deploy: memory limits, log rotation, database auth, pinned image versions.
+5. Deploy files and a deploy runbook last.
+
+The Skeleton milestone covers steps 1 and 2, and a build order rule ("`ui` waits for Skeleton") keeps
+UI tickets from starting until it is done. Org admins can set rules for every project; projects can
+only add to them.
+
 **Scope first.** A new project starts in Scope: until `scoping/SCOPE.md` covers every section of the
 scope template and a project admin approves it, its build tickets stay in Backlog and agents cannot
 get approval for repos, stacks or deploys there. The board says what is missing. The approval is a

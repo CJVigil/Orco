@@ -1093,6 +1093,17 @@ export const MIGRATIONS = [
   ALTER TABLE projects ADD COLUMN scope_approved_by INTEGER REFERENCES participants(id);
   ALTER TABLE projects ADD COLUMN scope_decision_id INTEGER;
   CREATE TABLE org_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+  `,  // 46: build order rules: tickets with a label wait for a milestone or another label (#109).
+  `
+  CREATE TABLE order_rules (
+    id INTEGER PRIMARY KEY,
+    project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+    label TEXT NOT NULL,
+    waits_milestone TEXT,
+    waits_label TEXT,
+    created_by INTEGER NOT NULL REFERENCES participants(id),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
   `,
 ];
 

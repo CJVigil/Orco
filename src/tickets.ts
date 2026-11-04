@@ -1,3 +1,4 @@
+import type { OrderRule } from './order.js';
 import type { ScopeStatus } from './scope.js';
 import type { TicketCommit } from './commits.js';
 import type { Artifact } from './artifacts.js';
@@ -136,6 +137,8 @@ export interface TicketSummary {
   id: number;
   /** Seen only by the people on it, project admins and their agents (#97). */
   private: boolean;
+  /** What a not-yet-started ticket waits on under the build order rules (#109), like ["Skeleton"]. */
+  waitsOn: string[];
   ref: string;
   project: string;
   projectId: number;
@@ -314,6 +317,8 @@ export interface TicketFilter {
 export interface ProjectPlan {
   /** The scope gate (#108): where the project stands, and what SCOPE.md still needs. */
   scope: ScopeStatus;
+  /** Build order rules that apply here, the org's first (#109). */
+  orderRules: OrderRule[];
   project: string;
   key: string;
   statuses: TicketStatus[];
@@ -740,6 +745,8 @@ export class Tickets {
         // Build work waits for an approved scope (#108); "scope" tickets are the scoping itself.
         const labels = input.labels ?? (this.labelsFor([row.id]).get(row.id) ?? []).map((l) => l.name);
         this.store.scope.assertBuildAllowed(row.project_id, labels, status.category);
+        // Build order (#109): a ticket that waits on a milestone or label does not start yet.
+        if (status.category === 'started' || status.category === 'completed') this.store.order.assertMayStart(row.project_id, labels, row.id, refOf(row));
         newStatus = status;
         changes.push({ field: 'status', from: row.status_name, to: status.name });
       }
@@ -774,6 +781,10 @@ export class Tickets {
     if (input.assignee !== undefined) {
       const assignee = input.assignee ? this.assignable(row.project_id, input.assignee) : null;
       if ((assignee?.id ?? null) !== row.assignee_id) {
+        // Handing a waiting ticket to an agent would start it (#109).
+        if (assignee?.kind === 'agent' && assignee.id !== actor.id) {
+          this.store.order.assertMayStart(row.project_id, input.labels ?? (this.labelsFor([row.id]).get(row.id) ?? []).map((l) => l.name), row.id, refOf(row));
+        }
         newAssignee = assignee;
         set('assignee_id', assignee?.id ?? null);
         changes.push({ field: 'assignee', from: row.assignee, to: assignee?.name ?? null });
@@ -1111,7 +1122,11 @@ export class Tickets {
     if (current.category === 'completed' || current.category === 'canceled') throw new OrcoError('conflict', `${refOf(row)} is ${current.name}`);
     const started = statuses.find((s) => s.category === 'started');
     const move = options.start !== false && started && (current.category === 'backlog' || current.category === 'unstarted') ? started : null;
-    if (move) this.store.scope.assertBuildAllowed(row.project_id, (this.labelsFor([row.id]).get(row.id) ?? []).map((l) => l.name), move.category);
+    if (move) {
+      const labels = (this.labelsFor([row.id]).get(row.id) ?? []).map((l) => l.name);
+      this.store.scope.assertBuildAllowed(row.project_id, labels, move.category);
+      this.store.order.assertMayStart(row.project_id, labels, row.id, refOf(row));
+    }
     const claimed = this.store.db
       .prepare(
         `UPDATE tickets SET assignee_id = ?, updated_at = ${NOW_SQL},
@@ -1277,6 +1292,7 @@ export class Tickets {
       project: proj.name,
       key,
       scope: this.store.scope.statusOf(proj.id),
+      orderRules: this.store.order.forProject(proj.id),
       statuses: this.statuses(proj.id),
       labels: this.labels(proj.id),
       milestones: this.milestones(proj.id),
@@ -1906,6 +1922,14 @@ export class Tickets {
     const labels = this.labelsFor(ids);
     const criteria = this.criteriaCounts(ids);
     const blockedBy = this.openBlockers(ids, actor);
+    const rulesByProject = new Map<number, ReturnType<Store['order']['forProject']>>();
+    const waitsOn = (row: TicketRow): string[] => {
+      if (row.category !== 'backlog' && row.category !== 'unstarted') return [];
+      if (!rulesByProject.has(row.project_id)) rulesByProject.set(row.project_id, this.store.order.forProject(row.project_id));
+      const rules = rulesByProject.get(row.project_id)!;
+      if (!rules.length) return [];
+      return this.store.order.waitsOn(row.project_id, (labels.get(row.id) ?? []).map((l) => l.name), row.id, rules);
+    };
     return rows.map((row) => {
       const state = taskState(row);
       return {
@@ -1924,6 +1948,7 @@ export class Tickets {
         milestone: row.milestone_id === null ? null : { id: row.milestone_id, name: row.milestone! },
         cycle: row.cycle_id === null ? null : { id: row.cycle_id, number: row.cycle_number! },
         private: row.private === 1,
+        waitsOn: waitsOn(row),
         folder: row.folder_id === null ? null : { id: row.folder_id, name: row.folder!, emoji: row.folder_emoji },
         parent: row.parent_number === null ? null : `${row.ticket_key}-${row.parent_number}`,
         task: row.task_id === null || state === null ? null : { id: row.task_id, state, since: row.task_since!, steps: stepCount(row.task_steps) },

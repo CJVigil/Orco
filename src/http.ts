@@ -1677,6 +1677,23 @@ export function createApp(store: Store, options: AppOptions = {}) {
   api.get('/projects/:name/spend', (req, res) => {
     res.json(store.controls.projectSpend(req.participant!, String(req.params.name), optionalInt(req.query.days) ?? 7));
   });
+  // Build order rules (#109): per project (its admins) or for every project (org admins, no project).
+  api.get('/order-rules', (req, res) => {
+    res.json(store.order.list(req.participant!, str(req.query.project, 'project')));
+  });
+  api.post('/order-rules', (req, res) => {
+    const b = req.body ?? {};
+    res.status(201).json(store.order.add(req.participant!, { project: str(b.project, 'project') ?? null, label: String(b.label ?? ''), waitsMilestone: str(b.waitsMilestone, 'waitsMilestone'), waitsLabel: str(b.waitsLabel, 'waitsLabel') }));
+  });
+  api.delete('/order-rules/:id', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a rule id');
+    store.order.remove(req.participant!, id);
+    res.status(204).end();
+  });
+  api.post('/projects/:name/skeleton', (req, res) => {
+    res.status(201).json(store.order.addSkeleton(req.participant!, String(req.params.name)));
+  });
   // The scope gate (#108): where a project stands, its template, approval by an admin, and the org's settings.
   api.get('/projects/:name/scope', (req, res) => {
     res.json(store.scope.status(req.participant!, String(req.params.name)));

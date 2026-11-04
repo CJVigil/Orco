@@ -941,6 +941,7 @@ export function createTickets(ctx) {
       stateLine(ticket),
       el('div', { class: 'ticket-card-top' }, el('span', { class: 'ticket-ref', text: ticket.ref }), ticket.private ? el('span', { class: 'private-mark', title: 'Private: only the people on it and project admins see it', 'aria-label': 'Private' }, icon('lock')) : null, ticket.assignee ? avatar(ticket.assignee.name, ticket.assignee.kind) : null),
       el('div', { class: 'ticket-title', text: ticket.title }),
+      ticket.waitsOn?.length ? el('div', { class: 'waits-on small', title: 'Build order rule: it starts once this is done', text: `Waits on ${ticket.waitsOn.join(' and ')}` }) : null,
       nextStepLine(ticket),
       el(
         'div',
@@ -2823,7 +2824,56 @@ export function createTickets(ctx) {
         ),
         addLabel,
       ),
+      buildOrderSection(base),
     ];
+  }
+
+  /** Build order rules (#109): which label waits for which milestone or label. Org rules cannot be removed here. */
+  function buildOrderSection(base) {
+    const rules = t.plan.orderRules ?? [];
+    const label = el('input', { placeholder: 'ui', maxlength: '40', 'aria-label': 'Label that waits', required: true });
+    const target = el('input', { placeholder: 'Skeleton', maxlength: '80', 'aria-label': 'Milestone (or label:name) it waits for', required: true });
+    const form = el(
+      'form',
+      {
+        class: 'inline-form',
+        onsubmit: (event) => {
+          event.preventDefault();
+          const value = target.value.trim();
+          const body = /^label:/i.test(value) ? { waitsLabel: value.slice(6) } : { waitsMilestone: value };
+          void act(() => api('/order-rules', { method: 'POST', body: { project: t.project, label: label.value, ...body } }));
+        },
+      },
+      label,
+      el('span', { class: 'muted small', text: 'waits for' }),
+      target,
+      el('button', { class: 'small', type: 'submit', text: 'Add rule' }),
+    );
+    return el(
+      'section',
+      { class: 'settings-section' },
+      el('h3', { text: 'Build order' }),
+      el('p', { class: 'muted small', text: 'A working skeleton before any UI: tickets with the label cannot start, or go to an agent, until the milestone\'s tickets are done (or the other label\'s are closed). Write label:name to wait for a label.' }),
+      rules.length
+        ? el(
+            'div',
+            { class: 'status-list' },
+            rules.map((r) =>
+              el(
+                'div',
+                { class: 'order-rule small' },
+                el('span', { text: `"${r.label}" waits for ${r.waitsMilestone ? `milestone ${r.waitsMilestone}` : `the "${r.waitsLabel}" tickets`}` }),
+                el('span', { class: 'muted', text: r.project ? ` · set by ${r.by}` : ' · org rule' }),
+                r.project ? el('button', { class: 'ghost small', type: 'button', text: 'Remove', onclick: () => void act(() => api(`/order-rules/${r.id}`, { method: 'DELETE' })) }) : null,
+              ),
+            ),
+          )
+        : el('p', { class: 'muted small', text: 'No rules yet.' }),
+      form,
+      rules.some((r) => r.label === 'ui' && r.waitsMilestone?.toLowerCase() === 'skeleton')
+        ? null
+        : el('button', { class: 'ghost small', type: 'button', text: 'Add the Skeleton milestone and "ui waits for Skeleton"', onclick: () => void act(() => api(`${base}/skeleton`, { method: 'POST', body: {} })) }),
+    );
   }
 
   async function act(fn) {

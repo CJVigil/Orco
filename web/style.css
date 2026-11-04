@@ -5435,3 +5435,25 @@ button.recent-link {
   gap: 0.35rem;
   margin-left: auto;
 }
+
+/* Build order (#109) */
+.waits-on {
+  color: var(--listen);
+}
+
+.order-rule {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.inline-form input {
+  width: 9rem;
+}

@@ -1,3 +1,4 @@
+import { OrderRules } from './order.js';
 import { Scope } from './scope.js';
 import { Commits } from './commits.js';
 import { ToolUsage } from './toolusage.js';
@@ -262,6 +263,7 @@ export class Store {
   readonly toolUsage: ToolUsage;
   readonly commits: Commits;
   readonly scope: Scope;
+  readonly order: OrderRules;
   readonly questions: Questions;
   readonly notes: Notes;
   readonly flags: Flags;
@@ -310,6 +312,7 @@ export class Store {
     this.toolUsage = new ToolUsage(this);
     this.commits = new Commits(this);
     this.scope = new Scope(this);
+    this.order = new OrderRules(this);
     this.questions = new Questions(this);
     this.notes = new Notes(this);
     this.flags = new Flags(this);
