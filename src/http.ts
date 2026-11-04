@@ -431,7 +431,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
   };
 
   app.get('/healthz', (_req, res) => {
-    res.json({ ok: true });
+    res.json({ ok: true, version: VERSION, uptimeSeconds: Math.round(process.uptime()) });
   });
 
   // The same code anyone can get from the repository; served so a new computer needs only Node.

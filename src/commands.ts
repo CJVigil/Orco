@@ -1,3 +1,4 @@
+import * as svc from './service.js';
 import { fileURLToPath } from 'node:url';
 import { update } from './updater.js';
 import { checkPolicy, POLICY_VERSION } from './policyfile.js';
@@ -42,6 +43,9 @@ Server commands (run where the database lives):
   audit export [--since N]   Print the audit log as JSON lines
   backup <file>              Write a consistent copy of the database, safe while serving
   restore <file> [--force]   Replace the database with a backup (stop the server first)
+  service install|status|start|stop|restart|logs [N]|uninstall
+                             Keep the server running at boot or sign-in (systemd, launchd or a Windows
+                             logon task), restarted after a crash with backoff; one log file
   update [--ref R] [--restart "cmd"]   Back up, stage and trial-start the new version, switch, or roll back
                              (a git checkout; ORCO_RESTART_CMD restarts the server, e.g. systemctl restart orco)
   import <project> <file> --as <user> [--create-labels] [--create-milestones] [--dry-run]
@@ -303,6 +307,28 @@ export function main(): void {
     process.once('SIGTERM', () => stop.abort());
     console.log(`Syncing ${config.repos.map((r) => `${r.repo} ↔ ${r.project}`).join(', ')} every ${config.poll_seconds}s`);
     void sync.run(stop.signal);
+    return;
+  }
+
+  // orco service (#125): run the server under the platform's service manager with one supervisor.
+  if (command === 'service') {
+    void (async () => {
+    try {
+      if (sub === 'install') for (const line of svc.install({ db: values.db, port: values.port, host: values.host }).lines) console.log(line);
+      else if (sub === 'status') for (const line of svc.formatStatus(await svc.status({ port: values.port }))) console.log(line);
+      else if (sub === 'stop' || sub === 'restart' || sub === 'start') console.log(svc.control(sub));
+      else if (sub === 'logs') {
+        const c = svc.readConfig();
+        if (!c) throw new Error('Orco is not installed as a service here (in Docker: docker compose logs orco)');
+        process.stdout.write(`${svc.tail(c.log, Number(args[0] ?? 100) || 100)}\n`);
+      } else if (sub === 'uninstall') for (const line of svc.uninstall()) console.log(line);
+      else if (sub === 'run') await svc.supervise();
+      else throw new Error('Use: orco service install | status | start | stop | restart | logs [N] | uninstall');
+    } catch (err) {
+      console.error((err as Error).message);
+      process.exitCode = 1;
+    }
+    })();
     return;
   }
 

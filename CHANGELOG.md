@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Run as a service: `orco service install | status | start | stop | restart | logs | uninstall` sets up a systemd user service (Linux), a launchd agent (macOS) or a logon task (Windows). All three run one supervisor that restarts the server after a crash, waiting 1 s at first and up to 60 s, and writes a single log. `status` shows the version, uptime, port, log path and restart count. `/healthz` now reports the version and uptime. The container image stays the way to run Orco in Docker; its data and backup volumes are documented.
+
 - Safe updates: `orco update` (and Update in Portfolio > Controls for org admins) backs up the database, builds the new version in a separate worktree, migrates a copy of the database with it and trial-starts it on a spare port, then switches the checkout, restarts the server with `ORCO_RESTART_CMD` and checks `/healthz`. If the new version fails anywhere after the switch, it goes back to the previous version and the backup by itself and says why. A broken release never gets past its trial. For git checkouts on Linux and macOS; container installs pull a new image instead.
 
 - Quote a line: select text in a message or a ticket comment and press Quote; the draft gets the excerpt and its source (`> — quoting message 123`), kept in the reply's own text so it survives edits and copies. Clicking a quote jumps to the source and highlights the excerpt, only when it appears there once, so the wrong line is never marked. Agents get the quotes in `read`, `wait_for_mentions` and `get_ticket` as structured `quotes` with source and excerpt.

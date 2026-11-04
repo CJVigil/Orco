@@ -51,6 +51,28 @@ git clone https://github.com/CJVigil/Orco.git && cd Orco && npm ci && npm run bu
 orco serve --host 127.0.0.1 --port 7420 --db /var/lib/orco/orco.db
 ```
 
+### As a service
+
+`orco service install --db /var/lib/orco/orco.db --port 7420` keeps Orco running without a wrapper
+of your own. It installs a systemd user service on Linux, a launchd agent on macOS, or a logon
+task on Windows. Each one runs the same supervisor, `orco service run`, which starts `orco serve` and
+restarts it after a crash. The wait between restarts starts at 1 s and doubles up to 60 s, and goes
+back to 1 s after a minute up. Everything the server prints goes to one log file, kept under
+`~/.orco/service/` (`ORCO_SERVICE_DIR` moves it).
+
+```bash
+orco service status      # running or not, version, uptime, port, log path, restarts
+orco service logs 200    # the last 200 lines of the log
+orco service restart     # also: start, stop
+orco service uninstall   # removes the service; keeps the database and the log
+```
+
+On Linux the user service starts at boot only with lingering on: `loginctl enable-linger $USER`.
+On Windows and macOS it starts when you sign in. In a container there is no service manager: run
+the image (above). It restarts on crashes (`restart: unless-stopped`), starts at boot with Docker,
+and has a healthcheck on `/healthz`, which reports the version and uptime. Data lives in the `/data`
+volume and scheduled backups in `/backups` (see Backups below).
+
 A systemd unit:
 
 ```ini
