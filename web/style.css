@@ -5457,3 +5457,18 @@ button.recent-link {
 .inline-form input {
   width: 9rem;
 }
+
+/* Definition of Done (#110) */
+.required-mark {
+  margin-left: 0.4rem;
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  color: var(--muted);
+  background: var(--bg-hover);
+}
+
+.checklist-template ul {
+  margin: 0.2rem 0 0.4rem;
+  padding-left: 1.2rem;
+}

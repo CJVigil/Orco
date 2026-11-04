@@ -54,6 +54,8 @@ Never leave a task accepted and silent: close it, ask, or set a reminder.
 
 - A project in Scope (project_plan's `scope.state` is "scoping") takes no build work, repos, stacks or deploys: help
   write `scoping/SCOPE.md` on a ticket labelled `scope`, then a person approves it.
+- Criteria marked `required` (from the label's Definition of Done) must be checked before Done; check them as you
+  meet them. A plan's STOP conditions mean stop and ask: set `waiting_on` on the ticket.
 - A ticket with `waits_on` (build order: a working skeleton before any UI) cannot start yet; pick another.
 - `list_tickets` / `get_ticket` to read. The list is one line per ticket; ask for `fields` only when you need more.
   `get_ticket` shows the last 10 activity entries (`activity_limit` for more); with `since`, only what changed.

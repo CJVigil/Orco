@@ -33,6 +33,7 @@ import type { Review } from './reviews.js';
 import type { ScheduleInput } from './schedules.js';
 import type { TaskResult } from './tasks.js';
 import { briefWork, myWork } from './work.js';
+import { newPlan } from './plans.js';
 
 declare module 'express-serve-static-core' {
   interface Request {
@@ -218,6 +219,7 @@ function ticketInput(body: Record<string, unknown> | undefined): TicketInput {
     private: b.private === undefined ? undefined : b.private === true,
     attachmentIds: list(b.attachmentIds, 'attachmentIds', 'number'),
     sessionUrl: typeof b.sessionUrl === 'string' ? b.sessionUrl : undefined,
+    doneOverride: typeof b.doneOverride === 'string' ? b.doneOverride : undefined,
   };
 }
 
@@ -1676,6 +1678,24 @@ export function createApp(store: Store, options: AppOptions = {}) {
   });
   api.get('/projects/:name/spend', (req, res) => {
     res.json(store.controls.projectSpend(req.participant!, String(req.params.name), optionalInt(req.query.days) ?? 7));
+  });
+  // Definition of Done templates (#110), and a new numbered plan file.
+  api.get('/checklists', (req, res) => {
+    res.json(store.checklists.list(req.participant!, str(req.query.project, 'project')));
+  });
+  api.post('/checklists', (req, res) => {
+    const b = req.body ?? {};
+    const items = Array.isArray(b.items) ? (b.items as { text?: unknown; required?: unknown }[]).map((i) => ({ text: String(i?.text ?? ''), required: i?.required !== false })) : [];
+    res.status(201).json(store.checklists.set(req.participant!, { project: str(b.project, 'project') ?? null, label: String(b.label ?? ''), items }));
+  });
+  api.delete('/checklists/:id', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a checklist id');
+    store.checklists.remove(req.participant!, id);
+    res.status(204).end();
+  });
+  api.post('/projects/:name/plans', (req, res) => {
+    res.status(201).json(newPlan(store, req.participant!, String(req.params.name), String(req.body?.title ?? '')));
   });
   // Build order rules (#109): per project (its admins) or for every project (org admins, no project).
   api.get('/order-rules', (req, res) => {

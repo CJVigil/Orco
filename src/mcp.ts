@@ -350,6 +350,7 @@ function formatWritten(result: Written, full?: boolean) {
 }
 
 const ticketFields = {
+  done_override: z.string().max(200).optional().describe('People only (project admins): close Done with required checklist items open, and why'),
   session_url: z.string().optional().describe('Your Claude session link, so people can open the session behind this change'),
   attachment_ids: z.array(z.number().int()).max(10).optional().describe('Files to attach: upload each first with POST /api/ticket-files?project=<name>&name=<file> (your token, raw bytes)'),
   private: z.boolean().optional().describe('Private: only its creator, assignee, waiting_on person and project admins (and their agents) see it. Set by people only. Never quote a private ticket in a shared room.'),
@@ -450,6 +451,7 @@ function ticketInput(args: TicketArgs): TicketInput {
     private: args.private,
     attachmentIds: args.attachment_ids,
     sessionUrl: args.session_url,
+    doneOverride: args.done_override,
   };
 }
 

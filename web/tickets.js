@@ -1133,6 +1133,11 @@ export function createTickets(ctx) {
       const result = await api(`/tickets/${ticket.ref}`, { method: 'POST', body: patch });
       renderDetail(result.ticket, result.warning);
     } catch (err) {
+      // Required checklist items still open (#110): an admin may close it anyway, with a reason.
+      if (patch.status && !patch.doneOverride && /required items unchecked/.test(err.message)) {
+        const reason = prompt(`${err.message.split('. Check')[0]}.\n\nClose it anyway? Give the reason (project admins only; it is recorded on the ticket):`);
+        if (reason?.trim()) return save(ticket, { ...patch, doneOverride: reason.trim() });
+      }
       notify(err.message);
       void openTicket(ticket.ref, { refresh: true, force: true });
     }
@@ -1549,7 +1554,7 @@ export function createTickets(ctx) {
           return el(
             'li',
             { class: c.done ? 'done' : null },
-            el('label', {}, box, el('span', { text: c.text })),
+            el('label', {}, box, el('span', { text: c.text }), c.required ? el('span', { class: 'required-mark', title: `Required before Done${c.template ? ` (the ${c.template} checklist)` : ''}`, text: 'required' }) : null),
             me().kind === 'user'
               ? el('button', { class: 'ghost icon', type: 'button', 'aria-label': `Remove “${c.text}”`, onclick: () => void save(ticket, { criteriaRemove: [c.id] }) }, icon('x'))
               : null,
@@ -2387,6 +2392,19 @@ export function createTickets(ctx) {
     const closed = () =>
       add.replaceChildren(
         el('button', { class: 'primary small', type: 'button', onclick: () => add.replaceChildren(fileEditor(null, closed)) }, icon('plus'), 'New file'),
+        el('button', {
+          class: 'ghost small',
+          type: 'button',
+          title: 'plans/NNN-<slug>.md from the plan template, with a row in plans/README.md',
+          text: 'New plan',
+          onclick: () => {
+            const title = prompt('Plan title');
+            if (title?.trim()) void act(async () => {
+              const made = await api(`/projects/${encodeURIComponent(t.project)}/plans`, { method: 'POST', body: { title } });
+              t.openFile = made.path;
+            });
+          },
+        }),
         el('span', { class: 'muted small', text: 'Versioned text the project keeps: design docs, runbooks, reports. Agents read and write them too.' }),
       );
     closed();
@@ -2825,7 +2843,56 @@ export function createTickets(ctx) {
         addLabel,
       ),
       buildOrderSection(base),
+      checklistSection(),
     ];
+  }
+
+  /** Definition of Done templates (#110): a label's checklist, added as criteria when the label is set. */
+  function checklistSection() {
+    const lists = t.checklists ?? [];
+    if (!t.checklistsLoaded) {
+      t.checklistsLoaded = true;
+      void api(`/checklists?project=${encodeURIComponent(t.project)}`).then((list) => {
+        t.checklists = list;
+        renderTab();
+      });
+    }
+    const label = el('input', { placeholder: 'service', maxlength: '40', 'aria-label': 'Label', required: true });
+    const items = el('textarea', { rows: '4', placeholder: 'One item per line; start a line with ? to make it optional', 'aria-label': 'Checklist items' });
+    const form = el(
+      'form',
+      {
+        class: 'schedule-form',
+        onsubmit: (event) => {
+          event.preventDefault();
+          const lines = items.value.split('\n').map((l) => l.trim()).filter(Boolean);
+          void act(async () => {
+            await api('/checklists', { method: 'POST', body: { project: t.project, label: label.value, items: lines.map((l) => ({ text: l.replace(/^\?\s*/, ''), required: !l.startsWith('?') })) } });
+            t.checklistsLoaded = false;
+          });
+        },
+      },
+      el('div', { class: 'inline-form' }, el('span', { class: 'muted small', text: 'When a ticket gets' }), label, el('span', { class: 'muted small', text: 'add:' })),
+      items,
+      el('div', { class: 'row-end' }, el('button', { class: 'small', type: 'submit', text: 'Save checklist' })),
+    );
+    return el(
+      'section',
+      { class: 'settings-section' },
+      el('h3', { text: 'Definition of Done' }),
+      el('p', { class: 'muted small', text: 'Checklists by label. Their items become acceptance criteria when the label is set; required ones must be checked before Done, unless a project admin closes it anyway with a reason, recorded on the ticket.' }),
+      lists.map((c) =>
+        el(
+          'div',
+          { class: 'checklist-template small' },
+          el('strong', { text: c.label }),
+          el('span', { class: 'muted', text: c.project ? '' : ' · org checklist' }),
+          el('ul', {}, c.items.map((i) => el('li', { text: `${i.text}${i.required ? '' : ' (optional)'}` }))),
+          c.project ? el('button', { class: 'ghost small', type: 'button', text: 'Remove', onclick: () => void act(async () => { await api(`/checklists/${c.id}`, { method: 'DELETE' }); t.checklistsLoaded = false; }) }) : null,
+        ),
+      ),
+      form,
+    );
   }
 
   /** Build order rules (#109): which label waits for which milestone or label. Org rules cannot be removed here. */

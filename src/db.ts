@@ -1104,6 +1104,20 @@ export const MIGRATIONS = [
     created_by INTEGER NOT NULL REFERENCES participants(id),
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
+  `,  // 47: Definition of Done templates by label, and required criteria (#110).
+  `
+  CREATE TABLE checklist_templates (
+    id INTEGER PRIMARY KEY,
+    project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+    label TEXT NOT NULL,
+    items TEXT NOT NULL,
+    created_by INTEGER REFERENCES participants(id),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+  ALTER TABLE ticket_criteria ADD COLUMN required INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE ticket_criteria ADD COLUMN template TEXT;
+  INSERT INTO checklist_templates (project_id, label, items) VALUES (NULL, 'service', '[{"text": "Names follow the platform naming rules", "required": true}, {"text": "No host ports published; traffic goes through the proxy", "required": true}, {"text": "Memory and CPU limits set", "required": true}, {"text": "A healthcheck", "required": true}, {"text": "Log rotation configured", "required": true}, {"text": "The env example is updated", "required": true}, {"text": "A dev branch and its workflow", "required": true}]');
+  INSERT INTO checklist_templates (project_id, label, items) VALUES (NULL, 'ui', '[{"text": "Works at phone width (390 px)", "required": true}]');
   `,
 ];
 

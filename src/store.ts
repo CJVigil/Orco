@@ -1,3 +1,4 @@
+import { Checklists } from './checklists.js';
 import { OrderRules } from './order.js';
 import { Scope } from './scope.js';
 import { Commits } from './commits.js';
@@ -264,6 +265,7 @@ export class Store {
   readonly commits: Commits;
   readonly scope: Scope;
   readonly order: OrderRules;
+  readonly checklists: Checklists;
   readonly questions: Questions;
   readonly notes: Notes;
   readonly flags: Flags;
@@ -313,6 +315,7 @@ export class Store {
     this.commits = new Commits(this);
     this.scope = new Scope(this);
     this.order = new OrderRules(this);
+    this.checklists = new Checklists(this);
     this.questions = new Questions(this);
     this.notes = new Notes(this);
     this.flags = new Flags(this);

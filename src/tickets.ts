@@ -210,7 +210,8 @@ export interface Ticket extends TicketSummary {
   creator: string;
   /** Where whoever works this ticket left off: done, next, branch or PR, gotchas. */
   handoff: { text: string; by: string | null; at: string | null } | null;
-  criteriaItems: { id: number; text: string; done: boolean }[];
+  /** required: must be checked before Done (#110); template: the label whose checklist added it. */
+  criteriaItems: { id: number; text: string; done: boolean; required: boolean; template: string | null }[];
   blockers: TicketLink[];
   blocking: TicketLink[];
   children: TicketSummary[];
@@ -251,6 +252,8 @@ export function sessionLink(raw: string | null | undefined): string | null {
 }
 
 export interface TicketInput {
+  /** Close it Done with required checklist items open: a project or org admin's one-line reason (#110). */
+  doneOverride?: string;
   /** The agent session behind this change (#105), shown as "Open session" on its entry. */
   sessionUrl?: string | null;
   /** Uploads (POST /api/ticket-files) to attach to the ticket (#98). */
@@ -589,6 +592,7 @@ export class Tickets {
       id = Number(lastInsertRowid);
       const link = this.store.db.prepare('INSERT INTO ticket_labels (ticket_id, label_id) VALUES (?, ?)');
       for (const labelId of labels) link.run(id, labelId);
+      this.applyChecklists(id, proj.id, this.labelNames(labels), criteria);
       const criterion = this.store.db.prepare('INSERT INTO ticket_criteria (ticket_id, text, position) VALUES (?, ?, ?)');
       criteria.forEach((text, i) => criterion.run(id, text, i));
       const blocked = this.store.db.prepare('INSERT INTO ticket_links (blocker_id, blocked_id) VALUES (?, ?)');
@@ -953,6 +957,25 @@ export class Tickets {
         for (const labelId of newLabels) link.run(row.id, labelId);
       }
       criteria.apply?.();
+      if (newLabels !== undefined) {
+        const added = this.applyChecklists(row.id, row.project_id, this.labelNames(newLabels));
+        if (added.length) changes.push({ field: 'criteria', from: null, to: { added, done: [], undone: [], removed: [] } });
+      }
+      // Definition of Done (#110): required items are checked first, or an admin overrides with a reason.
+      if (newStatus?.category === 'completed') {
+        const open = this.requiredOpen(row.id);
+        if (open.length) {
+          const reason = input.doneOverride?.trim().replace(/\s+/g, ' ').slice(0, 200);
+          if (!reason) {
+            throw new OrcoError('conflict', `${refOf(row)} has required items unchecked: ${open.join('; ')}. Check them (criteria_done), or a project admin closes it with done_override and a reason.`);
+          }
+          if (actor.kind !== 'user' || (this.store.roleIn(actor, row.project_id) !== 'admin' && !this.store.isOrgAdmin(actor))) {
+            throw new OrcoError('forbidden', 'Only a project or org admin closes a ticket past its required checklist');
+          }
+          changes.push({ field: 'override', from: open.join('; '), to: reason });
+          this.store.audit.record(actor, 'ticket.done_override', { projectId: row.project_id, subject: `ticket:${refOf(row)}`, detail: { skipped: open, reason } });
+        }
+      }
       links.apply?.();
       if (files.length) this.store.ticketFiles.attach(row.id, null, files);
       if (!sets.length) this.store.db.prepare(`UPDATE tickets SET updated_at = ${NOW_SQL} WHERE id = ?`).run(row.id);
@@ -1044,6 +1067,22 @@ export class Tickets {
         for (const id of remove) drop.run(id);
       },
     };
+  }
+
+  /** Adds the checklist items of these labels as criteria (#110), skipping ones the ticket has. Returns their texts. */
+  private applyChecklists(ticketId: number, projectId: number, labels: string[], also: string[] = []): string[] {
+    if (!labels.length) return [];
+    const existing = (this.store.db.prepare('SELECT text, position FROM ticket_criteria WHERE ticket_id = ?').all(ticketId) as { text: string; position: number }[]);
+    const items = this.store.checklists.itemsFor(projectId, labels, [...existing.map((c) => c.text), ...also]).slice(0, Math.max(0, MAX_CRITERIA - existing.length - also.length));
+    let position = Math.max(-1, ...existing.map((c) => c.position)) + 1 + also.length;
+    const insert = this.store.db.prepare('INSERT INTO ticket_criteria (ticket_id, text, position, required, template) VALUES (?, ?, ?, ?, ?)');
+    for (const item of items) insert.run(ticketId, item.text, position++, item.required ? 1 : 0, item.label);
+    return items.map((i) => i.text);
+  }
+
+  /** Required criteria not checked yet. */
+  private requiredOpen(ticketId: number): string[] {
+    return (this.store.db.prepare('SELECT text FROM ticket_criteria WHERE ticket_id = ? AND required = 1 AND done = 0 ORDER BY position, id').all(ticketId) as { text: string }[]).map((r) => r.text);
   }
 
   /** Checks blocked-by edits (visibility, no cycles) and returns the writes. */
@@ -1840,8 +1879,8 @@ export class Tickets {
       created_at: string;
     }[];
     const criteriaItems = this.store.db
-      .prepare('SELECT id, text, done FROM ticket_criteria WHERE ticket_id = ? ORDER BY position, id')
-      .all(id) as unknown as { id: number; text: string; done: number }[];
+      .prepare('SELECT id, text, done, required, template FROM ticket_criteria WHERE ticket_id = ? ORDER BY position, id')
+      .all(id) as unknown as { id: number; text: string; done: number; required: number; template: string | null }[];
     // A linked ticket in a project the viewer cannot see still shows that a link exists, and nothing else.
     const link = (sql: string) =>
       (this.store.db.prepare(sql).all(id) as unknown as TicketRow[]).map((r) =>
@@ -1855,7 +1894,7 @@ export class Tickets {
       description: row.description,
       creator: row.creator,
       handoff: row.handoff ? { text: row.handoff, by: row.handoff_by, at: row.handoff_at } : null,
-      criteriaItems: criteriaItems.map((c) => ({ id: c.id, text: c.text, done: c.done === 1 })),
+      criteriaItems: criteriaItems.map((c) => ({ id: c.id, text: c.text, done: c.done === 1, required: c.required === 1, template: c.template })),
       blockers: link(`${TICKET_SELECT} WHERE t.id IN (SELECT blocker_id FROM ticket_links WHERE blocked_id = ?) ORDER BY t.id`),
       blocking: link(`${TICKET_SELECT} WHERE t.id IN (SELECT blocked_id FROM ticket_links WHERE blocker_id = ?) ORDER BY t.id`),
       lastActivityId: last.id ?? 0,
