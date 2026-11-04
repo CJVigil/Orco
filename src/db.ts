@@ -1156,6 +1156,23 @@ export const MIGRATIONS = [
     ended_at TEXT
   );
   ALTER TABLE approvals ADD COLUMN warning TEXT;
+  `,  // 50: checked rules: patterns that block plans and approvals and flag code in messages (#113).
+  `
+  CREATE TABLE checked_rules (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    pattern TEXT NOT NULL,
+    regex INTEGER NOT NULL DEFAULT 0,
+    scopes TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    owner_id INTEGER REFERENCES participants(id) ON DELETE SET NULL,
+    why TEXT NOT NULL DEFAULT ''
+  );
+  INSERT INTO checked_rules (name, pattern, regex, scopes, enabled, why) VALUES ('No Docker socket mounts', '/var/run/docker\\.sock|docker\\.sock:', 1, 'plan,approval,message', 0, 'Mounting the Docker socket gives a container root on the host.');
+  INSERT INTO checked_rules (name, pattern, regex, scopes, enabled, why) VALUES ('No host port mappings in compose', '^\\s*ports\\s*:', 1, 'approval,message', 0, 'Services sit behind the proxy; host ports bypass it.');
+  INSERT INTO checked_rules (name, pattern, regex, scopes, enabled, why) VALUES ('No terminals on servers', '\\b(ssh|mosh|telnet)\\s+[\\w.@-]+|docker\\s+exec\\s+-it|kubectl\\s+exec\\s+-it', 1, 'plan,approval', 0, 'Change servers through deploys, not by hand.');
+  INSERT INTO checked_rules (name, pattern, regex, scopes, enabled, why) VALUES ('No skipping hooks', '--no-verify|--no-gpg-sign|HUSKY=0|SKIP=', 1, 'plan,approval,message', 0, 'Hooks run the checks a change must pass.');
+  INSERT INTO checked_rules (name, pattern, regex, scopes, enabled, why) VALUES ('No force-push to main', 'push\\s+(-f|--force|--force-with-lease)\\b.*\\b(main|master)\\b|push\\s+.*\\b(main|master)\\b.*\\s(-f|--force)\\b|\\+(main|master)\\b', 1, 'plan,approval,message', 0, 'Rewriting main loses other people''s work.');
   `,
 ];
 

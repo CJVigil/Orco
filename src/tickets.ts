@@ -1132,6 +1132,14 @@ export class Tickets {
     const extra = { ...(attachmentIds.length ? { files: attachmentIds } : {}), ...(session ? { session } : {}) };
     const activityId = this.activity(row.id, actor, 'comment', text || null, Object.keys(extra).length ? extra : null);
     if (attachmentIds.length) this.store.ticketFiles.attach(row.id, activityId, attachmentIds);
+    // Code or a diff an agent comments is checked against the message rules (#113).
+    if (actor.kind === 'agent' && text) {
+      const hit = this.store.rules.flagged(text);
+      if (hit.length) {
+        this.activity(row.id, null, 'change', null, { changes: [{ field: 'rule', from: null, to: `matches ${hit.map((r) => `"${r.name}"`).join(', ')}` }] });
+        for (const rule of hit) this.store.audit.record(actor, 'checked_rule.flag', { projectId: row.project_id, subject: `rule:${rule.name}`, detail: { ticket: refOf(row) } });
+      }
+    }
     this.store.db.prepare(`UPDATE tickets SET updated_at = ${NOW_SQL} WHERE id = ?`).run(row.id);
     this.store.audit.record(actor, 'ticket.comment', { projectId: row.project_id, subject: `ticket:${refOf(row)}`, detail: { text } });
     this.changed(row);

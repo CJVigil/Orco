@@ -1680,6 +1680,31 @@ export function createApp(store: Store, options: AppOptions = {}) {
   api.get('/projects/:name/spend', (req, res) => {
     res.json(store.controls.projectSpend(req.participant!, String(req.params.name), optionalInt(req.query.days) ?? 7));
   });
+  // Checked rules (#113): anyone reads them (so agents know); org admins change them.
+  api.get('/checked-rules', (req, res) => {
+    res.json(store.rules.list());
+  });
+  api.post('/checked-rules', (req, res) => {
+    const b = req.body ?? {};
+    res.json(
+      store.rules.save(req.participant!, {
+        id: b.id === undefined ? undefined : optionalInt(b.id),
+        name: str(b.name, 'name'),
+        pattern: typeof b.pattern === 'string' ? b.pattern : undefined,
+        regex: typeof b.regex === 'boolean' ? b.regex : undefined,
+        scopes: Array.isArray(b.scopes) ? b.scopes.map(String) : undefined,
+        enabled: typeof b.enabled === 'boolean' ? b.enabled : undefined,
+        owner: b.owner === null ? null : str(b.owner, 'owner'),
+        why: str(b.why, 'why'),
+      }),
+    );
+  });
+  api.delete('/checked-rules/:id', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a rule id');
+    store.rules.remove(req.participant!, id);
+    res.status(204).end();
+  });
   // Deploy windows and freezes (#112).
   api.get('/freezes', (req, res) => {
     res.json(store.windows.visibleFreezes(req.participant!));

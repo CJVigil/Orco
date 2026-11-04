@@ -367,8 +367,9 @@ export function createPortfolio(ctx) {
     if (!p.policyProject && administered[0] && !admin) p.policyProject = administered[0];
     const policy = p.policyProject || admin ? await api(`/policy${p.policyProject ? `?project=${encodeURIComponent(p.policyProject)}` : ''}`) : null;
     const scope = admin ? await api('/scope/settings') : null;
+    const rules = admin ? await api('/checked-rules') : null;
     const deploy = administered.length || admin ? await Promise.all([api('/freezes'), api('/deploy-windows')]) : null;
-    return [pausesCard(state.pauses, administered, agents), deploy ? deployCard(deploy[0], deploy[1], administered, admin) : null, budgetsCard(state.budgets, administered, agents), scope ? scopeCard(scope) : null, admin ? peopleCard(setup.proxy ?? (setup.oidc ? { label: setup.oidc.label } : null)) : null, admin ? modelsCard(models) : null, admin ? onyxCard(onyx) : null, policy ? policyCard(policy, administered) : null, admin ? groupsCard(groups) : null];
+    return [pausesCard(state.pauses, administered, agents), deploy ? deployCard(deploy[0], deploy[1], administered, admin) : null, budgetsCard(state.budgets, administered, agents), scope ? scopeCard(scope) : null, rules ? rulesCard(rules) : null, admin ? peopleCard(setup.proxy ?? (setup.oidc ? { label: setup.oidc.label } : null)) : null, admin ? modelsCard(models) : null, admin ? onyxCard(onyx) : null, policy ? policyCard(policy, administered) : null, admin ? groupsCard(groups) : null];
   }
 
   /** Freezes and deploy windows (#112): start or end a freeze, and the weekly windows deploys keep to. */
@@ -406,6 +407,45 @@ export function createPortfolio(ctx) {
         el('div', { class: 'order-rule small' }, el('span', { text: `${w.project ?? 'Every project'}: ${w.mode === 'allow' ? 'deploys only' : 'never'} ${w.spec}${w.refuse ? ' (refused outside)' : ''}` }), el('button', { class: 'ghost small', type: 'button', text: 'Remove', onclick: () => void api(`/deploy-windows/${w.id}`, { method: 'DELETE' }).then(() => load(), (err) => notify(err.message)) })),
       ),
       el('form', { class: 'inline-form', onsubmit: post('/deploy-windows', () => ({ project: wWhere.value || null, spec: spec.value, mode: mode.value, refuse: refuse.checked })) }, wWhere, mode, spec, el('label', { class: 'check small' }, refuse, 'Refuse'), el('button', { class: 'small', type: 'submit', text: 'Add window' })),
+    );
+  }
+
+  /** Checked rules (#113): patterns that block plans and approvals, and flag code in messages. Org admins. */
+  function rulesCard(rules) {
+    const save = (body) => api('/checked-rules', { method: 'POST', body }).then(() => load(), (err) => notify(err.message));
+    const name = el('input', { placeholder: 'No public S3 buckets', maxlength: '80', 'aria-label': 'Rule name', required: true });
+    const pattern = el('input', { placeholder: 'acl\\s*=\\s*"public-read"', maxlength: '300', 'aria-label': 'Pattern (a regular expression)', required: true });
+    const owner = el('input', { placeholder: 'owner (optional)', maxlength: '32', 'aria-label': 'Owner' });
+    return el(
+      'section',
+      { class: 'plan-card' },
+      el('h3', { text: 'Checked rules' }),
+      el('p', { class: 'small muted', text: 'A match blocks a plan or an approval request, naming the rule and telling its owner; in a message\'s code or diff it is flagged.' }),
+      rules.map((r) => {
+        const on = el('input', { type: 'checkbox', checked: r.enabled, 'aria-label': `${r.name} on` });
+        on.addEventListener('change', () => void save({ id: r.id, enabled: on.checked }));
+        return el(
+          'div',
+          { class: 'order-rule small' },
+          el('label', { class: 'check' }, on, el('strong', { text: r.name })),
+          el('span', { class: 'muted', text: ` · ${r.scopes.join(', ')}${r.owner ? ` · owner ${r.owner}` : ''}` }),
+          el('code', { class: 'rule-pattern', text: r.pattern }),
+        );
+      }),
+      el(
+        'form',
+        {
+          class: 'inline-form',
+          onsubmit: (event) => {
+            event.preventDefault();
+            void save({ name: name.value, pattern: pattern.value, regex: true, scopes: ['plan', 'approval', 'message'], owner: owner.value || null });
+          },
+        },
+        name,
+        pattern,
+        owner,
+        el('button', { class: 'small', type: 'submit', text: 'Add rule' }),
+      ),
     );
   }
 

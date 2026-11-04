@@ -207,6 +207,8 @@ export class Approvals {
 
     // Deploy windows and freezes (#112): refused during a freeze, flagged (or refused) outside a window.
     const warning = this.store.windows.check(actor, room.projectId, `${actionKind ?? ''}\n${summary}\n${details ?? ''}`, input.override);
+    // Checked rules (#113): a request whose command or diff matches one is refused, naming it.
+    this.store.rules.enforce(actor, 'approval', `${actionKind ?? ''}\n${summary}\n${details ?? ''}\n${Array.isArray(input.scope) ? input.scope.join('\n') : (input.scope ?? '')}`, room.ref, room.projectId);
     const approver = mode === 'owner' ? this.store.participantById(actor.ownerId!) : null;
     const notify = approver ? [approver.name] : this.deciders(actor, room).map((p) => p.name);
     const ping = notify.length ? `${notify.map((n) => `@${n}`).join(' ')} ` : '';

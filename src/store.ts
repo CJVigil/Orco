@@ -1,3 +1,4 @@
+import { CheckedRules } from './rules.js';
 import { DeployWindows } from './windows.js';
 import { Owners } from './owners.js';
 import { Checklists } from './checklists.js';
@@ -270,6 +271,7 @@ export class Store {
   readonly checklists: Checklists;
   readonly owners: Owners;
   readonly windows: DeployWindows;
+  readonly rules: CheckedRules;
   readonly questions: Questions;
   readonly notes: Notes;
   readonly flags: Flags;
@@ -322,6 +324,7 @@ export class Store {
     this.checklists = new Checklists(this);
     this.owners = new Owners(this);
     this.windows = new DeployWindows(this);
+    this.rules = new CheckedRules(this);
     this.questions = new Questions(this);
     this.notes = new Notes(this);
     this.flags = new Flags(this);
@@ -992,6 +995,8 @@ export class Store {
       },
     });
     this.events.emit('message', message);
+    // Code or a diff an agent posts is checked against the org's message rules (#113): flagged, not blocked.
+    this.rules.afterPost(actor, room.ref, message.id, trimmed, room.projectId);
     // A risky request from another owner's agent waits for the receiving agent's owner (#81).
     const held = this.safety.holdMentions(actor, message, mentioned);
     for (const target of mentioned) if (!held.has(target.id)) this.events.emit(`mention:${target.id}`, message);

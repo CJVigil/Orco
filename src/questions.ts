@@ -203,6 +203,7 @@ export class Questions {
     const max = kind === 'plan' ? MAX_ANSWER : MAX_QUESTION;
     if (question.length > max) throw new OrcoError('invalid', `${kind === 'plan' ? 'Plans' : 'Questions'} can be at most ${max} characters`);
     if (kind === 'plan' && to === 'project') throw new OrcoError('invalid', 'Plans go to your owner or the requester, not the whole project');
+    if (kind === 'plan') this.store.rules.enforce(actor, 'plan', question, task.room, task.projectId);
     if (to !== 'requester' && to !== 'owner' && to !== 'project') {
       throw new OrcoError('invalid', 'Ask the "requester", your "owner", or the whole "project"');
     }

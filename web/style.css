@@ -5503,3 +5503,11 @@ button.recent-link {
   margin: 0.25rem 0;
   color: var(--listen);
 }
+
+/* Checked rules (#113) */
+.rule-pattern {
+  max-width: 22rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
