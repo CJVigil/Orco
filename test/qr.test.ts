@@ -9,7 +9,7 @@ describe('QR codes for phones (#137)', () => {
     assert.equal(small.length, 21);
     const link = qrMatrix('http://192.168.1.20:7420/#signin=abcDEF123_-xyz0123456789');
     assert.ok(link.length > 21 && (link.length - 17) % 4 === 0);
-    for (const [r, c] of [[0, 0], [0, link.length - 7], [link.length - 7, 0]]) {
+    for (const [r, c] of [[0, 0], [0, link.length - 7], [link.length - 7, 0]] as [number, number][]) {
       const row = link[r]!.slice(c, c + 7);
       assert.deepEqual(row, [true, true, true, true, true, true, true]);
       assert.deepEqual([link[r + 2]![c], link[r + 2]![c + 1], link[r + 2]![c + 2]], [true, false, true]);
