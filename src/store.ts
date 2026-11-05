@@ -1,5 +1,6 @@
 import { PolicyFiles } from './policyfile.js';
 import { Modes } from './modes.js';
+import { Actions } from './actions.js';
 import { ToolLevels, type ToolAccess } from './tooltable.js';
 import { Guests } from './guests.js';
 import { Incidents } from './incidents.js';
@@ -282,6 +283,7 @@ export class Store {
   readonly incidents: Incidents;
   readonly guests: Guests;
   readonly modes: Modes;
+  readonly actions: Actions;
   readonly toolLevels: ToolLevels;
   readonly policyFile: PolicyFiles;
   readonly questions: Questions;
@@ -340,6 +342,7 @@ export class Store {
     this.incidents = new Incidents(this);
     this.guests = new Guests(this);
     this.modes = new Modes(this);
+    this.actions = new Actions(this);
     this.toolLevels = new ToolLevels(this);
     this.policyFile = new PolicyFiles(this);
     this.questions = new Questions(this);

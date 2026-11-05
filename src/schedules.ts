@@ -240,6 +240,25 @@ export class Schedules {
       .map(toSchedule);
   }
 
+  /**
+   * Run now (#133): an ordinary task from the person who asked, with the schedule's request and
+   * budget, outside the timetable. The schedule's own next run is unchanged.
+   */
+  runNow(actor: Participant, id: number): Task {
+    const row = this.visible(actor, id);
+    if (actor.kind !== 'user') throw new OrcoError('forbidden', 'Run now is for people');
+    const room = this.store.db.prepare('SELECT name FROM rooms WHERE id = ?').get(row.room_id) as { name: string };
+    const task = this.store.tasks.create(actor, {
+      agent: row.agent,
+      room: row.project ? `${row.project}/${room.name}` : room.name,
+      request: row.request,
+      budgetMinutes: row.budget_minutes,
+      budgetCents: row.budget_cents,
+    });
+    this.store.audit.record(actor, 'schedule.run_now', { projectId: row.project_id, subject: `schedule:${id}`, detail: { taskId: task.id } });
+    return task;
+  }
+
   /** Creates the tasks that are due. Called once a minute by the server. */
   runDue(): Task[] {
     const now = this.store.now();

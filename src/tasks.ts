@@ -367,6 +367,11 @@ export class Tasks {
       confirmBy?: Participant;
       /** If it has not started by then (ms), it is cancelled as expired instead of starting late. */
       expiresAt?: number | null;
+      /**
+       * The agent's owner approved this exact request ahead of time (a project action, #133): their
+       * consent is not asked again. Pauses, budgets and the safety filter still apply.
+       */
+      ownerConsented?: boolean;
     },
   ): Task {
     // An agent's request is scrubbed of secrets before it is stored or posted (#81).
@@ -406,7 +411,7 @@ export class Tasks {
     const gate = this.store.controls.taskGate(actor, assignee, room);
     // A risky request from another owner's agent waits for this agent's owner, trusted or not (strict).
     const held = this.store.safety.holdReason(actor, assignee, request);
-    const needsConsent = this.consent(actor, assignee, owner) || held !== null;
+    const needsConsent = (!input.ownerConsented && this.consent(actor, assignee, owner)) || held !== null;
     const confirmBy = !gate && !needsConsent && input.confirmBy?.kind === 'user' ? input.confirmBy : null;
     const approver = gate?.approver ?? confirmBy ?? owner;
     const needsApproval = gate !== null || confirmBy !== null || needsConsent;

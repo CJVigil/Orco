@@ -5,6 +5,7 @@ import { icon } from './icons.js';
 import { voiceButton } from './voice.js';
 import { quoteText } from './quotes.js';
 import { openLightbox, prepareImage } from './photos.js';
+import { actionBar } from './actions.js';
 import { createDrafts, createOutbox, newKey, retryable } from './drafts.js';
 import { catchBigPastes, MAX_MESSAGE_CHARS } from './paste.js';
 import { codeChildren, renderMarkdown } from './markdown.js';
@@ -2000,6 +2001,7 @@ async function openLink(kind, id) {
 function setView(view) {
   state.view = view;
   for (const id of ['messages', 'composer', 'composer-pending', 'ask-agent']) $(id).hidden = view !== 'room';
+  if (view !== 'room') $('room-actions').hidden = true;
   $('tickets-view').hidden = view !== 'tickets';
   $('portfolio-view').hidden = view !== 'portfolio';
   $('portfolio').classList.toggle('active', view === 'portfolio');
@@ -2072,6 +2074,7 @@ async function selectRoom() {
   state.mentioned.delete(room.ref);
   rememberRecent({ kind: 'room', ref: room.ref, label: roomLabel(room) });
   roomComposer.switchPlace();
+  void renderRoomActions();
   renderNav();
   renderRoomTitle();
   if (changed) {
@@ -4205,6 +4208,7 @@ document.addEventListener('visibilitychange', () => {
 
 const needs = createNeeds({
   api,
+  actionsBar: () => needsActions(),
   el,
   $,
   answerBox,
@@ -4297,6 +4301,43 @@ function parseTask(text) {
     request = request.slice(token[0].length);
   }
   return { ...body, request };
+}
+
+/* One-tap actions (#133) in the room header and in Needs you. */
+async function renderRoomActions() {
+  const box = $('room-actions');
+  const room = state.room;
+  if (!room?.project || state.me.kind !== 'user') {
+    box.hidden = true;
+    return;
+  }
+  let actions = [];
+  try {
+    actions = await api(`/projects/${encodeURIComponent(room.project)}/actions`);
+  } catch {
+    actions = [];
+  }
+  if (state.room !== room || state.view !== 'room') return;
+  const bar = actionBar({ el, api, toast }, actions);
+  box.replaceChildren(...(bar ? [bar] : []));
+  box.hidden = !bar;
+}
+
+/** The actions across this person's projects, for Needs you; filled in when they arrive. */
+function needsActions() {
+  const box = el('div', { class: 'needs-actions-bar' });
+  if (state.me.kind !== 'user') return box;
+  void api('/actions')
+    .then((actions) => {
+      const byProject = Map.groupBy ? Map.groupBy(actions, (a) => a.project) : new Map(actions.map((a) => [a.project, actions.filter((x) => x.project === a.project)]));
+      box.replaceChildren(
+        ...[...byProject].map(([project, list]) =>
+          el('div', { class: 'needs-actions-project' }, byProject.size > 1 ? el('span', { class: 'small muted', text: project }) : null, actionBar({ el, api, toast }, list)),
+        ),
+      );
+    })
+    .catch(() => {});
+  return box;
 }
 
 /* Unsent text survives (#130): drafts per place, and an outbox for sends that did not get through. */

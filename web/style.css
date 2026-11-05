@@ -6042,3 +6042,49 @@ body.lightbox-open {
 .deliveries-table .outcome-rate_limited strong {
   color: var(--danger);
 }
+
+/* One-tap actions (#133) */
+.room-actions {
+  padding: 0.35rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.action-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.action-button {
+  min-height: 2.5rem;
+  padding: 0.4rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface, transparent);
+  font-weight: 600;
+}
+
+.action-button.unapproved::after {
+  content: ' · asks';
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.needs-actions-bar {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0.25rem 0 0.75rem;
+}
+
+.needs-actions-bar:empty {
+  display: none;
+}
+
+.budget-pair {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.budget-pair input {
+  width: 6rem;
+}

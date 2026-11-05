@@ -1254,6 +1254,25 @@ export const MIGRATIONS = [
   );
   CREATE INDEX hook_deliveries_hook ON hook_deliveries (hook_id, id);
   CREATE INDEX hook_deliveries_dedupe ON hook_deliveries (hook_id, dedupe_key);
+  `,  // 59: one-tap project actions (#133).
+  `
+  CREATE TABLE project_actions (
+    id INTEGER PRIMARY KEY,
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    label TEXT NOT NULL,
+    agent_id INTEGER NOT NULL REFERENCES participants(id),
+    room_id INTEGER NOT NULL REFERENCES rooms(id),
+    request TEXT NOT NULL,
+    budget_minutes INTEGER,
+    budget_cents INTEGER,
+    approved_hash TEXT,
+    approved_by INTEGER REFERENCES participants(id),
+    approved_at TEXT,
+    created_by INTEGER NOT NULL REFERENCES participants(id),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX project_actions_project ON project_actions (project_id);
   `,
 ];
 

@@ -266,7 +266,7 @@ export function createTickets(ctx) {
       t.tab === 'spend' ? api(`/projects/${p}/spend?days=7`) : Promise.resolve(t.spend ?? null),
       t.tab === 'report' ? api(`/projects/${p}/report?${reportQuery()}`) : Promise.resolve(t.report ?? null),
       t.tab === 'integrations'
-        ? Promise.all([api(`/hooks?project=${p}`), api(`/projects/${p}/secrets`), api(`/leases?project=${p}`)]).then(([hooks, secrets, leases]) => ({ hooks, secrets, leases }))
+        ? Promise.all([api(`/hooks?project=${p}`), api(`/projects/${p}/secrets`), api(`/leases?project=${p}`), api(`/projects/${p}/actions`)]).then(([hooks, secrets, leases, actions]) => ({ hooks, secrets, leases, actions }))
         : Promise.resolve(t.integrations ?? null),
     ]);
     if (t.project !== project) return;
@@ -2683,7 +2683,81 @@ export function createTickets(ctx) {
     t.timer = setTimeout(() => void load(), 250);
   }
 
-  /* Integrations: webhooks and secrets */
+  /* Integrations: one-tap actions (#133), webhooks and secrets */
+
+  function actionsSection() {
+    const actions = t.integrations?.actions ?? [];
+    const agents = people().filter((m) => m.kind === 'agent');
+    const projectRooms = rooms().filter((r) => r.project === t.project);
+    const label = el('input', { placeholder: 'Daily numbers', maxlength: '40', required: true, 'aria-label': 'Button label' });
+    const agent = el('select', { 'aria-label': 'Agent' }, agents.map((a) => el('option', { value: a.name, text: a.name })));
+    const room = el('select', { 'aria-label': 'Room' }, projectRooms.map((r) => el('option', { value: r.ref, text: `#${r.name}`, selected: r.name === 'general' })));
+    const request = el('textarea', { rows: '3', required: true, maxlength: '4000', 'aria-label': 'Request', placeholder: 'Post yesterday’s sales and refunds for {{store}}, with the week so far.' });
+    const minutes = el('input', { type: 'number', min: '1', placeholder: 'minutes', 'aria-label': 'Time budget in minutes' });
+    const cents = el('input', { type: 'number', min: '1', placeholder: 'cents', 'aria-label': 'Cost budget in cents' });
+    const mine = me()?.name;
+    return el(
+      'section',
+      { class: 'settings-section' },
+      el('h3', { text: 'Actions' }),
+      el('p', { class: 'muted small', text: 'Buttons in this project’s rooms and in Needs you that start a saved request. A tap is a task from whoever tapped. {{name}} in the request asks for a value. When the agent’s owner approves an action, taps start it without asking; editing it asks again.' }),
+      actions.length
+        ? el(
+            'div',
+            { class: 'file-list plan-card' },
+            actions.map((a) => {
+              const owner = agents.find((x) => x.name === a.agent)?.owner;
+              return el(
+                'div',
+                { class: 'file-row action-row' },
+                el('strong', { text: a.label }),
+                el('span', { class: 'muted small', text: `${a.agent} · #${a.room.split('/').pop()} · ${a.approved ? `approved by ${a.approvedBy}` : 'asks the owner each time'}` }),
+                el('span', { class: 'spacer' }),
+                owner === mine
+                  ? el('button', { class: 'ghost small', type: 'button', text: a.approved ? 'Withdraw approval' : 'Approve', onclick: () => void act(() => api(`/actions/${a.id}/approve`, { method: 'POST', body: { approve: !a.approved } })) })
+                  : null,
+                el('button', {
+                  class: 'ghost small',
+                  type: 'button',
+                  text: 'Edit',
+                  onclick: () => {
+                    const text = prompt(`What should ${a.agent} do when someone taps “${a.label}”?`, a.request);
+                    if (text !== null && text.trim() && text !== a.request) void act(() => api(`/actions/${a.id}`, { method: 'PATCH', body: { request: text } }));
+                  },
+                }),
+                el('button', { class: 'ghost small danger', type: 'button', text: 'Remove', onclick: () => confirm(`Remove the “${a.label}” button?`) && void act(() => api(`/actions/${a.id}`, { method: 'DELETE' })) }),
+              );
+            }),
+          )
+        : null,
+      el(
+        'form',
+        {
+          class: 'schedule-form plan-card',
+          onsubmit: (event) => {
+            event.preventDefault();
+            void act(() =>
+              api(`/projects/${encodeURIComponent(t.project)}/actions`, {
+                method: 'POST',
+                body: { label: label.value, agent: agent.value, room: room.value, request: request.value, budgetMinutes: minutes.value || null, budgetCents: cents.value || null },
+              }),
+            );
+          },
+        },
+        el('h3', { text: 'New action' }),
+        el(
+          'div',
+          { class: 'schedule-grid' },
+          el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Button' }), label),
+          el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Agent' }), agent),
+          el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Posts in' }), room),
+          el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Budget (optional)' }), el('span', { class: 'budget-pair' }, minutes, cents)),
+        ),
+        el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Request' }), request),
+        el('div', { class: 'row-end' }, el('button', { class: 'primary small', type: 'submit', text: 'Add action' })),
+      ),
+    );
+  }
 
   /*
    * A hook's filters, duplicates and coalescing, and its Deliveries (#132). Filters are typed one per
@@ -2878,6 +2952,7 @@ export function createTickets(ctx) {
       ),
     );
     return [
+      actionsSection(),
       el('section', { class: 'settings-section' },
         el('h3', { text: 'Webhooks' }),
         el('p', { class: 'muted small', text: 'A secret URL that CI, GitHub or monitoring can POST to. Each delivery is posted in the room as untrusted external text, and can start a task for an agent. Orco only receives; it never calls out.' }),
@@ -2968,6 +3043,17 @@ export function createTickets(ctx) {
             text: s.approval === 'pending' ? 'Waiting for approval' : s.approval === 'denied' ? 'Not approved' : s.approval === 'expired' && !s.runAs ? 'Approval expired' : s.enabled ? 'Active' : 'Paused',
           }),
           el('span', { class: 'spacer' }),
+          el('button', {
+            class: 'ghost small',
+            type: 'button',
+            text: 'Run now',
+            title: 'Start this now, as a task from you, without changing the schedule',
+            onclick: () =>
+              void act(async () => {
+                const task = await api(`/schedules/${s.id}/run`, { method: 'POST' });
+                notify(task.state === 'awaiting_approval' ? `Waiting for ${s.agent}'s owner to approve` : `${s.agent} is on it (task #${task.id})`);
+              }),
+          }),
           el('button', {
             class: 'ghost small',
             type: 'button',

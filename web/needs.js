@@ -237,6 +237,8 @@ export function createNeeds(ctx) {
         'div',
         { class: 'needs' },
         el('h2', { class: 'needs-title', text: list.length ? 'Needs you' : 'Nothing needs you' }),
+        // One-tap actions (#133): the same buttons as in each project's rooms.
+        n.actions ?? (n.actions = ctx.actionsBar?.() ?? null),
         digestCard(inbox.digest),
         list.length ? null : el('p', { class: 'muted', text: 'Approvals, questions and asks for you show up here, three at a time.' }),
         shown.map((item) => {
@@ -289,6 +291,7 @@ export function createNeeds(ctx) {
     settings: settingsFields,
     show: async () => {
       n.all = false;
+      n.actions = null;
       await reload();
     },
     /** Something changed (an approval, a question, a ticket): bring in the next item without a reload. */

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- One-tap actions: project admins save buttons, each with a label, an agent, a room, a request with optional `{{fill-in}}` fields, and a budget, in Integrations. The buttons appear in the project's rooms and in Needs you. A tap is an ordinary task from whoever tapped, so policies, budgets and pauses still apply. When the agent's owner approves an action (the owner's own actions count as approved), taps start the agent without asking. Changing the request, agent or room asks the owner again. Schedules have **Run now**. Migration 59.
+
 - Webhooks act only on deliveries that matter:
   - Field filters on headers and body: equals, not_equals, one_of, starts_with and exists, with `[]` for lists, and no regular expressions.
   - **Post only when it matches**.

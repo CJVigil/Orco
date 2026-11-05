@@ -1758,6 +1758,52 @@ export function createApp(store: Store, options: AppOptions = {}) {
     const level = req.body?.level === null || req.body?.level === '' ? null : str(req.body?.level, 'level') ?? null;
     res.json({ cap: store.toolLevels.setCap(req.participant!, level) });
   });
+  // One-tap project actions (#133): project admins set them up, the agent's owner approves them once,
+  // and a tap starts an ordinary task from the person who tapped. Run now on schedules uses the same path.
+  api.get('/actions', (req, res) => {
+    res.json(store.actions.mine(req.participant!));
+  });
+  api.get('/projects/:name/actions', (req, res) => {
+    res.json(store.actions.list(req.participant!, String(req.params.name)));
+  });
+  const actionInput = (b: Record<string, unknown>) => ({
+    label: b.label === undefined ? undefined : String(b.label),
+    agent: b.agent === undefined ? undefined : String(b.agent),
+    room: b.room === undefined ? undefined : String(b.room),
+    request: b.request === undefined ? undefined : String(b.request),
+    budgetMinutes: b.budgetMinutes === undefined ? undefined : b.budgetMinutes === null || b.budgetMinutes === '' ? null : Number(b.budgetMinutes),
+    budgetCents: b.budgetCents === undefined ? undefined : b.budgetCents === null || b.budgetCents === '' ? null : Number(b.budgetCents),
+  });
+  api.post('/projects/:name/actions', (req, res) => {
+    res.status(201).json(store.actions.create(req.participant!, String(req.params.name), actionInput(req.body ?? {})));
+  });
+  api.patch('/actions/:id', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected an action id');
+    res.json(store.actions.update(req.participant!, id, actionInput(req.body ?? {})));
+  });
+  api.delete('/actions/:id', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected an action id');
+    store.actions.delete(req.participant!, id);
+    res.status(204).end();
+  });
+  api.post('/actions/:id/approve', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected an action id');
+    res.json(store.actions.approve(req.participant!, id, req.body?.approve !== false));
+  });
+  api.post('/actions/:id/run', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected an action id');
+    const values = req.body?.values && typeof req.body.values === 'object' ? (req.body.values as Record<string, unknown>) : {};
+    res.status(201).json(store.actions.run(req.participant!, id, values));
+  });
+  api.post('/schedules/:id/run', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a schedule id');
+    res.status(201).json(store.schedules.runNow(req.participant!, id));
+  });
   // Handoff context packs (#121): a ticket's pack, and an agent's pack size (its owner sets it).
   api.get('/tickets/:ref/pack', (req, res) => {
     res.json(contextPack(store, req.participant!, String(req.params.ref)));
