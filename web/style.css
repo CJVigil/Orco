@@ -6358,3 +6358,289 @@ body.lightbox-open {
   color: inherit;
   text-decoration: none;
 }
+
+/*
+ * The look (2026-11): a grey page with the work on a white sheet, a quiet sidebar whose current item
+ * is a raised pill, pill tabs, lists and columns in rounded cards, soft borders, and a tighter type
+ * scale. Tokens first, so both themes follow; then the pieces that change shape.
+ */
+:root {
+  --page: #0b0b0d;
+  --bg: #141416;
+  --bg-side: #0b0b0d;
+  --bg-raised: #1a1a1d;
+  --bg-hover: #222226;
+  --border: #26262b;
+  --radius: 10px;
+  --radius-lg: 12px;
+  --sheet-shadow: 0 0 0 1px var(--border), 0 1px 3px rgba(0, 0, 0, 0.35);
+  --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    --page: #f4f4f5;
+    --bg: #ffffff;
+    --bg-side: #f4f4f5;
+    --bg-raised: #ffffff;
+    --bg-hover: #f2f2f4;
+    --border: #e7e7ea;
+    --muted: #71717a;
+    --sheet-shadow: 0 0 0 1px #e7e7ea, 0 1px 3px rgba(16, 16, 24, 0.04), 0 8px 24px -12px rgba(16, 16, 24, 0.06);
+    --card-shadow: 0 1px 2px rgba(16, 16, 24, 0.04);
+  }
+}
+
+:root[data-theme='light'] {
+  --page: #f4f4f5;
+  --bg: #ffffff;
+  --bg-side: #f4f4f5;
+  --bg-raised: #ffffff;
+  --bg-hover: #f2f2f4;
+  --border: #e7e7ea;
+  --muted: #71717a;
+  --sheet-shadow: 0 0 0 1px #e7e7ea, 0 1px 3px rgba(16, 16, 24, 0.04), 0 8px 24px -12px rgba(16, 16, 24, 0.06);
+  --card-shadow: 0 1px 2px rgba(16, 16, 24, 0.04);
+}
+
+body {
+  background: var(--page);
+  font-size: 13.5px;
+  letter-spacing: -0.003em;
+}
+
+/* The sidebar sits on the page; the current place is a raised white pill. */
+.sidebar {
+  background: var(--page);
+  border-right: 0;
+}
+
+.sidebar-head {
+  font-weight: 600;
+}
+
+.room-link {
+  padding: 0.3rem 0.6rem;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.room-link:hover {
+  background: color-mix(in srgb, var(--bg-hover) 70%, transparent);
+}
+
+.room-link[aria-current='page'] {
+  background: var(--bg);
+  box-shadow: 0 0 0 1px var(--border), 0 1px 2px rgba(16, 16, 24, 0.05);
+  font-weight: 500;
+}
+
+.nav-group-head {
+  font-size: 11px;
+  letter-spacing: 0.01em;
+}
+
+.me {
+  border-top: 0;
+}
+
+/* Desktop: the work is a white sheet with rounded corners; so is the side panel. */
+@media (min-width: 901px) {
+  .main {
+    margin: 8px 8px 8px 0;
+    background: var(--bg);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--sheet-shadow);
+    overflow: hidden;
+  }
+
+  .panel:not([hidden]) {
+    margin: 8px 8px 8px 0;
+    border-left: 0;
+    border-radius: var(--radius-lg);
+    box-shadow: var(--sheet-shadow);
+    overflow: hidden;
+  }
+}
+
+@media (max-width: 900px) {
+  .main,
+  .panel {
+    background: var(--bg);
+  }
+}
+
+.room-head {
+  min-height: 52px;
+}
+
+.room-title {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* Tabs are pills: the current one raised, the rest quiet. */
+.ticket-tabs {
+  gap: 0.25rem;
+  min-height: 48px;
+}
+
+.ticket-tab {
+  align-self: center;
+  padding: 0.28rem 0.7rem;
+  border-radius: 8px;
+  font-size: 13px;
+  box-shadow: none;
+}
+
+.ticket-tab:hover {
+  background: var(--bg-hover);
+}
+
+.ticket-tab[aria-current='page'] {
+  background: var(--bg-hover);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+/* Buttons and fields: a little smaller, rounder, quieter. */
+button,
+select {
+  border-radius: 8px;
+}
+
+button.primary {
+  border-radius: 8px;
+  font-weight: 500;
+}
+
+input,
+textarea,
+select {
+  border-radius: 8px;
+}
+
+/* Lists: each group a rounded card with a quiet header and tight rows. */
+.list-group {
+  margin: 0.75rem 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--bg-raised);
+  box-shadow: var(--card-shadow);
+}
+
+.list-group > summary {
+  padding: 0.5rem 0.9rem;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.list-row,
+.child-row {
+  padding: 0.55rem 0.9rem;
+  font-size: 13px;
+}
+
+.list-group .list-row:first-of-type {
+  border-top: 0;
+}
+
+.list-title > span:first-child {
+  font-weight: 500;
+}
+
+.list-row .ticket-ref,
+.ticket-ref {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+/* Board: columns as soft trays, cards as white tiles. */
+.board-column {
+  background: color-mix(in srgb, var(--bg-hover) 60%, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.ticket-card {
+  border-radius: var(--radius);
+  box-shadow: var(--card-shadow);
+  font-size: 13px;
+}
+
+/* Cards everywhere share one shape. */
+.plan-card,
+.needs-item,
+.task-card,
+.approval-card,
+.question-card,
+.review-card,
+.settings-section .plan-card {
+  border-radius: var(--radius);
+  box-shadow: var(--card-shadow);
+}
+
+.plan-card {
+  border-color: var(--border);
+}
+
+.needs-title {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+/* Status chips read as a dot and a word, like "● On track". */
+.chip {
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+/* Messages: a touch smaller, with more air between people. */
+.msg {
+  font-size: 13.5px;
+}
+
+.composer textarea {
+  border-radius: var(--radius);
+}
+
+.ticket-more > summary.ticket-tab {
+  padding: 0.28rem 0.7rem;
+  border-radius: 8px;
+}
+
+.ticket-more > summary.ticket-tab:hover,
+.ticket-more[open] > summary.ticket-tab {
+  background: var(--bg-hover);
+}
+
+.ticket-more {
+  align-self: center;
+}
+
+/* Room for the selection box (#138) beside the status icon. */
+.list-row {
+  padding-left: 2rem;
+}
+
+.list-row .select-box {
+  left: 0.55rem;
+}
+
+.needs-title {
+  margin-bottom: 0;
+}
+
+.needs-subtitle {
+  margin: -0.35rem 0 0.4rem;
+  font-size: 12.5px;
+}
+
+.needs-item .approve-again {
+  grid-column: 2;
+}

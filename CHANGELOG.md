@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- A cleaner look across the app, in both themes.
+  - The work sits on a framed sheet beside a quiet sidebar, and the current room or view is a raised pill.
+  - Tabs are pills, list groups and board columns sit in rounded cards, and cards share one softer border and shadow.
+  - Type and rows are slightly tighter.
+  - Needs you opens with a greeting, the date and how many things need you.
+  - The selection checkbox no longer overlaps a list row's status icon.
+
 - Outline, the company wiki. An org admin connects one Outline in Portfolio › Controls. Its API key is stored encrypted, never shown back, and needs `ORCO_SECRETS_KEY`.
   - Outline links in messages show their title and summary.
   - People and agents search and read Outline (`outline_search`, `outline_read`, `/api/outline/search`).

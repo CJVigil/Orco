@@ -13,6 +13,11 @@ export function createNeeds(ctx) {
   const root = $('needs-view');
   const n = { all: false, timer: null, loading: null };
 
+  const greeting = () => {
+    const h = new Date().getHours();
+    return h < 5 ? 'Good evening' : h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+  };
+
   /** The things waiting on this person, most urgent first, each with what to show and its action. */
   function items(inbox) {
     const out = [];
@@ -243,7 +248,12 @@ export function createNeeds(ctx) {
       el(
         'div',
         { class: 'needs' },
-        el('h2', { class: 'needs-title', text: list.length ? 'Needs you' : 'Nothing needs you' }),
+        // A greeting and where things stand, in one glance.
+        el('h2', { class: 'needs-title', text: `${greeting()}, ${me()?.name ?? ''}` }),
+        el('p', {
+          class: 'needs-subtitle muted',
+          text: `${new Date().toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })} · ${list.length ? `${list.length} thing${list.length === 1 ? '' : 's'} need${list.length === 1 ? 's' : ''} you` : 'nothing needs you'}`,
+        }),
         // One-tap actions (#133): the same buttons as in each project's rooms.
         n.actions ?? (n.actions = ctx.actionsBar?.() ?? null),
         digestCard(inbox.digest),
