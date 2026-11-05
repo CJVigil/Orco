@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Plain ticket titles, with rules per project. By default a title is "Area: outcome", at most 70 characters, with no file paths, code identifiers, commit prefixes or listed internal names.
+  - Project admins change the rules in Settings.
+  - New ticket shows the rules under Title and warns as you type.
+  - `create_ticket`, `create_tickets` and `update_ticket` file the title as written but return a `title_note` naming the broken rule. Their descriptions and `project_plan` state the rules.
+  - Filters gain "Needs a plain title", which lists tickets for a person to fix. Migration 62.
+
 - Select several tickets and change them in one go.
   - Board cards and list rows get a checkbox: on hover, or by long-press on a phone. Shift-click selects a range, and Esc clears.
   - A bar shows how many are selected and changes status, folder, labels (add or remove), assignee, milestone, cycle, priority or waiting-on, or closes them.

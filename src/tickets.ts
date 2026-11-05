@@ -1,3 +1,4 @@
+import { type TitleRules, titleIssue } from './titles.js';
 import type { TicketForm } from './forms.js';
 import type { ModeInfo } from './modes.js';
 import type { GuestRequest } from './guests.js';
@@ -322,6 +323,8 @@ export interface TicketFilter {
   parent?: string;
   /** Only blocked tickets (true) or only unblocked ones (false). */
   blocked?: boolean;
+  /** Only tickets whose title breaks the project's title rules (#139). */
+  needsPlainTitle?: boolean;
   query?: string;
   limit?: number;
 }
@@ -329,6 +332,8 @@ export interface TicketFilter {
 export interface ProjectPlan {
   /** Intake forms for new tickets (#134). */
   forms: TicketForm[];
+  /** How titles are written here (#139). */
+  titleRules: TitleRules;
   /** The scope gate (#108): where the project stands, and what SCOPE.md still needs. */
   scope: ScopeStatus;
   /** Build order rules that apply here, the org's first (#109). */
@@ -1343,7 +1348,13 @@ export class Tickets {
     const rows = this.store.db
       .prepare(`${TICKET_SELECT} WHERE ${where.join(' AND ')} ORDER BY s.position, t.sort, t.id DESC LIMIT ?`)
       .all(...params, limit) as unknown as TicketRow[];
-    return this.summaries(rows, actor);
+    const list = this.summaries(rows, actor);
+    if (!filter.needsPlainTitle) return list;
+    const rules = new Map<number, TitleRules>();
+    return list.filter((t) => {
+      if (!rules.has(t.projectId)) rules.set(t.projectId, this.store.titleRules.forProject(t.projectId));
+      return titleIssue(t.title, rules.get(t.projectId)) !== null;
+    });
   }
 
   /* Workflow, labels, milestones and cycles */
@@ -1362,6 +1373,7 @@ export class Tickets {
       cycles: this.cycles(proj.id),
       folders: this.folderList(proj.id),
       forms: this.store.forms.list(actor, proj.name),
+      titleRules: this.store.titleRules.forProject(proj.id),
       members: this.store.members(actor, proj.name).map((p) => ({ name: p.name, kind: p.kind, owner: p.owner })),
     };
   }

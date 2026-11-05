@@ -1290,6 +1290,9 @@ export const MIGRATIONS = [
   `
   ALTER TABLE questions ADD COLUMN pass_reason TEXT;
   ALTER TABLE questions ADD COLUMN passed_by INTEGER REFERENCES participants(id);
+  `,  // 62: plain-language title rules per project (#139); null is the defaults.
+  `
+  ALTER TABLE projects ADD COLUMN title_rules TEXT;
   `,
 ];
 

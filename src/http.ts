@@ -1390,6 +1390,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
       priority: text(q.priority) as Priority | undefined,
       parent: text(q.parent),
       blocked: q.blocked === '1' ? true : q.blocked === '0' ? false : undefined,
+      needsPlainTitle: q.title === 'needs_fix' ? true : undefined,
       query: text(q.q),
       limit: optionalInt(q.limit),
     };
@@ -1403,6 +1404,10 @@ export function createApp(store: Store, options: AppOptions = {}) {
     const fields = req.body?.fields && typeof req.body.fields === 'object' ? (req.body.fields as Record<string, unknown>) : {};
     const full = form ? store.forms.ticketInput(req.participant!, project, form, fields, input) : { ...input, title: input.title ?? '' };
     res.status(201).json(store.tickets.create(req.participant!, project, full));
+  });
+  // Title rules (#139): project admins set them; titles that break them get a note, never a refusal.
+  api.put('/projects/:project/title-rules', (req, res) => {
+    res.json(store.titleRules.set(req.participant!, String(req.params.project), req.body ?? {}));
   });
   // Intake forms (#134): project admins set them up; everyone files with them.
   api.get('/projects/:project/forms', (req, res) => {

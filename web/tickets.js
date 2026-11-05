@@ -55,7 +55,25 @@ const TASK_EVENT = {
   cancelled: (d) => `task #${d.taskId} for ${d.agent} was cancelled`,
 };
 const OPEN_TASK = ['awaiting_approval', 'requested', 'accepted', 'needs_input'];
-const EMPTY_FILTERS = { q: '', assignee: '', label: '', priority: '', milestone: '', cycle: '', folder: '', blocked: '' };
+/*
+ * Title rules (#139), mirrored from src/titles.ts for the hint while typing; the server's check is
+ * the one that counts (it names the rule to agents and drives the "Needs a plain title" filter).
+ */
+const TITLE_DEFAULTS = { pattern: 'area_outcome', maxLength: 70, avoidPaths: true, avoidIdentifiers: true, codeNames: [] };
+function checkTitle(raw, rules = TITLE_DEFAULTS) {
+  const t = raw.trim();
+  if (t.length > rules.maxLength) return `Titles are at most ${rules.maxLength} characters (this one is ${t.length})`;
+  if (rules.avoidPaths && /(?:^|[\s(])(?:[\w.-]+\/)+[\w.-]+|\b[\w-]+\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|kt|rb|php|cs|cpp|c|h|json|ya?ml|toml|md|sql|css|scss|html|sh|ps1)\b/i.test(t)) return 'Leave file paths and file names out of the title';
+  if (rules.avoidIdentifiers && (/^(?:feat|fix|chore|refactor|docs|test|perf|build|ci|style)(?:\([^)]*\))?!?:/i.test(t) || /\b[a-z]+[A-Z][A-Za-z0-9]*\b/.test(t) || /\b[a-z0-9]+_[a-z0-9_]+\b/.test(t) || /\b\w+\(\)/.test(t))) return 'Use plain words, not code';
+  const named = (rules.codeNames ?? []).find((n) => n && t.toLowerCase().includes(n.toLowerCase()));
+  if (named) return `“${named}” is an internal name; say what it is in plain words`;
+  if (rules.pattern === 'area_outcome' && !/^[A-Z0-9][^:]{0,40}: \S/.test(t)) return 'Start with the area, then the outcome, like “Checkout: refunds post twice”';
+  return null;
+}
+const titleRulesText = (rules = TITLE_DEFAULTS) =>
+  `${rules.pattern === 'area_outcome' ? 'Area: outcome, in plain words' : 'Plain words'} · at most ${rules.maxLength} characters`;
+
+const EMPTY_FILTERS = { q: '', assignee: '', label: '', priority: '', milestone: '', cycle: '', folder: '', blocked: '', title: '' };
 
 /** Why a ticket is blocked, for tooltips: open blocking tickets and any outside reason. */
 function blockedWhy(ticket) {
@@ -309,6 +327,7 @@ export function createTickets(ctx) {
     if (f.cycle) params.set('cycle', f.cycle);
     if (f.folder) params.set('folder', f.folder);
     if (f.blocked) params.set('blocked', f.blocked);
+    if (f.title) params.set('title', f.title);
     return api(`/tickets?${params}`);
   }
 
@@ -451,6 +470,8 @@ export function createTickets(ctx) {
           )
         : null,
       select(f.blocked, [['', 'Blocked or not'], ['1', 'Blocked'], ['0', 'Not blocked']], set('blocked'), { 'aria-label': 'Blocked' }),
+      // Titles that break the project's plain-language rules (#139), for a person to fix.
+      select(f.title, [['', 'Any title'], ['needs_fix', 'Needs a plain title']], set('title'), { 'aria-label': 'Title' }),
       el('button', {
         class: 'ghost small',
         type: 'button',
@@ -2437,6 +2458,13 @@ export function createTickets(ctx) {
     const description = el('textarea', { name: 'description', rows: '5', placeholder: 'Description (Markdown)', 'aria-label': 'Description' });
     // A prompt link (#118) fills the draft; nothing is created until the reader presses Create.
     title.value = (defaults.title ?? '').slice(0, 200);
+    // The project's title rules (#139), checked as you type; a hint, never a refusal.
+    const titleHint = el('p', { class: 'small muted title-hint', text: titleRulesText(plan.titleRules) });
+    title.addEventListener('input', () => {
+      const issue = checkTitle(title.value, plan.titleRules);
+      titleHint.textContent = issue && title.value.trim().length > 3 ? issue : titleRulesText(plan.titleRules);
+      titleHint.classList.toggle('warn', Boolean(issue && title.value.trim().length > 3));
+    });
     const speak = voiceButton(description, el, icon, (text) => notify(text));
     description.value = (defaults.description ?? '').slice(0, 5000);
     const fields = {
@@ -2515,6 +2543,7 @@ export function createTickets(ctx) {
       },
       defaults.parent ? el('p', { class: 'muted small', text: `Sub-ticket of ${defaults.parent}` }) : null,
       title,
+      titleHint,
       el('div', { class: 'voice-row' }, description, speak),
       el('div', { class: 'new-ticket-grid' }, fields.status, fields.priority, fields.assignee, estimate, fields.milestone, fields.cycle, fields.folder),
       labels.length ? el('div', { class: 'label-picker' }, labels) : null,
@@ -3621,7 +3650,42 @@ export function createTickets(ctx) {
     );
 
     if (me().kind !== 'user') return el('p', { class: 'muted plan-intro', text: 'Only people can change the workflow.' });
+    // Title rules (#139): what a ticket title must look like here. Broken rules get a note, not a refusal.
+    const tr = t.plan.titleRules ?? TITLE_DEFAULTS;
+    const trPattern = el('input', { type: 'checkbox', checked: tr.pattern === 'area_outcome' });
+    const trMax = el('input', { type: 'number', min: '20', max: '200', value: String(tr.maxLength), 'aria-label': 'Most characters' });
+    const trPaths = el('input', { type: 'checkbox', checked: tr.avoidPaths });
+    const trIds = el('input', { type: 'checkbox', checked: tr.avoidIdentifiers });
+    const trNames = el('input', { value: tr.codeNames.join(', '), placeholder: 'Falcon, Project X', 'aria-label': 'Code names' });
+    const titleRulesSection = el(
+      'section',
+      { class: 'settings-section' },
+      el('h3', { text: 'Ticket titles' }),
+      el('p', { class: 'muted small', text: 'Boards are read by people outside the work. Titles that break these rules are filed anyway, with a note to the agent, and listed under Filters › Needs a plain title.' }),
+      el(
+        'form',
+        {
+          class: 'title-rules',
+          onsubmit: (event) => {
+            event.preventDefault();
+            void act(() =>
+              api(`${base}/title-rules`, {
+                method: 'PUT',
+                body: { pattern: trPattern.checked ? 'area_outcome' : 'none', maxLength: Number(trMax.value), avoidPaths: trPaths.checked, avoidIdentifiers: trIds.checked, codeNames: trNames.value.split(',') },
+              }),
+            );
+          },
+        },
+        el('label', { class: 'check small' }, trPattern, 'Start with the area, then the outcome (“Checkout: refunds post twice”)'),
+        el('label', { class: 'small' }, 'At most ', trMax, ' characters'),
+        el('label', { class: 'check small' }, trPaths, 'No file paths or file names'),
+        el('label', { class: 'check small' }, trIds, 'No code: commit prefixes, function names, camelCase or snake_case'),
+        el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Internal names to avoid, separated by commas' }), trNames),
+        el('div', { class: 'row-end' }, el('button', { class: 'primary small', type: 'submit', text: 'Save title rules' })),
+      ),
+    );
     return [
+      titleRulesSection,
       el('section', { class: 'settings-section' },
         el('h3', { text: 'Folders' }),
         el('p', { class: 'muted small', text: 'Group tickets by area. The board and list show a group per folder; agents can add folders and file tickets into them.' }),

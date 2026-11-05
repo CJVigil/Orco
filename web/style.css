@@ -6270,3 +6270,21 @@ body.lightbox-open {
   flex: 1 1 12rem;
   min-width: 8rem;
 }
+
+/* Plain ticket titles (#139) */
+.title-hint {
+  margin: -0.2rem 0 0.2rem;
+}
+
+.title-hint.warn {
+  color: var(--danger);
+}
+
+.title-rules {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.title-rules input[type='number'] {
+  width: 4.5rem;
+}

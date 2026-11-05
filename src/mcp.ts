@@ -1,3 +1,4 @@
+import { describeRules, titleIssue } from './titles.js';
 import { READ_ONLY_TOOLS, TOOLS } from './tooltable.js';
 import { messageLink, taskLink, ticketLink, withUrl } from './links.js';
 import { createRequire } from 'node:module';
@@ -311,9 +312,14 @@ function formatTicket(t: Ticket, since?: number) {
  * What a ticket write replies with: the summary, criterion ids and where the history is up to, not the
  * whole ticket (its history and every sub-ticket can run to thousands of characters). Pass full for it.
  */
+/** A soft note when a title breaks its project's title rules (#139): the ticket is filed anyway. */
+let titleNoteFor: (projectId: number, title: string) => string | null = () => null;
+
 function formatWritten(result: Written, full?: boolean) {
   const t = result.ticket;
+  const titleNote = titleNoteFor(t.projectId, t.title);
   return {
+    ...(titleNote ? { title_note: titleNote } : {}),
     ticket: full
       ? formatTicket(t)
       : {
@@ -460,6 +466,10 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
   /** The tasks behind these messages that are assigned to me, so reading them counts as seeing them. */
   const sawTasks = (messages: Message[]) => store.tasks.markSeen(me, messages.filter((m) => m.task?.assignee === me.name).map((m) => m.task!.id));
 
+  titleNoteFor = (projectId, title) => {
+    const issue = titleIssue(title, store.titleRules.forProject(projectId));
+    return issue ? `Title rule: ${issue}. It was filed as written; fix it with update_ticket.` : null;
+  };
   const server: McpServer = new McpServer(
     { name: 'orco', version: VERSION },
     {
@@ -1335,6 +1345,7 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
       annotations: annotate('create_ticket'),
       description:
         'File a ticket in a project. It starts in the first backlog status unless you pass one. When the project has folders (list_folders), put it in the one that fits with folder. ' +
+        `Titles: ${describeRules()} (project_plan.titleRules has this project's; a title that breaks them comes back with title_note). ` +
         'When project_plan lists intake forms, file reports with the matching form: form is its name and fields its values by label; missing required fields are refused by name, and the form sets labels, folder and assignee. ' +
         'Replies with a summary; full: true for the whole ticket.',
       inputSchema: z.object({
@@ -1363,7 +1374,8 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         'Change a ticket: move its status, edit fields, reassign it, or close it as a duplicate. Only the fields you pass ' +
         'change. If you are working a ticket through a task, finish the task with update_task as well. Replies with a ' +
         'summary; full: true for the whole ticket. Changing many tickets? Use update_tickets. Keep next_step current (one line, ' +
-        'shown on the card); need a person to act? set waiting_on and waiting_ask. Descriptions and handoffs: lead with the point.',
+        'shown on the card); need a person to act? set waiting_on and waiting_ask. Descriptions and handoffs: lead with the point. ' +
+        `Titles: ${describeRules()}; a title that breaks the project's rules comes back with title_note.`,
       inputSchema: z.object({
         ticket: z.string(),
         project: z.string().optional().describe('Move it to this project: it gets a new ref there, the old ref keeps opening it'),
@@ -1902,7 +1914,8 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
       description:
         `File up to ${MAX_AGENT_IMPORT} tickets in one call, for breaking a plan into work. All or nothing: every ticket is ` +
         'checked first. Give tickets a key to point parent and blocked_by at each other. Tickets filed this way do not ' +
-        'start tasks; assign and start them when ready. Try dry_run first on a big batch.',
+        'start tasks; assign and start them when ready. Try dry_run first on a big batch. ' +
+        `Titles: ${describeRules()}; each that breaks the project's rules comes back with title_note.`,
       inputSchema: z.object({
         project: z.string(),
         tickets: z
@@ -1955,7 +1968,8 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
           // Criterion ids are what criteria_done takes later, so they come back with each ticket.
           tickets: result.created.map((c) => {
             const items = !result.dryRun && c.ref ? store.tickets.get(me, c.ref).criteriaItems : [];
-            return { key: c.key, ref: c.ref, title: c.title, ...(items.length ? { criteria_items: items } : {}) };
+            const note = titleIssue(c.title, store.titleRules.forProject(store.visibleProject(me, project).id));
+            return { key: c.key, ref: c.ref, title: c.title, ...(items.length ? { criteria_items: items } : {}), ...(note ? { title_note: `Title rule: ${note}` } : {}) };
           }),
           labels_created: result.labelsCreated,
           milestones_created: result.milestonesCreated,
