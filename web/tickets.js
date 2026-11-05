@@ -1,6 +1,7 @@
 // Tickets: board, list, ticket details, milestones, cycles and workflow settings for one project.
 // Builds DOM through the `el` helper from app.js; ticket text is untrusted and only ever set as text.
 
+import { skeleton } from './skeleton.js';
 import { parseCommand } from './commands.js';
 import { voiceButton } from './voice.js';
 import { catchBigPastes } from './paste.js';
@@ -370,7 +371,7 @@ export function createTickets(ctx) {
     );
     const body = el('div', { id: 'ticket-body', class: `ticket-body tab-${t.tab}` });
     root.replaceChildren(...[tabs, t.tab === 'board' || t.tab === 'list' ? filterBar() : null, body].filter(Boolean));
-    if (!t.plan) body.append(el('p', { class: 'muted empty', text: 'Loading…' }));
+    if (!t.plan) body.append(skeleton(el, 7));
   }
 
   function moreTabs() {
@@ -2912,7 +2913,7 @@ export function createTickets(ctx) {
 
   function renderReport() {
     const r = t.report;
-    if (!r) return el('p', { class: 'muted plan-intro', text: 'Loading…' });
+    if (!r) return skeleton(el, 5);
     const pick = (range, label) =>
       el('button', { class: `ghost small${(t.reportRange ?? 'today') === range ? ' active' : ''}`, type: 'button', text: label, onclick: () => ((t.reportRange = range), void load()) });
     const folder = el(
@@ -3960,5 +3961,5 @@ export function createTickets(ctx) {
   const openFile = (_project, path) => {
     t.openFile = path;
   };
-  return { show, openFile, syncAddress, onEvent, onTask, onNotes, onSchedules, onFiles, inboxRow, openTicket, openNewTicket, navFolders, openRef, planFor, get project() { return t.project; } };
+  return { show, openFile, syncAddress, onEvent, onTask, onNotes, onSchedules, onFiles, inboxRow, openTicket, openNewTicket, navFolders, openRef, planFor, get project() { return t.project; }, get tab() { return t.tab; } };
 }

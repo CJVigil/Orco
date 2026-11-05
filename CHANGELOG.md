@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- UI pass 2:
+  - **Needs you:** cards are compact. The kind is a small label, a long request shows two lines until tapped, exact details fold under "Details", and choices are inline buttons with the first one filled.
+  - **Sidebar:** each project has a coloured initial, the folders sit folded under one "Folders" line, and Recent lists only what the sidebar is not already showing.
+  - **Board:** empty cells in folder lanes shrink to a thin strip, and go back to full size while you drag.
+  - **Statuses:** a dot and a word everywhere, in one palette. Green means done, amber in progress, blue waiting on someone, red failed or refused, grey closed.
+  - **Rooms:** task updates ("Task #12 done.") are one quiet line, and delegation chains on task cards show on hover.
+  - **Header:** the project in the title is a switcher, and long titles truncate.
+  - **Loading:** views show shimmering placeholders instead of "Loading…".
+  - **Phones:** a bottom tab bar holds Needs you (with its count), Rooms, Tickets and Agents.
+- Fixed: `style` values set from scripts were dropped by the page's content security policy, so upload progress bars and sub-task indentation never showed. They are now set through the CSSOM.
+
 - A cleaner look across the app, in both themes.
   - The work sits on a framed sheet beside a quiet sidebar, and the current room or view is a raised pill.
   - Tabs are pills, list groups and board columns sit in rounded cards, and cards share one softer border and shadow.

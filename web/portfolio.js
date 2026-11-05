@@ -1,3 +1,4 @@
+import { skeleton } from './skeleton.js';
 import { phoneLinkBlock } from './phone.js';
 // The view across projects: health per project, the roadmap, decisions, weekly digests, and the
 // controls for running many projects (pauses, budgets, policies, groups). DOM built with el() only.
@@ -52,7 +53,7 @@ export function createPortfolio(ctx) {
       { class: 'ticket-tabs', 'aria-label': 'Portfolio views' },
       TABS.map(([key, label]) => el('a', { href: `#!portfolio/${key}`, class: 'ticket-tab', 'aria-current': key === p.tab ? 'page' : null, text: label })),
     );
-    root.replaceChildren(tabs, el('div', { id: 'portfolio-body', class: 'ticket-body portfolio-body' }, el('p', { class: 'muted empty', text: 'Loading…' })));
+    root.replaceChildren(tabs, el('div', { id: 'portfolio-body', class: 'ticket-body portfolio-body' }, skeleton(el, 5, { kind: 'cards' })));
     await load();
   }
 

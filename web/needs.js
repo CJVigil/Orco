@@ -18,6 +18,15 @@ export function createNeeds(ctx) {
     return h < 5 ? 'Good evening' : h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
   };
 
+  /** Exact details (scope, diffs, payloads) fold away behind one line; the decision stays in view. */
+  const foldBody = (parts) => {
+    const nodes = [parts].flat().filter(Boolean);
+    if (!nodes.length) return null;
+    const warnings = nodes.filter((n) => n.classList?.contains('approval-warning'));
+    const rest = nodes.filter((n) => !warnings.includes(n));
+    return [...warnings, rest.length ? el('details', { class: 'needs-more' }, el('summary', { class: 'small muted', text: 'Details' }), rest) : null];
+  };
+
   /** The things waiting on this person, most urgent first, each with what to show and its action. */
   function items(inbox) {
     const out = [];
@@ -266,9 +275,15 @@ export function createNeeds(ctx) {
             el(
               'div',
               { class: 'needs-main' },
-              el('strong', { class: 'needs-line', text: item.title }),
+              // Two lines at most until tapped: long requests no longer push the choices off screen.
+              el('strong', {
+                class: 'needs-line clamped',
+                text: item.title,
+                title: 'Show all',
+                onclick: (event) => event.currentTarget.classList.toggle('clamped'),
+              }),
               item.detail ? el('div', { class: 'needs-detail muted small', text: item.detail }) : null,
-              item.body ? item.body() : null,
+              item.body ? foldBody(item.body()) : null,
             ),
             item.choices ? numberedChoices(article, item.choices()) : null,
             item.note ? el('p', { class: 'approve-again muted small', text: item.note }) : null,

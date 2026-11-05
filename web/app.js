@@ -1,3 +1,4 @@
+import { skeleton } from './skeleton.js';
 import { attachMentionAutocomplete, attachSuggest } from './autocomplete.js';
 import { commandSuggestions, parseCommand } from './commands.js';
 import { createPalette } from './palette.js';
@@ -63,6 +64,8 @@ function el(tag, props = {}, ...children) {
     if (value === undefined || value === null || value === false) continue;
     if (key === 'class') node.className = value;
     else if (key === 'text') node.textContent = value;
+    // Through the CSSOM: the page's CSP (style-src 'self') drops style attributes set any other way.
+    else if (key === 'style') node.style.cssText = value;
     else if (key.startsWith('on')) node.addEventListener(key.slice(2), value);
     else node.setAttribute(key, value === true ? '' : value);
   }
@@ -261,7 +264,7 @@ function renderMessage(message, previous, { inThread = false } = {}) {
   const node = el(
     'li',
     {
-      class: `msg${continued ? ' continued' : ''}${mentionsMe ? ' mentions-me' : ''}`,
+      class: `msg${continued ? ' continued' : ''}${mentionsMe ? ' mentions-me' : ''}${isStatusLine(message) ? ' msg-status' : ''}`,
       'data-id': message.id,
     },
     avatar(message.author, message.authorKind),
@@ -351,6 +354,11 @@ function outlinePreviews(text) {
       return card;
     }),
   );
+}
+
+/** A task's own update ("Task #12 done.", "Task #13 cancelled. Stopped with…"): shown as one quiet line. */
+function isStatusLine(message) {
+  return !message.task && !message.approval && !message.question && !message.review && !(message.attachments || []).length && /^(@[a-z0-9-]+ )?Task #\d+ (done|failed|cancelled|declined|accepted)\./.test(message.text ?? '');
 }
 
 function formatBytes(bytes) {
@@ -1011,7 +1019,7 @@ function taskCard(message) {
     { class: `task-card task-${taskState}` },
     el('button', { class: 'task-id link-button', type: 'button', title: 'Copy a link to this task', text: `Task #${id}`, onclick: () => void copyLink(`!t/${id}`, `Link to task #${id}`) }),
     el('span', { class: 'muted', text: `→ ${assignee}` }),
-    chain.length > 1 ? el('span', { class: 'muted small', title: chain.join(' → '), text: `from ${chain[0]} via ${chain.slice(1).join(', ')}` }) : null,
+    chain.length > 1 ? el('span', { class: 'muted small task-chain', title: chain.join(' → '), text: `from ${chain[0]} via ${chain.slice(1).join(', ')}` }) : null,
     stalled
       ? el('span', { class: 'chip stalled', title: `No sign of life from ${assignee} for a while; it may have crashed`, text: 'Stalled' })
       : el(
@@ -1941,8 +1949,16 @@ function toggleFold(key) {
   renderNav();
 }
 
+/** A project's colour, the same everywhere, from its name. */
+function projectHue(name) {
+  let h = 0;
+  for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) % 360;
+  return h;
+}
+
 function groupHead(key, label, hidden, extra = null) {
   const folded = foldedGroups().has(key);
+  const project = key.startsWith('project:') ? key.slice(8) : null;
   return el(
     'div',
     { class: 'nav-group-head' },
@@ -1956,6 +1972,8 @@ function groupHead(key, label, hidden, extra = null) {
         onclick: () => toggleFold(key),
       },
       el('span', { class: 'fold-caret', 'aria-hidden': 'true', text: folded ? '▸' : '▾' }),
+      // Each project gets a coloured initial, so it is easy to find in a long list.
+      project ? el('span', { class: 'project-mark', 'aria-hidden': 'true', style: `--hue: ${projectHue(project)}`, text: project[0].toUpperCase() }) : null,
       el('span', { text: label }),
       folded && hidden ? el('span', { class: 'fold-count', text: `+${hidden}` }) : null,
     ),
@@ -1968,6 +1986,39 @@ function groupHead(key, label, hidden, extra = null) {
  * your projects (each with its tickets, folders and rooms), the other server rooms, and what you
  * opened recently. Every group folds from its name, and a folded group still shows what is new.
  */
+const FOLDERS_OPEN_KEY = 'orco.foldersOpen';
+function navFoldersGroup(project) {
+  const items = tickets.navFolders(project);
+  const list = [items].flat().filter(Boolean);
+  if (!list.length) return null;
+  let open = false;
+  try {
+    open = (JSON.parse(localStorage.getItem(FOLDERS_OPEN_KEY) || '[]') || []).includes(project);
+  } catch {
+    // Folded.
+  }
+  const active = list.some((n) => n.classList?.contains('active'));
+  return el(
+    'details',
+    {
+      class: 'nav-folders',
+      open: open || active,
+      ontoggle: (event) => {
+        try {
+          const set = new Set(JSON.parse(localStorage.getItem(FOLDERS_OPEN_KEY) || '[]'));
+          if (event.target.open) set.add(project);
+          else set.delete(project);
+          localStorage.setItem(FOLDERS_OPEN_KEY, JSON.stringify([...set]));
+        } catch {
+          // Lasts for this page.
+        }
+      },
+    },
+    el('summary', { class: 'room-link nav-folders-head' }, el('span', { class: 'fold-caret', 'aria-hidden': 'true', text: '▸' }), el('span', { text: 'Folders' }), el('span', { class: 'muted small nav-count', text: String(list.filter((n) => n.classList?.contains('folder-link') && !n.classList.contains('folder-new')).length || '') })),
+    list,
+  );
+}
+
 function renderNav() {
   const nav = $('nav');
   nav.replaceChildren();
@@ -2012,8 +2063,8 @@ function renderNav() {
               icon('task'),
               el('span', { text: 'Tickets' }),
             ),
-        // The folders of the project whose tickets are on screen (#91).
-        onTickets ? el('div', { class: 'nav-folders' }, tickets.navFolders(project.name)) : null,
+        // The folders of the project whose tickets are on screen (#91), folded until opened.
+        onTickets ? navFoldersGroup(project.name) : null,
         shown.map(roomLink),
       );
     })
@@ -2032,8 +2083,10 @@ function renderNav() {
   // Recent: what you opened lately, without the room you are in or the ticket on screen.
   const current = state.view === 'room' ? state.room?.ref : null;
   const openTicketRef = tickets.openRef()?.ref;
+  const visible = new Set([...nav.querySelectorAll('a.room-link')].map((a) => decodeURIComponent((a.getAttribute('href') || '').slice(1))));
   const recent = recentItems()
-    .filter((item) => (item.kind === 'room' ? item.ref !== current && state.rooms.some((r) => r.ref === item.ref && !isHome(r)) : item.ref !== openTicketRef))
+    // Only what the sidebar does not already show: a room in a folded group, or a ticket.
+    .filter((item) => (item.kind === 'room' ? item.ref !== current && !visible.has(item.ref) && state.rooms.some((r) => r.ref === item.ref && !isHome(r)) : item.ref !== openTicketRef))
     .slice(0, 5);
   if (recent.length) {
     const folded = foldedGroups().has('recent');
@@ -2060,6 +2113,21 @@ function roomFromHash() {
   return state.rooms.find((r) => r.ref === ref) || state.rooms.find((r) => r.ref === 'lobby') || state.rooms[0];
 }
 
+/** The project in the title is a switcher: the same place in another project, or its #general. */
+function projectSwitch(current, target) {
+  if (state.projects.length < 2) return el('span', { class: 'project', text: current });
+  return el(
+    'select',
+    {
+      class: 'project-switch',
+      'aria-label': 'Switch project',
+      title: 'Switch project',
+      onchange: (event) => (location.hash = target(event.target.value)),
+    },
+    state.projects.map((p) => el('option', { value: p.name, text: p.name, selected: p.name === current })),
+  );
+}
+
 function renderRoomTitle() {
   const title = $('room-title');
   title.replaceChildren();
@@ -2072,11 +2140,11 @@ function renderRoomTitle() {
   }
   $('show-members').hidden = false;
   if (state.view === 'tickets') {
-    title.append(el('span', { class: 'project', text: `${tickets.project} / ` }), 'Tickets');
+    title.append(projectSwitch(tickets.project, (p) => `#~${p}/${tickets.tab ?? 'board'}`), el('span', { class: 'project title-sep', text: '/' }), 'Tickets');
     document.title = `${tickets.project} tickets · Orco`;
     return;
   }
-  if (state.room.project) title.append(el('span', { class: 'project', text: `${state.room.project} / ` }));
+  if (state.room.project) title.append(projectSwitch(state.room.project, (p) => `#${p}/${state.rooms.some((r) => r.project === p && r.name === state.room.name) ? state.room.name : 'general'}`), el('span', { class: 'project title-sep', text: '/' }));
   title.append(isHome(state.room) ? 'Home' : `#${state.room.name}`);
   // The room's status line: its current state, set by anyone who can write here.
   const status = roomStatuses.get(state.room.ref);
@@ -2163,6 +2231,9 @@ function setView(view) {
   $('portfolio').classList.toggle('active', view === 'portfolio');
   $('needs-view').hidden = view !== 'needs';
   $('needs').classList.toggle('active', view === 'needs');
+  $('tab-needs').classList.toggle('active', view === 'needs');
+  $('tab-rooms').classList.toggle('active', view === 'room');
+  $('tab-tickets').classList.toggle('active', view === 'tickets');
   renderWorkStatus();
 }
 
@@ -2235,6 +2306,9 @@ async function selectRoom() {
   renderRoomTitle();
   if (changed) {
     state.roomLoad = (async () => {
+      // The shape of the room while it loads, instead of the last room's messages or nothing.
+      $('message-list').replaceChildren(el('li', { class: 'skeleton-li' }, skeleton(el, 6, { kind: 'messages' })));
+      $('empty').hidden = true;
       const messages = await api(`/messages?room=${encodeURIComponent(room.ref)}&top_level=1&limit=${PAGE}`);
       if (state.room.ref !== room.ref) return;
       state.messages = messages;
@@ -2715,7 +2789,7 @@ function scorecard(card, spend) {
 
 async function showTrail(taskId) {
   openPanel('trail', `Task #${taskId} trail`);
-  $('panel-body').replaceChildren(el('p', { class: 'panel-intro muted small', text: 'Loading…' }));
+  $('panel-body').replaceChildren(skeleton(el, 4));
   let entries;
   let runs;
   try {
@@ -3700,6 +3774,8 @@ async function refreshInbox() {
   const needsCount = c.approvals + c.questions + (c.waiting ?? 0) + (c.reviews ?? 0) + c.flags + c.stalled;
   $('needs-count').hidden = needsCount === 0;
   $('needs-count').textContent = String(needsCount);
+  $('tab-needs-count').hidden = needsCount === 0;
+  $('tab-needs-count').textContent = String(needsCount);
   if (state.panel === 'inbox') renderInbox(inbox);
 }
 
@@ -4357,6 +4433,22 @@ document.addEventListener('click', (event) => {
 });
 $('load-older').addEventListener('click', () => void loadOlder());
 $('toggle-sidebar').addEventListener('click', () => $('sidebar').classList.toggle('open'));
+// The phone tab bar (UI pass 2).
+$('tab-needs').addEventListener('click', () => {
+  $('sidebar').classList.remove('open');
+  location.hash = '#!needs';
+});
+$('tab-rooms').addEventListener('click', () => $('sidebar').classList.toggle('open'));
+$('tab-tickets').addEventListener('click', () => {
+  $('sidebar').classList.remove('open');
+  const project = state.room?.project ?? tickets.project ?? state.projects[0]?.name;
+  if (project) location.hash = `#~${project}/board`;
+  else toast('Join a project to see its tickets');
+});
+$('tab-agents').addEventListener('click', () => {
+  $('sidebar').classList.remove('open');
+  $('my-agents').click();
+});
 window.addEventListener('hashchange', () => {
   // Going somewhere brings the conversation back beside a full-width panel.
   $('app').classList.remove('panel-full');

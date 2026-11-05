@@ -6644,3 +6644,376 @@ select {
 .needs-item .approve-again {
   grid-column: 2;
 }
+
+/* Needs you, compact (UI pass 2): the kind as a small label, a two-line title, inline choices. */
+.needs-item {
+  grid-template-columns: 1fr;
+  gap: 0.35rem;
+  padding: 0.8rem 0.95rem;
+}
+
+.needs-kind {
+  justify-self: start;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  font-size: 10.5px;
+}
+
+.needs-item > .choices,
+.needs-actions,
+.needs-item .approve-again {
+  grid-column: 1;
+}
+
+.needs-line {
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.needs-line.clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.needs-more > summary {
+  cursor: pointer;
+  margin: 0.2rem 0;
+}
+
+.needs-item .choice-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.needs-item .choice {
+  width: auto;
+  min-height: 1.9rem;
+  padding: 0.25rem 0.6rem 0.25rem 0.35rem;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.needs-item .choice.first {
+  background: var(--primary-bg);
+  color: var(--primary-text);
+  border-color: var(--primary-bg);
+}
+
+.needs-item .choice.first .choice-key {
+  background: color-mix(in srgb, var(--primary-text) 20%, transparent);
+  color: var(--primary-text);
+}
+
+.needs-item .approve-again {
+  margin: 0;
+  font-size: 11.5px;
+}
+
+/* Sidebar (UI pass 2): coloured project initials, folders folded under one line. */
+.project-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 5px;
+  background: hsl(var(--hue) 55% 52%);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.nav-group-head .nav-fold {
+  gap: 0.35rem;
+}
+
+.nav-folders > summary {
+  list-style: none;
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.nav-folders > summary::-webkit-details-marker {
+  display: none;
+}
+
+.nav-folders[open] > summary .fold-caret {
+  transform: rotate(90deg);
+}
+
+.nav-folders .fold-caret {
+  display: inline-block;
+  width: 1.1em;
+  text-align: center;
+  font-size: 10px;
+  transition: transform 0.12s;
+}
+
+.nav-folders .nav-count {
+  margin-left: auto;
+}
+
+/* Board (UI pass 2): an empty cell in a folder lane is a thin strip, full size again while dragging. */
+.lane-cell:not(:has(.ticket-card)):not(:has(.column-more)) {
+  min-height: 0.6rem;
+  background: transparent;
+  border: 1px dashed color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+.board:has(.ticket-card.dragging) .lane-cell {
+  min-height: 3rem;
+}
+
+.lane-cell .lane-cards:empty {
+  display: none;
+}
+
+.lane-cell {
+  border-radius: var(--radius);
+}
+
+/*
+ * One status language (UI pass 2): a dot and a word, in four colours everywhere: green done, amber
+ * in progress, accent waiting on someone, red failed or refused, grey closed.
+ */
+:root {
+  --st-done: #2f9e6b;
+  --st-working: #d38b1a;
+  --st-waiting: var(--accent);
+  --st-bad: #e5484d;
+  --st-closed: var(--idle);
+}
+
+.task-done, .approval-approved, .question-answered, .question-resumed, .review-approved { --task-edge: var(--st-done); }
+.task-accepted, .review-changes_requested { --task-edge: var(--st-working); }
+.task-requested, .task-awaiting_approval, .task-needs_input, .approval-pending, .question-open, .review-pending { --task-edge: var(--st-waiting); }
+.task-failed, .task-declined, .approval-denied, .chip.stalled { --task-edge: var(--st-bad); }
+.task-cancelled, .approval-expired, .question-cancelled, .review-withdrawn { --task-edge: var(--st-closed); }
+
+.chip {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.chip::before {
+  width: 7px;
+  height: 7px;
+}
+
+.chip.stalled::before {
+  background: var(--st-bad);
+}
+
+/* The state words in the ticket list and on cards read the same way. */
+.state-working { color: var(--st-done); }
+.state-stale { color: var(--st-working); }
+.state-blocked { color: var(--st-bad); }
+
+/* Quieter rooms (UI pass 2): task updates as one line; delegation chains on hover. */
+.msg.msg-status {
+  padding-top: 0.15rem;
+  padding-bottom: 0.15rem;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.msg.msg-status .avatar {
+  transform: scale(0.6);
+  transform-origin: top center;
+  opacity: 0.7;
+}
+
+.msg.msg-status .msg-head {
+  font-size: 12px;
+}
+
+.msg.msg-status .body,
+.msg.msg-status .md {
+  color: var(--muted);
+}
+
+.task-card .task-chain {
+  display: none;
+}
+
+.task-card:hover .task-chain,
+.task-card:focus-within .task-chain {
+  display: inline;
+}
+
+/* Header (UI pass 2): the project is a switcher; long titles truncate. */
+.room-title {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+}
+
+.project-switch {
+  appearance: none;
+  -webkit-appearance: none;
+  max-width: 12rem;
+  padding: 0.1rem 1.1rem 0.1rem 0.35rem;
+  border: 0;
+  border-radius: 6px;
+  background: transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpath d='M2 4l3 3 3-3' fill='none' stroke='%2371717a' stroke-width='1.4'/%3E%3C/svg%3E") no-repeat right 0.3rem center;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  text-overflow: ellipsis;
+}
+
+.project-switch:hover {
+  background-color: var(--bg-hover);
+  color: var(--text);
+}
+
+/* Loading (UI pass 2): shimmering placeholders shaped like what is coming. */
+.skeleton {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem 1.25rem;
+}
+
+.skeleton-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.skeleton-dot,
+.skeleton-bar {
+  display: block;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--bg-hover) 0%, color-mix(in srgb, var(--bg-hover) 40%, var(--bg)) 50%, var(--bg-hover) 100%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+.skeleton-dot {
+  flex: none;
+  width: 0.9rem;
+  height: 0.9rem;
+  border-radius: 50%;
+}
+
+.skeleton-bar {
+  height: 0.7rem;
+}
+
+.skeleton-messages .skeleton-dot {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 8px;
+}
+
+.skeleton-messages .skeleton-bar {
+  height: 0.85rem;
+}
+
+.skeleton-cards {
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+}
+
+.skeleton-cards .skeleton-row {
+  height: 5rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  align-items: flex-start;
+}
+
+.skeleton-li {
+  list-style: none;
+}
+
+@keyframes skeleton-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-dot,
+  .skeleton-bar {
+    animation: none;
+  }
+}
+
+/* Phone tab bar (UI pass 2). */
+.tabbar {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .tabbar {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 40;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    padding: 0.25rem 0.25rem max(0.25rem, env(safe-area-inset-bottom));
+    border-top: 1px solid var(--border);
+    background: color-mix(in srgb, var(--bg) 92%, transparent);
+    backdrop-filter: blur(12px);
+  }
+
+  .tabbar button {
+    position: relative;
+    display: grid;
+    justify-items: center;
+    gap: 0.1rem;
+    padding: 0.35rem 0 0.25rem;
+    border: 0;
+    background: none;
+    color: var(--muted);
+    font-size: 10.5px;
+    font-weight: 500;
+  }
+
+  .tabbar button .svg-icon {
+    width: 20px;
+    height: 20px;
+  }
+
+  .tabbar button.active {
+    color: var(--text);
+  }
+
+  .tab-badge {
+    position: absolute;
+    top: 0.15rem;
+    left: calc(50% + 0.35rem);
+    min-width: 1rem;
+    padding: 0 0.3rem;
+    border-radius: 999px;
+    background: var(--danger);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1rem;
+  }
+
+  /* Room for the bar under the composer and the scrolling views. */
+  .main {
+    padding-bottom: calc(3.4rem + env(safe-area-inset-bottom));
+  }
+
+  #toggle-sidebar {
+    display: none;
+  }
+}
+
+.room-title .title-sep {
+  margin: 0 0.35rem 0 0.15rem;
+  color: var(--muted);
+}

@@ -108,6 +108,13 @@
           <button type="submit" class="primary">Send</button>
         </form>
       </main>
+      <!-- Phones (UI pass 2): the four places people go, at thumb reach. -->
+      <nav id="tabbar" class="tabbar" aria-label="Go to">
+        <button id="tab-needs" type="button" data-icon="task"><span class="label">Needs you</span><span id="tab-needs-count" class="tab-badge" hidden></span></button>
+        <button id="tab-rooms" type="button" data-icon="message"><span class="label">Rooms</span></button>
+        <button id="tab-tickets" type="button" data-icon="list"><span class="label">Tickets</span></button>
+        <button id="tab-agents" type="button" data-icon="bot"><span class="label">Agents</span></button>
+      </nav>
 
       <aside id="panel" class="panel" hidden>
         <div id="panel-resizer" class="panel-resizer" role="separator" aria-orientation="vertical" aria-label="Resize the panel" tabindex="0" title="Drag to resize · double-click for full width"></div>
