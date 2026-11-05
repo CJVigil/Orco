@@ -10,7 +10,14 @@ const SKEW_S = 120;
 export interface OidcConfig {
   issuer: string;
   clientId: string;
+  /** Empty for a public client (PKCE only, no secret), as a company hub registers its apps (#143). */
   clientSecret: string;
+  /**
+   * Hub mode (#143): the app's slug. Sign-in then asks for the groups scope, lets in only members of
+   * app-<slug>, makes app-<slug>-admin an org admin, and keys people on the provider's subject,
+   * creating them on first sign-in. Unset: people sign in by verified email, linked by an admin.
+   */
+  app?: string | null;
   /** Where the provider sends people back: <ORCO_PUBLIC_URL>/auth/oidc/callback. */
   redirectUri: string;
   /** What the sign-in button says ("Gitea"). */
@@ -24,10 +31,22 @@ interface Discovery {
   authorization_endpoint: string;
   token_endpoint: string;
   jwks_uri: string;
+  /** Where to send the browser to sign out of the provider too (RP-initiated logout). */
+  end_session_endpoint?: string;
+}
+
+/** Who the hub says signed in (#143). */
+export interface HubAccount {
+  issuer: string;
+  subject: string;
+  name: string | null;
+  email: string | null;
+  role: 'admin' | 'member';
+  idToken: string;
 }
 
 /** Why a sign-in failed, as a fixed code: the sign-in page shows its own text for each, never the provider's. */
-export type OidcFailure = 'state' | 'denied' | 'unverified' | 'domain' | 'token' | 'provider' | 'account';
+export type OidcFailure = 'state' | 'denied' | 'unverified' | 'domain' | 'token' | 'provider' | 'account' | 'group';
 
 export class OidcError extends OrcoError {
   constructor(
@@ -92,7 +111,7 @@ export class Oidc {
       response_type: 'code',
       client_id: this.config.clientId,
       redirect_uri: this.config.redirectUri,
-      scope: 'openid email profile',
+      scope: this.config.app ? 'openid profile email groups' : 'openid email profile',
       state,
       nonce,
       code_challenge: b64url(sha256(verifier)),
@@ -108,7 +127,7 @@ export class Oidc {
   async finish(
     params: { code?: unknown; state?: unknown; error?: unknown },
     cookie: string | undefined,
-  ): Promise<{ identity: string; issuer: string; subject: string; name: string | null }> {
+  ): Promise<{ identity: string; issuer: string; subject: string; name: string | null; hub?: undefined } | { hub: HubAccount }> {
     const pending = this.open(cookie);
     const state = typeof params.state === 'string' ? params.state : '';
     if (!pending || pending.expiresAt <= this.now() || !equal(state, pending.state)) {
@@ -124,9 +143,18 @@ export class Oidc {
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
           Accept: 'application/json',
-          Authorization: `Basic ${Buffer.from(`${encodeURIComponent(this.config.clientId)}:${encodeURIComponent(this.config.clientSecret)}`).toString('base64')}`,
+          // A public client proves itself with the PKCE verifier alone and names itself in the body.
+          ...(this.config.clientSecret
+            ? { Authorization: `Basic ${Buffer.from(`${encodeURIComponent(this.config.clientId)}:${encodeURIComponent(this.config.clientSecret)}`).toString('base64')}` }
+            : {}),
         },
-        body: new URLSearchParams({ grant_type: 'authorization_code', code: params.code, redirect_uri: this.config.redirectUri, code_verifier: pending.verifier }).toString(),
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          code: params.code,
+          redirect_uri: this.config.redirectUri,
+          code_verifier: pending.verifier,
+          ...(this.config.clientSecret ? {} : { client_id: this.config.clientId }),
+        }).toString(),
         redirect: 'error',
         signal: AbortSignal.timeout(15_000),
       });
@@ -141,6 +169,7 @@ export class Oidc {
     } catch (err) {
       throw err instanceof OidcError ? err : new OidcError('token', (err as Error).message);
     }
+    if (this.config.app) return { hub: this.hubAccount(claims, tokens.id_token) } as never;
     if (claims.email_verified !== true || typeof claims.email !== 'string') {
       throw new OidcError('unverified', `${this.config.label} did not vouch for an email address; Orco signs people in by verified email`);
     }
@@ -155,6 +184,39 @@ export class Oidc {
       subject: claims.sub,
       name: typeof claims.preferred_username === 'string' ? claims.preferred_username : typeof claims.name === 'string' ? claims.name : null,
     };
+  }
+
+  /** Hub mode (#143): the account, gated on the app's group, with the role its groups give. */
+  hubAccount(claims: Record<string, unknown>, idToken: string): HubAccount {
+    const slug = this.config.app!;
+    if (typeof claims.sub !== 'string' || !claims.sub) throw new OidcError('token', 'The ID token names no account');
+    const groups = (Array.isArray(claims.groups) ? claims.groups : typeof claims.groups === 'string' ? claims.groups.split(/[\s,]+/) : []).map(String);
+    if (!groups.includes(`app-${slug}`)) throw new OidcError('group', `You are not in the app-${slug} group, which this Orco requires`);
+    return {
+      issuer: String(claims.iss),
+      subject: claims.sub,
+      name: typeof claims.preferred_username === 'string' ? claims.preferred_username : typeof claims.name === 'string' ? claims.name : null,
+      email: typeof claims.email === 'string' ? claims.email : null,
+      role: groups.includes(`app-${slug}-admin`) ? 'admin' : 'member',
+      idToken,
+    };
+  }
+
+  /** Where to send the browser to sign out of the provider too, if it says (with id_token_hint). */
+  async endSessionUrl(idToken: string | undefined, returnTo: string): Promise<string | null> {
+    let d: Discovery;
+    try {
+      d = await this.discover();
+    } catch {
+      return null;
+    }
+    if (!d.end_session_endpoint) return null;
+    if (this.config.issuer.startsWith('https://') && !d.end_session_endpoint.startsWith('https://')) return null;
+    const url = new URL(d.end_session_endpoint);
+    if (idToken) url.searchParams.set('id_token_hint', idToken);
+    url.searchParams.set('post_logout_redirect_uri', returnTo);
+    url.searchParams.set('client_id', this.config.clientId);
+    return url.toString();
   }
 
   /** Checks an ID token: signature (against the issuer's published keys), issuer, audience, time and nonce. */

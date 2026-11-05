@@ -207,6 +207,7 @@ describe('ORCO_OIDC_*', () => {
       redirectUri: 'https://orco.example.com/auth/oidc/callback',
       label: 'Gitea',
       domains: ['example.com', 'corp.example'],
+      app: null,
     });
     assert.throws(() => oidcSetting(env, undefined), /ORCO_PUBLIC_URL/);
     assert.throws(() => oidcSetting({ ...env, ORCO_OIDC_CLIENT_SECRET: '' }, 'https://o.example'), /CLIENT_SECRET/);

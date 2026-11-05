@@ -21,6 +21,43 @@ export function normalizeIdentity(raw: unknown): string | null {
 export class Identities {
   constructor(private readonly store: Store) {}
 
+  /**
+   * Hub sign-in (#143): the person behind a provider account, keyed on the account's subject (never an
+   * email, which can move between accounts). Someone the hub lets in for the first time gets an Orco
+   * account, named after their username. Their org-admin role follows the hub's groups on every
+   * sign-in, except that the last org admin is never demoted by it.
+   */
+  hubSignIn(account: { issuer: string; subject: string; name: string | null; email: string | null; role: 'admin' | 'member' }): { user: Participant; created: boolean } {
+    const key = `oidc:${account.issuer}#${account.subject}`.slice(0, 254);
+    const row = this.store.db.prepare('SELECT user_id FROM identities WHERE issuer = ? AND subject = ?').get(account.issuer, account.subject) as { user_id: number } | undefined;
+    let user = row ? this.store.participantById(row.user_id) : null;
+    let created = false;
+    if (!user) {
+      const base =
+        (account.name ?? account.email?.split('@')[0] ?? 'person')
+          .toLowerCase()
+          .normalize('NFKD')
+          .replace(/[^a-z0-9-]+/g, '-')
+          .replace(/^-+|-+$/g, '')
+          .slice(0, 28) || 'person';
+      let name = /^[a-z0-9]/.test(base) ? base : `p-${base}`.slice(0, 28);
+      for (let n = 2; this.store.participantByName(name); n++) name = `${base.slice(0, 26)}-${n}`;
+      user = this.store.createUser(name, { orgAdmin: account.role === 'admin' }).participant;
+      this.store.db.prepare('INSERT INTO identities (identity, user_id, created_by, issuer, subject) VALUES (?, ?, NULL, ?, ?)').run(key, user.id, account.issuer, account.subject);
+      this.store.audit.record(null, 'identity.hub_create', { subject: `user:${name}`, detail: { issuer: account.issuer, role: account.role } });
+      created = true;
+    } else if (user.kind !== 'user' || this.store.isSystem(user)) {
+      throw new OrcoError('forbidden', 'That account is not a person here');
+    }
+    const isAdmin = this.store.isOrgAdmin(user);
+    if (account.role === 'admin' && !isAdmin) this.store.setOrgAdmin(user.name, true);
+    if (account.role === 'member' && isAdmin) {
+      const others = this.store.db.prepare("SELECT count(*) AS n FROM participants WHERE kind = 'user' AND org_admin = 1 AND id != ?").get(user.id) as { n: number };
+      if (others.n > 0) this.store.setOrgAdmin(user.name, false);
+    }
+    return { user, created };
+  }
+
   /** The person a login belongs to, if any. */
   userFor(identity: string): Participant | null {
     const row = this.store.db.prepare('SELECT user_id FROM identities WHERE identity = ?').get(identity) as { user_id: number } | undefined;

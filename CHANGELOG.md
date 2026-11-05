@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Sign in with a company OIDC hub. Set `ORCO_OIDC_ISSUER`, `ORCO_OIDC_APP` (the app slug) and `ORCO_APP_BASE_URL`.
+  - Orco signs in as a public client (PKCE S256, no secret) and asks for `groups`.
+  - Only members of `app-<slug>` get in, and `app-<slug>-admin` makes someone an org admin.
+  - People are keyed on `sub`, and created on their first sign-in.
+  - Signing out also signs out of the hub, through its end-session URL with `id_token_hint`.
+  - `ORCO_FRAME_ANCESTORS` lets listed https origins, such as the hub, show Orco in a frame.
+  - Agent tokens are unchanged.
+
 - Ranked search that forgives typos and includes project files.
   - A full-text index (SQLite FTS5 with trigrams) covers messages, tickets with their comments, notes, tasks, and the newest version of each project file. Triggers keep it current, and existing data is indexed on upgrade.
   - Results are ranked: an exact ticket ref first, then title over body, whole word, prefix, then one-letter typos, with newer items breaking ties. A misspelled customer name still finds its tickets.

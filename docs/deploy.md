@@ -131,6 +131,9 @@ deploys it.
 | `ORCO_OIDC_ISSUER` | unset | Sign in with an OpenID Connect provider (Gitea, Forgejo, Google, …); needs `ORCO_PUBLIC_URL`, `ORCO_OIDC_CLIENT_ID` and `ORCO_OIDC_CLIENT_SECRET`. See [Sign in with Gitea](#sign-in-with-gitea-forgejo-or-google-openid-connect) |
 | `ORCO_OIDC_LABEL` | the issuer's host | What the sign-in button calls it, like `Gitea` |
 | `ORCO_OIDC_DOMAINS` | unset | Comma-separated email domains allowed to sign in this way |
+| `ORCO_OIDC_APP` | unset | Company hub mode: the app's slug (like `orco`). Asks for `groups`, lets in only `app-<slug>`, makes `app-<slug>-admin` an org admin, keys people on `sub` and creates them on first sign-in. The client secret becomes optional (a public client with PKCE). See [Sign in with a company hub](#sign-in-with-a-company-oidc-hub) |
+| `ORCO_APP_BASE_URL` | unset | The same as `ORCO_PUBLIC_URL`, under the name company hubs use |
+| `ORCO_FRAME_ANCESTORS` | unset | https origins allowed to show Orco in a frame, like `https://hub.example.com` (Orco itself is always allowed); unset, nobody may |
 | `ORCO_AUTH_HEADER` | unset | Sign in through a proxy ("Sign in with Google"): the header in which your sign-in proxy passes the signed-in email or login. Needs `ORCO_TRUST_PROXY` set to the proxy's address and `ORCO_AUTH_SECRET`. See [Sign in with Google](#sign-in-with-google-through-your-proxy) |
 | `ORCO_AUTH_SECRET` | unset | With `ORCO_AUTH_HEADER`: at least 32 random characters the proxy sends in `X-Orco-Auth-Secret`, so nothing else on its host or network can sign in as anyone |
 | `ORCO_AUTH_LABEL` | `your sign-in provider` | What the sign-in page calls it, like `Google` |
@@ -203,6 +206,31 @@ or Forgejo with email confirmation off (`[service] REGISTER_EMAIL_CONFIRM = fals
 marks any address as verified, so someone could register with a colleague's address before that
 colleague first signs in. Turn confirmation on, or disable open registration, and set
 `ORCO_OIDC_DOMAINS` to your own domain.
+
+## Sign in with a company OIDC hub
+
+When your company signs people into its apps through one OpenID provider, register Orco there as a
+public client (authorization code with PKCE S256, no secret) with the redirect URI
+`<ORCO_APP_BASE_URL>/auth/oidc/callback`, then:
+
+```bash
+ORCO_OIDC_ISSUER=https://auth.example.com
+ORCO_OIDC_APP=orco                         # the client id too, unless ORCO_OIDC_CLIENT_ID says otherwise
+ORCO_APP_BASE_URL=https://orco.example.com
+ORCO_FRAME_ANCESTORS=https://hub.example.com   # optional: let the hub show Orco in a frame
+```
+
+Sign-in asks for `openid profile email groups` and reads `sub` and `groups` from the ID token:
+
+- People in `app-orco` get in; anyone else is turned away with a message saying they have no access.
+- `app-orco-admin` makes someone an org admin, and losing it makes them a member again on their
+  next sign-in (the last org admin is never demoted this way). Everyone else is a member.
+- People are keyed on `sub`, so a changed username or email is still the same person. Someone signing
+  in for the first time gets an account named after their username.
+- Signing out of Orco also signs out of the hub: the browser goes to its end-session URL with
+  `id_token_hint`, and comes back to Orco.
+
+Agents and their tokens are unaffected.
 
 ## Sign in with Google (through your proxy)
 

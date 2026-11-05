@@ -400,6 +400,8 @@ export function main(): void {
       const policyErrors = store.policyFile.load();
       if (policyErrors.length) throw new OrcoError('invalid', `ORCO_POLICY_FILE has problems:\n${policyErrors.map((e) => `  - ${e}`).join('\n')}`);
       if (store.policyFile.loadedFrom) console.log(`Policy loaded from ${store.policyFile.loadedFrom}`);
+      // ORCO_APP_BASE_URL is the same thing under the name a company hub uses (#143).
+      if (!process.env.ORCO_PUBLIC_URL && process.env.ORCO_APP_BASE_URL) process.env.ORCO_PUBLIC_URL = process.env.ORCO_APP_BASE_URL;
       const publicUrl = process.env.ORCO_PUBLIC_URL || undefined;
       // Until someone has an account, a one-time code lets the first person set Orco up in the browser.
       const setupCode = store.onboarding.setupNeeded() ? randomBytes(9).toString('base64url') : undefined;
@@ -696,10 +698,15 @@ export function oidcSetting(env: NodeJS.ProcessEnv, publicUrl: string | undefine
   } catch {
     throw new OrcoError('invalid', `ORCO_OIDC_ISSUER=${issuer} is not a URL`);
   }
-  const clientId = env.ORCO_OIDC_CLIENT_ID?.trim();
-  const clientSecret = env.ORCO_OIDC_CLIENT_SECRET?.trim();
-  if (!clientId || !clientSecret) throw new OrcoError('invalid', 'ORCO_OIDC_ISSUER needs ORCO_OIDC_CLIENT_ID and ORCO_OIDC_CLIENT_SECRET (from registering Orco with the provider)');
-  if (!publicUrl) throw new OrcoError('invalid', 'ORCO_OIDC_ISSUER needs ORCO_PUBLIC_URL: the provider sends people back to <ORCO_PUBLIC_URL>/auth/oidc/callback');
+  // Hub mode (#143): ORCO_OIDC_APP names the app; its groups decide access and roles.
+  const app = env.ORCO_OIDC_APP?.trim().toLowerCase() || null;
+  if (app && !/^[a-z0-9][a-z0-9-]{0,40}$/.test(app)) throw new OrcoError('invalid', 'ORCO_OIDC_APP is an app slug, like orco');
+  const clientId = env.ORCO_OIDC_CLIENT_ID?.trim() || (app ? app : undefined);
+  const clientSecret = env.ORCO_OIDC_CLIENT_SECRET?.trim() ?? '';
+  if (!clientId) throw new OrcoError('invalid', 'ORCO_OIDC_ISSUER needs ORCO_OIDC_CLIENT_ID (from registering Orco with the provider)');
+  if (!clientSecret && !app) throw new OrcoError('invalid', 'ORCO_OIDC_ISSUER needs ORCO_OIDC_CLIENT_SECRET, unless ORCO_OIDC_APP sets up a public client with a company hub');
+  publicUrl = publicUrl ?? env.ORCO_APP_BASE_URL;
+  if (!publicUrl) throw new OrcoError('invalid', 'ORCO_OIDC_ISSUER needs ORCO_PUBLIC_URL (or ORCO_APP_BASE_URL): the provider sends people back to <it>/auth/oidc/callback');
   if (url.protocol !== 'https:' && !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) {
     throw new OrcoError('invalid', 'ORCO_OIDC_ISSUER must be https (http only for a provider on this machine)');
   }
@@ -711,5 +718,6 @@ export function oidcSetting(env: NodeJS.ProcessEnv, publicUrl: string | undefine
     redirectUri: `${publicUrl.replace(/\/+$/, '')}/auth/oidc/callback`,
     label: env.ORCO_OIDC_LABEL?.trim().slice(0, 40) || url.hostname,
     domains,
+    app,
   };
 }

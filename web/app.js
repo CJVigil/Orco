@@ -4250,6 +4250,7 @@ const SIGNIN_ERRORS = {
   state: 'That sign-in did not start in this browser, or took too long. Try again.',
   denied: 'The sign-in was cancelled or refused at the provider.',
   unverified: 'Your provider did not confirm your email address, so Orco cannot sign you in with it.',
+  group: 'Your company account does not have access to this app. Ask whoever manages app access to add you.',
   domain: 'Your email address is not in a domain allowed to sign in here.',
   token: 'The provider’s answer did not check out. Try again, or ask whoever runs Orco.',
   provider: 'Orco could not finish signing you in with the provider. Try again in a moment.',
@@ -4297,14 +4298,16 @@ $('my-agents').addEventListener('click', () => {
 });
 
 $('logout').addEventListener('click', async () => {
-  await api('/session', { method: 'DELETE' });
+  const out = await api('/session', { method: 'DELETE' });
   // Behind a sign-in proxy you are still signed in there: do not sign straight back in on reload.
   try {
     sessionStorage.setItem(SIGNED_OUT, '1');
   } catch {
     // Private mode: the proxy may sign you back in.
   }
-  location.reload();
+  // Signed in through a company hub (#143): sign out there too.
+  if (out?.redirect && /^https?:\/\//.test(out.redirect)) location.assign(out.redirect);
+  else location.reload();
 });
 
 $('new-project').addEventListener('click', () => void newProject());

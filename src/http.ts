@@ -58,6 +58,20 @@ const STATUS: Record<OrcoError['code'], number> = {
   rate_limited: 429,
 };
 const OIDC_COOKIE = 'orco_oidc';
+/**
+ * Who may show the app in a frame (#143): nobody by default; ORCO_FRAME_ANCESTORS lists origins (a
+ * company hub, like https://hub.example.com) besides Orco itself. Only plain https origins pass.
+ */
+export function frameAncestors(raw = process.env.ORCO_FRAME_ANCESTORS): string {
+  const origins = (raw ?? '')
+    .split(/[\s,]+/)
+    .map((o) => o.trim().replace(/\/+$/, ''))
+    .filter((o) => /^https:\/\/[a-z0-9.-]+(:\d+)?$/i.test(o));
+  return origins.length ? `'self' ${origins.join(' ')}` : "'none'";
+}
+
+/** The hub's ID token, for signing out there too (#143). */
+const OIDC_IDT_COOKIE = 'orco_oidc_idt';
 const OIDC_PENDING_COOKIE = 'orco_oidc_login';
 /** The header in which the sign-in proxy proves itself to Orco (ORCO_AUTH_SECRET). */
 const PROXY_SECRET_HEADER = 'x-orco-auth-secret';
@@ -513,7 +527,19 @@ export function createApp(store: Store, options: AppOptions = {}) {
     const ip = req.ip ?? 'unknown';
     try {
       if (logins.blocked(ip)) throw new OidcError('provider', 'Too many failed sign-ins. Wait 15 minutes and try again.', false);
-      const { identity, issuer, subject } = await oidc.finish(req.query, readCookie(req.headers.cookie, OIDC_COOKIE));
+      const result = await oidc.finish(req.query, readCookie(req.headers.cookie, OIDC_COOKIE));
+      // Hub mode (#143): the hub's groups decide who gets in and as what; people are keyed on its subject.
+      if (result.hub) {
+        const { user, created } = store.identities.hubSignIn(result.hub);
+        const secure = secureCookies(req, options.publicUrl);
+        res.cookie(COOKIE, store.signins.startSession(user), { httpOnly: true, sameSite: 'strict', secure, path: basePath(), maxAge: SESSION_TTL_MS });
+        // Kept for signing out of the hub too (id_token_hint); readable only by the server.
+        res.cookie(OIDC_IDT_COOKIE, result.hub.idToken, { httpOnly: true, sameSite: 'strict', secure, path: basePath(), maxAge: SESSION_TTL_MS });
+        store.audit.record(user, 'signin.oidc', { subject: `user:${user.name}`, detail: { issuer: oidc.config.issuer, hub: true, role: result.hub.role, created } });
+        res.redirect(302, basePath());
+        return;
+      }
+      const { identity, issuer, subject } = result;
       const user = store.identities.userFor(identity);
       const status = user ? store.identities.accountStatus(identity, issuer, subject) : 'unbound';
       if (status === 'mismatch') {
@@ -661,10 +687,21 @@ export function createApp(store: Store, options: AppOptions = {}) {
     res.json({ ended });
   });
 
-  app.delete('/api/session', (req, res) => {
+  app.delete('/api/session', async (req, res) => {
     const token = readCookie(req.headers.cookie, COOKIE);
     if (token && store.signins.isSession(token)) store.signins.end(token);
     res.clearCookie(COOKIE, { path: basePath() });
+    // Signed in through a hub (#143): sign out there too, with the ID token as the hint.
+    const idToken = readCookie(req.headers.cookie, OIDC_IDT_COOKIE);
+    res.clearCookie(OIDC_IDT_COOKIE, { path: basePath() });
+    if (oidc?.config.app) {
+      const back = (options.publicUrl ?? process.env.ORCO_PUBLIC_URL ?? '').replace(/\/+$/, '') || `${req.protocol}://${req.get('host')}${basePath()}`;
+      const redirect = await oidc.endSessionUrl(idToken, `${back}/`);
+      if (redirect) {
+        res.json({ redirect });
+        return;
+      }
+    }
     res.status(204).end();
   });
 
@@ -2657,7 +2694,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
       setHeaders: (res) => {
         res.setHeader(
           'Content-Security-Policy',
-          "default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'",
+          `default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors ${frameAncestors()}`,
         );
         res.setHeader('X-Content-Type-Options', 'nosniff');
         res.setHeader('Referrer-Policy', 'no-referrer');
