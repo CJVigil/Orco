@@ -3925,5 +3925,9 @@ export function createTickets(ctx) {
   /** The ticket open in the panel, for commands and the palette (#93). */
   const openRef = () => (panel() === 'ticket' && t.open ? { ref: t.open, project: t.openProject } : null);
 
-  return { show, syncAddress, onEvent, onTask, onNotes, onSchedules, onFiles, inboxRow, openTicket, openNewTicket, navFolders, openRef, planFor, get project() { return t.project; } };
+  /** Opens a project file in the Files tab (#141 search results). */
+  const openFile = (_project, path) => {
+    t.openFile = path;
+  };
+  return { show, openFile, syncAddress, onEvent, onTask, onNotes, onSchedules, onFiles, inboxRow, openTicket, openNewTicket, navFolders, openRef, planFor, get project() { return t.project; } };
 }

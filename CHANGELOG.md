@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Ranked search that forgives typos and includes project files.
+  - A full-text index (SQLite FTS5 with trigrams) covers messages, tickets with their comments, notes, tasks, and the newest version of each project file. Triggers keep it current, and existing data is indexed on upgrade.
+  - Results are ranked: an exact ticket ref first, then title over body, whole word, prefix, then one-letter typos, with newer items breaking ties. A misspelled customer name still finds its tickets.
+  - Search results have a File kind with the path and a snippet. The Ctrl+K palette uses the same ranked search.
+  - Access rules are unchanged. Searches for two-letter words fall back to plain matching. Migration 63.
+
 - Sub-tasks.
   - A task card shows the tasks it started, at any depth, with how many are open and how many wait for an approval. The list shows each one's agent, state, elapsed time, spend and what it waits on.
   - Approve or Deny appears inline for whoever decides an approval, and Stop is on each open branch.

@@ -1293,6 +1293,84 @@ export const MIGRATIONS = [
   `,  // 62: plain-language title rules per project (#139); null is the defaults.
   `
   ALTER TABLE projects ADD COLUMN title_rules TEXT;
+  `,  // 63: a full-text index for ranked, typo-forgiving search (#141). Trigram tokens let a word with one
+  // wrong letter still share most of its pieces. Rows are keyed rowid = id * 8 + kind (1 message,
+  // 2 ticket, 3 ticket comment, 4 note, 5 task, 6 project file), kept current by triggers.
+  `
+  CREATE VIRTUAL TABLE search_fts USING fts5(body, kind UNINDEXED, key UNINDEXED, tokenize = 'trigram');
+
+  CREATE TRIGGER search_message_ai AFTER INSERT ON messages BEGIN
+    INSERT INTO search_fts (rowid, body, kind, key) VALUES (NEW.id * 8 + 1, NEW.text || ' ' || coalesce(NEW.external_text, ''), 'message', NEW.id);
+  END;
+  CREATE TRIGGER search_message_au AFTER UPDATE OF text, external_text ON messages BEGIN
+    DELETE FROM search_fts WHERE rowid = OLD.id * 8 + 1;
+    INSERT INTO search_fts (rowid, body, kind, key) VALUES (NEW.id * 8 + 1, NEW.text || ' ' || coalesce(NEW.external_text, ''), 'message', NEW.id);
+  END;
+  CREATE TRIGGER search_message_ad AFTER DELETE ON messages BEGIN
+    DELETE FROM search_fts WHERE rowid = OLD.id * 8 + 1;
+  END;
+
+  CREATE TRIGGER search_ticket_ai AFTER INSERT ON tickets BEGIN
+    INSERT INTO search_fts (rowid, body, kind, key) VALUES (NEW.id * 8 + 2, NEW.title || ' ' || NEW.description || ' ' || NEW.handoff, 'ticket', NEW.id);
+  END;
+  CREATE TRIGGER search_ticket_au AFTER UPDATE OF title, description, handoff ON tickets BEGIN
+    DELETE FROM search_fts WHERE rowid = OLD.id * 8 + 2;
+    INSERT INTO search_fts (rowid, body, kind, key) VALUES (NEW.id * 8 + 2, NEW.title || ' ' || NEW.description || ' ' || NEW.handoff, 'ticket', NEW.id);
+  END;
+  CREATE TRIGGER search_ticket_ad AFTER DELETE ON tickets BEGIN
+    DELETE FROM search_fts WHERE rowid = OLD.id * 8 + 2;
+  END;
+
+  CREATE TRIGGER search_comment_ai AFTER INSERT ON ticket_activity WHEN NEW.kind = 'comment' AND NEW.body IS NOT NULL BEGIN
+    INSERT INTO search_fts (rowid, body, kind, key) VALUES (NEW.id * 8 + 3, NEW.body, 'ticket', NEW.ticket_id);
+  END;
+  CREATE TRIGGER search_comment_au AFTER UPDATE OF body ON ticket_activity WHEN NEW.kind = 'comment' BEGIN
+    DELETE FROM search_fts WHERE rowid = OLD.id * 8 + 3;
+    INSERT INTO search_fts (rowid, body, kind, key) VALUES (NEW.id * 8 + 3, coalesce(NEW.body, ''), 'ticket', NEW.ticket_id);
+  END;
+  CREATE TRIGGER search_comment_ad AFTER DELETE ON ticket_activity BEGIN
+    DELETE FROM search_fts WHERE rowid = OLD.id * 8 + 3;
+  END;
+
+  CREATE TRIGGER search_note_ai AFTER INSERT ON notes BEGIN
+    INSERT INTO search_fts (rowid, body, kind, key) VALUES (NEW.id * 8 + 4, NEW.title || ' ' || NEW.body, 'note', NEW.id);
+  END;
+  CREATE TRIGGER search_note_au AFTER UPDATE OF title, body ON notes BEGIN
+    DELETE FROM search_fts WHERE rowid = OLD.id * 8 + 4;
+    INSERT INTO search_fts (rowid, body, kind, key) VALUES (NEW.id * 8 + 4, NEW.title || ' ' || NEW.body, 'note', NEW.id);
+  END;
+  CREATE TRIGGER search_note_ad AFTER DELETE ON notes BEGIN
+    DELETE FROM search_fts WHERE rowid = OLD.id * 8 + 4;
+  END;
+
+  CREATE TRIGGER search_task_ai AFTER INSERT ON tasks BEGIN
+    INSERT INTO search_fts (rowid, body, kind, key) VALUES (NEW.id * 8 + 5, NEW.request || ' ' || coalesce(NEW.note, ''), 'task', NEW.id);
+  END;
+  CREATE TRIGGER search_task_au AFTER UPDATE OF request, note ON tasks BEGIN
+    DELETE FROM search_fts WHERE rowid = OLD.id * 8 + 5;
+    INSERT INTO search_fts (rowid, body, kind, key) VALUES (NEW.id * 8 + 5, NEW.request || ' ' || coalesce(NEW.note, ''), 'task', NEW.id);
+  END;
+  CREATE TRIGGER search_task_ad AFTER DELETE ON tasks BEGIN
+    DELETE FROM search_fts WHERE rowid = OLD.id * 8 + 5;
+  END;
+
+  -- A project file is indexed at its newest version, with its path.
+  CREATE TRIGGER search_file_ai AFTER INSERT ON file_versions BEGIN
+    DELETE FROM search_fts WHERE rowid = NEW.file_id * 8 + 6;
+    INSERT INTO search_fts (rowid, body, kind, key) VALUES (NEW.file_id * 8 + 6, (SELECT path FROM files WHERE id = NEW.file_id) || ' ' || NEW.content, 'file', NEW.file_id);
+  END;
+  CREATE TRIGGER search_file_ad AFTER DELETE ON files BEGIN
+    DELETE FROM search_fts WHERE rowid = OLD.id * 8 + 6;
+  END;
+
+  INSERT INTO search_fts (rowid, body, kind, key) SELECT id * 8 + 1, text || ' ' || coalesce(external_text, ''), 'message', id FROM messages;
+  INSERT INTO search_fts (rowid, body, kind, key) SELECT id * 8 + 2, title || ' ' || description || ' ' || handoff, 'ticket', id FROM tickets;
+  INSERT INTO search_fts (rowid, body, kind, key) SELECT id * 8 + 3, body, 'ticket', ticket_id FROM ticket_activity WHERE kind = 'comment' AND body IS NOT NULL;
+  INSERT INTO search_fts (rowid, body, kind, key) SELECT id * 8 + 4, title || ' ' || body, 'note', id FROM notes;
+  INSERT INTO search_fts (rowid, body, kind, key) SELECT id * 8 + 5, request || ' ' || coalesce(note, ''), 'task', id FROM tasks;
+  INSERT INTO search_fts (rowid, body, kind, key)
+    SELECT f.id * 8 + 6, f.path || ' ' || v.content, 'file', f.id FROM files f JOIN file_versions v ON v.file_id = f.id
+    WHERE v.version = (SELECT max(version) FROM file_versions WHERE file_id = f.id);
   `,
 ];
 

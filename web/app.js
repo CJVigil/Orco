@@ -4001,13 +4001,19 @@ async function openTask(id) {
   }
 }
 
-const KIND_LABEL = { message: 'Message', ticket: 'Ticket', note: 'Note', task: 'Task' };
+const KIND_LABEL = { message: 'Message', ticket: 'Ticket', note: 'Note', task: 'Task', file: 'File' };
 
 function openHit(hit) {
   if (hit.kind === 'message') return jumpTo({ id: Number(hit.ref), room: hit.room, threadId: hit.threadId === Number(hit.ref) ? null : hit.threadId });
   if (hit.kind === 'ticket') return tickets.openTicket(hit.ref);
   if (hit.kind === 'note') {
     location.hash = `~${hit.project}/notes`;
+    return undefined;
+  }
+  // A project file (#141) opens in the project's Files tab.
+  if (hit.kind === 'file') {
+    tickets.openFile?.(hit.project, hit.ref);
+    location.hash = `~${hit.project}/files`;
     return undefined;
   }
   return jumpTo({ id: hit.threadId, room: hit.room, threadId: null });

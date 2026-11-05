@@ -191,27 +191,31 @@ export function createPalette(ctx) {
     }
     const mine = ++seq;
     const near = localItems(query);
-    const search = query.trim() ? [{ label: `Search everything for “${query.trim()}”`, hint: 'messages, tickets, notes, tasks', group: 'search', run: () => (close(), ctx.search(query.trim())) }] : [];
+    const search = query.trim() ? [{ label: `Search everything for “${query.trim()}”`, hint: 'messages, tickets, notes, tasks, files', group: 'search', run: () => (close(), ctx.search(query.trim())) }] : [];
     if (local || !query.trim()) {
       items = [...near.slice(0, LIMIT), ...search];
       active = 0;
       render();
       if (local || !query.trim()) return;
     }
+    // The same ranked, typo-forgiving search as the search page (#141).
     let tickets = [];
     try {
-      tickets = await api(`/tickets?q=${encodeURIComponent(query.trim())}&limit=8`);
+      tickets = query.trim().length >= 2 ? await api(`/search?q=${encodeURIComponent(query.trim())}&kind=ticket&limit=8`) : [];
     } catch {
       tickets = [];
     }
     if (mine !== seq || !root || mode.kind !== 'search') return;
-    const ticketItems = tickets.map((t) => ({
-      label: `${t.ref} ${t.title}`,
-      hint: `${t.status.name}${t.assignee ? ` · ${t.assignee.name}` : ''}`,
-      group: 'ticket',
-      ticket: { ref: t.ref, project: t.project, title: t.title },
-      run: () => (close(), ctx.openTicket(t.ref)),
-    }));
+    const ticketItems = tickets.map((t) => {
+      const title = t.title.replace(new RegExp(`^${t.ref} `), '');
+      return {
+        label: `${t.ref} ${title}`,
+        hint: t.project,
+        group: 'ticket',
+        ticket: { ref: t.ref, project: t.project, title },
+        run: () => (close(), ctx.openTicket(t.ref)),
+      };
+    });
     // A ticket key typed in full goes first.
     const exact = ticketItems.filter((i) => i.ticket.ref.toLowerCase() === query.trim().toLowerCase());
     items = [...exact, ...near.slice(0, 4), ...ticketItems.filter((i) => !exact.includes(i)), ...near.slice(4, LIMIT), ...search].slice(0, LIMIT + 2);
