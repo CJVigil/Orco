@@ -6115,3 +6115,17 @@ body.lightbox-open {
   display: grid;
   gap: 0.2rem;
 }
+
+/* Pass on a question (#135) */
+.pass-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.pass-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}

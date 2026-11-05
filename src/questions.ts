@@ -2,6 +2,9 @@ import { OrcoError } from './errors.js';
 import { MENTION_ALL, type Participant, type Store } from './store.js';
 
 export type QuestionState = 'open' | 'answered' | 'resumed' | 'cancelled';
+/** One-tap passes (#135). */
+export type PassReason = 'not_me' | 'use_pick' | 'not_needed';
+export const PASS_TEXT: Record<PassReason, string> = { not_me: 'not me', use_pick: 'use your pick', not_needed: 'not needed' };
 export type QuestionTarget = 'requester' | 'owner' | 'project';
 /** `one`: asked of one participant. `project`: asked of every person who can see the task's room. */
 export type QuestionAudience = 'one' | 'project';
@@ -48,6 +51,8 @@ export interface Question {
   /** Attachments sent with the answer (#128); open images with view_image, files with read_file. */
   answerAttachments: number[];
   answeredBy: string | null;
+  /** Someone passed on it (#135), and why. */
+  passed: { reason: PassReason; by: string } | null;
   state: QuestionState;
   /** When the person (or agent) it was asked of first looked at it. */
   seenAt: string | null;
@@ -70,6 +75,7 @@ export interface QuestionSummary {
   multiSelect: boolean;
   answer: string | null;
   answerAttachments?: number[];
+  passed?: { reason: PassReason; by: string };
   answeredBy: string | null;
   seenAt: string | null;
 }
@@ -98,6 +104,9 @@ interface QuestionRow {
   multi_select: number;
   answer: string | null;
   answer_attachments: string | null;
+  pass_reason: PassReason | null;
+  passer: string | null;
+  passed_by: number | null;
   answered_by: string | null;
   state: QuestionState;
   seen_at: string | null;
@@ -108,7 +117,7 @@ interface QuestionRow {
 const QUESTION_SELECT = `
   SELECT q.id, q.task_id, t.room_id, r.project_id, p.name AS project, r.name AS room, q.message_id, t.message_id AS thread_id,
          q.asker_id, ak.name AS asker, q.target_id, tg.name AS target, tg.owner_id AS target_owner_id,
-         ak.owner_id AS assignee_owner_id, q.audience, q.kind, q.verdict, q.question, q.options, q.recommended, q.multi_select, q.answer, q.answer_attachments, ab.name AS answered_by, q.state,
+         ak.owner_id AS assignee_owner_id, q.audience, q.kind, q.verdict, q.question, q.options, q.recommended, q.multi_select, q.answer, q.answer_attachments, q.pass_reason, q.passed_by, pb.name AS passer, ab.name AS answered_by, q.state,
          q.seen_at, q.created_at, q.answered_at
   FROM questions q
   JOIN tasks t ON t.id = q.task_id
@@ -116,6 +125,7 @@ const QUESTION_SELECT = `
   LEFT JOIN projects p ON p.id = r.project_id
   JOIN participants ak ON ak.id = q.asker_id
   JOIN participants tg ON tg.id = q.target_id
+  LEFT JOIN participants pb ON pb.id = q.passed_by
   LEFT JOIN participants ab ON ab.id = q.answered_by
 `;
 
@@ -155,6 +165,7 @@ function toQuestion(row: QuestionRow): Question {
     multiSelect: row.multi_select === 1,
     answer: row.answer,
     answerAttachments: row.answer_attachments ? (JSON.parse(row.answer_attachments) as number[]) : [],
+    passed: row.pass_reason ? { reason: row.pass_reason, by: row.passer ?? '' } : null,
     answeredBy: row.answered_by,
     state: row.state,
     seenAt: row.seen_at,
@@ -179,6 +190,7 @@ function toSummary(q: Question): QuestionSummary {
     multiSelect: q.multiSelect,
     answer: q.answer,
     ...(q.answerAttachments.length ? { answerAttachments: q.answerAttachments } : {}),
+    ...(q.passed ? { passed: q.passed } : {}),
     answeredBy: q.answeredBy,
     seenAt: q.seenAt,
   };
@@ -267,6 +279,56 @@ export class Questions {
     if (!answer) throw new OrcoError('invalid', 'The answer is empty');
     if (answer.length > MAX_ANSWER) throw new OrcoError('invalid', `Answers can be at most ${MAX_ANSWER} characters`);
     return this.resolve(actor, row, answer, null, `Answer to your question on task #${row.task_id}: ${answer}`, 'question.answer', ids);
+  }
+
+  /**
+   * Passes on a question with one tap (#135). Each reason reaches the asking agent as its next message.
+   *   not_me: opens it to everyone in the project now (the escalation path), and leaves the passer's list.
+   *   use_pick: answers with the option the agent recommended.
+   *   not_needed: closes it; the agent carries on without an answer.
+   */
+  pass(actor: Participant, id: number, reason: PassReason): Question {
+    if (!['not_me', 'use_pick', 'not_needed'].includes(reason)) throw new OrcoError('invalid', 'Pass with not_me, use_pick or not_needed');
+    const row = this.openRow(actor, id);
+    if (row.kind === 'plan') throw new OrcoError('invalid', `Question ${id} is a plan; approve or reject it`);
+    const mark = () => this.store.db.prepare('UPDATE questions SET pass_reason = ?, passed_by = ? WHERE id = ?').run(reason, actor.id, id);
+    if (reason === 'use_pick') {
+      if (!row.recommended) throw new OrcoError('invalid', `Question ${id} has no recommended option`);
+      mark();
+      return this.answer(actor, id, '', [row.recommended]);
+    }
+    if (reason === 'not_needed') {
+      mark();
+      return this.resolve(
+        actor,
+        row,
+        'No answer needed: carry on without one.',
+        null,
+        `${actor.name} passed on your question on task #${row.task_id}: not needed. Carry on without an answer.`,
+        'question.pass',
+      );
+    }
+    // Not me: everyone in the project can answer, now.
+    if (row.project_id === null) throw new OrcoError('invalid', `Question ${id} is in a server room, which has no project to open it to; answer it or pass with not needed`);
+    const asker = this.store.participantById(row.asker_id)!;
+    const widen = row.audience === 'one';
+    this.store.post(
+      actor,
+      toQuestion(row).room,
+      `@${asker.name} ${actor.name} passed on your question on task #${row.task_id}: not me.${widen ? ` @${MENTION_ALL} anyone in the project can answer question ${row.id}: ${row.question.replace(/@/g, '＠')}` : ''}`,
+      row.thread_id,
+      {
+        skipRateLimit: true,
+        onInsert: () => {
+          mark();
+          if (widen) this.store.db.prepare("UPDATE questions SET audience = 'project', escalated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?").run(id);
+        },
+      },
+    );
+    const passed = this.byId(id)!;
+    this.store.audit.record(actor, 'question.pass', { projectId: passed.projectId, subject: `question:${id}`, detail: { reason, widened: widen } });
+    this.changed(passed);
+    return passed;
   }
 
   /** Approves a plan, optionally edited, or rejects it with a reason. */
@@ -362,9 +424,10 @@ export class Questions {
     const rows = this.store.db
       .prepare(
         `${QUESTION_SELECT} WHERE q.state = 'open' AND (q.target_id = ? OR tg.owner_id = ? OR (q.audience = 'project' AND ? = 'user'))
+           AND (q.passed_by IS NULL OR q.passed_by != ?)
          ORDER BY q.id`,
       )
-      .all(actor.id, actor.id, actor.kind) as unknown as QuestionRow[];
+      .all(actor.id, actor.id, actor.kind, actor.id) as unknown as QuestionRow[];
     return rows.filter((row) => this.store.canSeeRoomId(actor, row.room_id)).map(toQuestion);
   }
 

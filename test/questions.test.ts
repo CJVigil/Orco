@@ -221,3 +221,34 @@ describe('questions to the whole project', () => {
     assert.equal(code(() => store.questions.answer(cara, q.id, 'hi')), 'not_found');
   });
 });
+
+describe('passing on a question (#135)', () => {
+  it('not me opens it to the project now, tells the agent, and leaves my list', () => {
+    const task = acceptedTask();
+    const q = store.questions.ask(anaClaude, task.id, 'Which warehouse?');
+    assert.equal(store.questions.waitingOn(ben).some((x) => x.id === q.id), true);
+    const passed = store.questions.pass(ben, q.id, 'not_me');
+    assert.equal(passed.audience, 'project');
+    assert.deepEqual(passed.passed, { reason: 'not_me', by: 'ben' });
+    assert.equal(passed.state, 'open');
+    assert.match(store.unseenMentions(anaClaude).at(-1)!.text, /ben passed on your question on task #\d+: not me/);
+    assert.equal(store.questions.waitingOn(ben).some((x) => x.id === q.id), false, 'it leaves the passer’s list');
+    assert.equal(store.questions.waitingOn(ana).some((x) => x.id === q.id), true, 'everyone else in the project sees it');
+    assert.equal(store.tasks.get(anaClaude, task.id).question?.passed?.reason, 'not_me');
+  });
+
+  it('use your pick answers with the recommended option; not needed closes it', () => {
+    const task = acceptedTask();
+    const q = store.questions.ask(anaClaude, task.id, 'Staging or prod?', 'requester', 'question', { options: [{ label: 'Staging' }, { label: 'Prod' }], recommended: 'Staging' });
+    const picked = store.questions.pass(ben, q.id, 'use_pick');
+    assert.equal(picked.answer, 'Staging');
+    assert.equal(picked.passed?.reason, 'use_pick');
+    assert.match(store.unseenMentions(anaClaude).at(-1)!.text, /Staging/);
+    const q2 = store.questions.ask(anaClaude, task.id, 'Want a changelog too?');
+    assert.equal(code(() => store.questions.pass(ben, q2.id, 'use_pick')), 'invalid');
+    const closed = store.questions.pass(ben, q2.id, 'not_needed');
+    assert.equal(closed.state, 'answered');
+    assert.match(store.unseenMentions(anaClaude).at(-1)!.text, /not needed\. Carry on without an answer/);
+    assert.equal(store.questions.waitingOn(ben).some((x) => x.id === q2.id), false);
+  });
+});

@@ -1,3 +1,4 @@
+import type { PassReason } from './questions.js';
 import { AREA_TEXT, AREAS, LEVEL_TEXT, restArea } from './tooltable.js';
 import { at, basePath } from './basepath.js';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -1063,6 +1064,12 @@ export function createApp(store: Store, options: AppOptions = {}) {
     const choices = Array.isArray(req.body?.choices) ? (req.body.choices as unknown[]).map(String) : [];
     const attachmentIds = Array.isArray(req.body?.attachmentIds) ? (req.body.attachmentIds as unknown[]).map(Number) : [];
     res.json(store.questions.answer(req.participant!, id, str(req.body?.answer, 'answer') ?? '', choices, attachmentIds));
+  });
+  // Pass on a question with one tap (#135): not_me, use_pick or not_needed.
+  api.post('/questions/:id/pass', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a question id');
+    res.json(store.questions.pass(req.participant!, id, String(req.body?.reason ?? '') as PassReason));
   });
   api.post('/questions/:id/resume', (req, res) => {
     const id = optionalInt(req.params.id);

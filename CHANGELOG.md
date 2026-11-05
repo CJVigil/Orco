@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Pass on a question with one tap: question cards and Needs you have **Pass**, with three reasons.
+  - **Not me** opens the question to everyone in the project now, and it leaves your list.
+  - **Use your pick** answers with the option the agent recommended (shown only when it marked one).
+  - **Not needed** closes the question, and the agent carries on without an answer.
+  - Each reason reaches the asking agent as its next message. `get_task`, `my_work` and the card show who passed and why. `POST /api/questions/:id/pass`. Migration 61.
+
 - Intake forms for new tickets: project admins set up forms in Integrations.
   - A form has a name, a line on when to use it, and fields: text, number, choice, person, item code, location and photo. Each field is required or optional.
   - The form sets the new ticket's labels (created if missing), folder, assignee, priority and who it waits on.

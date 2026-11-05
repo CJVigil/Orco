@@ -1210,6 +1210,7 @@ function answerBox(question, onDone) {
     { class: 'answer-wrap' },
     choices,
     strip,
+    passRow(question, onDone),
     el('div', { class: 'answer-box' }, input, picker, photoButton, voiceButton(input, el, icon, (text) => toast(text)), el('button', { class: 'primary small', type: 'button', text: options.length && question.multiSelect ? 'Send' : 'Answer', onclick: () => void send() })),
   );
 }
@@ -1277,6 +1278,49 @@ function toolLevelPicker(agent) {
     el('span', { class: 'small muted', text: TOOL_LEVELS.find(([k]) => k === access.level)?.[2] ?? '' }),
     access.cap ? el('span', { class: 'small muted', text: `Capped at ${TOOL_LEVELS.find(([k]) => k === access.cap.level)?.[1]} by ${access.cap.by}` }) : null,
     custom,
+  );
+}
+
+/*
+ * Pass (#135): three one-tap ways to deal with a question you will not answer. Each reaches the
+ * asking agent as its next message.
+ */
+function passRow(question, onDone) {
+  if (question.kind === 'plan') return null;
+  const reasons = [
+    ['not_me', 'Not me', 'Open it to everyone in the project now'],
+    question.recommended ? ['use_pick', `Use your pick (${question.recommended})`, 'Answer with the option the agent recommended'] : null,
+    ['not_needed', 'Not needed', 'Close it; the agent carries on without an answer'],
+  ].filter(Boolean);
+  const choices = el(
+    'div',
+    { class: 'pass-choices', hidden: true },
+    reasons.map(([reason, label, hint]) =>
+      el('button', {
+        class: 'ghost small',
+        type: 'button',
+        title: hint,
+        text: label,
+        onclick: async () => {
+          try {
+            await api(`/questions/${question.id}/pass`, { method: 'POST', body: { reason } });
+            toast(`Passed: ${label.toLowerCase()}. ${question.asker ?? 'The agent'} has been told.`);
+            onDone?.();
+          } catch (err) {
+            alert(err.message);
+          }
+        },
+      }),
+    ),
+  );
+  return el(
+    'div',
+    { class: 'pass-row' },
+    el('button', { class: 'ghost small pass-toggle', type: 'button', text: 'Pass', 'aria-expanded': 'false', onclick: (event) => {
+      choices.hidden = !choices.hidden;
+      event.currentTarget.setAttribute('aria-expanded', String(!choices.hidden));
+    } }),
+    choices,
   );
 }
 
@@ -1355,6 +1399,7 @@ function questionCard(message) {
       q.state === 'open' ? el('span', { class: 'muted small seen' }, q.seenAt ? liveElapsed('Seen ', q.seenAt) : 'Not seen yet') : null,
     ),
     q.answer ? el('div', { class: 'question-answer', text: q.answer }) : null,
+    q.passed ? el('div', { class: 'muted small', text: `Passed by ${q.passed.by}: ${{ not_me: 'not me', use_pick: 'use your pick', not_needed: 'not needed' }[q.passed.reason] ?? q.passed.reason}` }) : null,
     canAnswer ? answerBox(q) : null,
   );
 }
@@ -1364,7 +1409,7 @@ function onQuestion(question) {
   for (const list of [state.messages, state.threadMessages]) {
     for (const message of list) {
       if (message.question && message.question.id === question.id) {
-        message.question = { ...message.question, state: question.state, answer: question.answer, answerAttachments: question.answerAttachments, answeredBy: question.answeredBy, verdict: question.verdict, seenAt: question.seenAt };
+        message.question = { ...message.question, state: question.state, answer: question.answer, answerAttachments: question.answerAttachments, passed: question.passed, audience: question.audience, answeredBy: question.answeredBy, verdict: question.verdict, seenAt: question.seenAt };
         touched = true;
       }
     }

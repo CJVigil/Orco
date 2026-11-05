@@ -1286,6 +1286,10 @@ export const MIGRATIONS = [
     updated_at TEXT NOT NULL
   );
   CREATE INDEX ticket_forms_project ON ticket_forms (project_id);
+  `,  // 61: passing on a question (#135): why, and who passed.
+  `
+  ALTER TABLE questions ADD COLUMN pass_reason TEXT;
+  ALTER TABLE questions ADD COLUMN passed_by INTEGER REFERENCES participants(id);
   `,
 ];
 
