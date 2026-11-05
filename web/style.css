@@ -6155,3 +6155,26 @@ body.lightbox-open {
   color: inherit;
   font-weight: 600;
 }
+
+/* QR codes for phones (#137) */
+.phone-link {
+  display: grid;
+  justify-items: start;
+  gap: 0.4rem;
+  margin-top: 0.75rem;
+}
+
+.qr-holder .qr {
+  border-radius: 6px;
+  image-rendering: pixelated;
+}
+
+.qr-url {
+  word-break: break-all;
+}
+
+.warning-note {
+  padding: 0.5rem 0.7rem;
+  border-left: 3px solid var(--danger);
+  background: var(--mention-bg);
+}

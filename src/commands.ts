@@ -1,3 +1,4 @@
+import { lanAddresses, localOnly, phoneHints } from './lan.js';
 import { AREA_TEXT, AREAS, type Area, LEVEL_TEXT, LEVELS, READ_ONLY_TOOLS, TOOLS } from './tooltable.js';
 import * as svc from './service.js';
 import { fileURLToPath } from 'node:url';
@@ -35,7 +36,7 @@ Server commands (run where the database lives):
   user email <name> <login> [--off]
                              Let a login from the sign-in proxy (an email, for Google) sign in as this person
   user admin <name> [--off]  Make a user an org admin, or stop
-  user link <name>           Print a one-time sign-in link for a person (an invite, or a way back in)
+  user link <name> [--qr]    Print a one-time sign-in link for a person (an invite, or a way back in); --qr adds a code a phone scans
   user signout <name>        Sign a person out of every browser (a lost laptop); token rotate also does this
   agent add <owner> <name>   Create an agent owned by a user and print its token
   token rotate <name>        Replace a user's or agent's token and print the new one
@@ -204,6 +205,7 @@ export function main(): void {
       restart: { type: 'string' },
       url: { type: 'string' },
       repo: { type: 'string' },
+      qr: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
       version: { type: 'boolean', short: 'v' },
     },
@@ -405,7 +407,7 @@ export function main(): void {
       const proxyAuth = proxyAuthSetting(process.env.ORCO_AUTH_HEADER, process.env.ORCO_AUTH_LABEL, trust, process.env.ORCO_AUTH_SECRET);
       const oidcConfig = oidcSetting(process.env, publicUrl);
       const oidc = oidcConfig ? new Oidc(oidcConfig) : undefined;
-      const { app, close, closeStreams, oauth } = createApp(store, { publicUrl, setupCode, proxyAuth, oidc, dbPath: resolve(values.db) });
+      const { app, close, closeStreams, oauth } = createApp(store, { publicUrl, setupCode, proxyAuth, oidc, dbPath: resolve(values.db), listen: { host: values.host, port: Number(values.port) } });
       const warning = networkFilesystemWarning(values.db);
       if (warning) console.error(warning);
       const backups = backupsFromEnv(store);
@@ -441,6 +443,7 @@ export function main(): void {
           if (/uniquelocal|linklocal/.test(String(trust))) console.log('  ORCO_TRUST_PROXY covers whole networks; naming the proxy\'s exact address is safer.');
         }
         if (backups) console.log(`  Backups: every ${process.env.ORCO_BACKUP_HOURS || 24}h to ${process.env.ORCO_BACKUP_DIR}`);
+        for (const line of phoneHints(values.host, port)) console.log(line);
         if (values.host !== '127.0.0.1' && values.host !== 'localhost') {
           console.log('  Not bound to localhost: put TLS in front of this (see docs/deploy.md).');
         }
@@ -516,6 +519,19 @@ export function main(): void {
       if (!name) throw new OrcoError('invalid', 'Usage: orco user link <name>');
       const link = store.signins.createLink(null, name);
       console.log(`Sign-in link for ${name} (works once, for 7 days):\n${serverBase(values)}/#signin=${link.code}`);
+      // --qr (#137): a code a phone scans, pointing at an address it can reach.
+      if (values.qr) {
+        const base = phoneBase(values);
+        if (!base) console.log('\nNo address a phone can reach: set ORCO_PUBLIC_URL, or start the server with ORCO_HOST=0.0.0.0 on a network.');
+        else {
+          const url = `${base}/#signin=${link.code}`;
+          // web/qr.js is the browser's encoder; loaded by URL so the build leaves it where it is.
+          const hint = localOnly(process.env.ORCO_HOST) && !process.env.ORCO_PUBLIC_URL ? '\nThe server must listen beyond this PC for the phone to reach it: ORCO_HOST=0.0.0.0.' : '';
+          void (import(new URL('../web/qr.js', import.meta.url).href) as Promise<{ qrText: (text: string) => string }>).then(({ qrText }) =>
+            console.log(`\nScan with the phone's camera (${url}):\n${qrText(url)}${hint}`),
+          );
+        }
+      }
       return;
     }
     case 'user admin': {
@@ -598,6 +614,14 @@ function serverBase(values: { host?: string; port?: string }): string {
   const publicUrl = process.env.ORCO_PUBLIC_URL;
   const host = values.host === '0.0.0.0' || !values.host ? 'localhost' : values.host;
   return (publicUrl || `http://${host}:${values.port ?? '7420'}`).replace(/\/+$/, '');
+}
+
+/** The address a phone can open (#137): ORCO_PUBLIC_URL, else a LAN address, never localhost. */
+function phoneBase(values: { host?: string; port?: string }): string | null {
+  if (process.env.ORCO_PUBLIC_URL) return process.env.ORCO_PUBLIC_URL.replace(/\/+$/, '');
+  if (values.host && !localOnly(values.host) && values.host !== '0.0.0.0') return `http://${values.host}:${values.port ?? '7420'}`;
+  const ip = lanAddresses()[0];
+  return ip ? `http://${ip}:${values.port ?? '7420'}` : null;
 }
 
 /**

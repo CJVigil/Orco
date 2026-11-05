@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Sign in on a phone by scanning a QR code on the PC screen.
+  - Sign in on another device, and invite links, show a large QR code, drawn by a small built-in encoder that makes no network calls.
+  - The code uses `ORCO_PUBLIC_URL`, or the address the page is open at, or one of the server's LAN addresses when you are browsing at localhost, with a picker when there are several. It never points at localhost or 127.0.0.1.
+  - When the server listens on this PC only, the app says why phones cannot reach it and how to fix that.
+  - `orco user link <name> --qr` prints the code in the terminal.
+  - At startup, `orco serve` says whether phones can reach it, which address they should use, and on Windows the firewall rule the port needs.
+
 - Five seconds to undo a tap:
   - Approvals (Yes, No and the "always" choices), question answers, passes, and replies to waiting asks are held in the browser for five seconds with **Undo** before they are sent. Undo, or closing the page, sends nothing, so a mis-tapped approval fails safe.
   - Later, and ticket status, folder, assignee and priority changes (including board drags), get an **Undo (5)** toast that reverses them, but only if nothing newer changed the ticket.

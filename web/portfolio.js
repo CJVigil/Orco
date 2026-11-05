@@ -1,3 +1,4 @@
+import { phoneLinkBlock } from './phone.js';
 // The view across projects: health per project, the roadmap, decisions, weekly digests, and the
 // controls for running many projects (pauses, budgets, policies, groups). DOM built with el() only.
 
@@ -688,12 +689,15 @@ export function createPortfolio(ctx) {
             ),
         }),
       );
-    const showLink = (who, code, intro) =>
+    const showLink = (who, code, intro) => {
       result.replaceChildren(
         el('p', { class: 'small', text: intro }),
         copyRow(`${new URL('.', location.href).href}#signin=${code}`, 'Copy link'),
         el('p', { class: 'small muted', text: `It works once, within 7 days. Send it to ${who} privately: whoever opens it first is signed in as ${who}.` }),
       );
+      // A code the invitee's phone can scan, built from an address it can reach (#137).
+      void phoneLinkBlock({ el, api }, `#signin=${code}`).then((block) => result.append(block));
+    };
     const add = async () => {
       try {
         const person = await api('/users', { method: 'POST', body: { name: name.value.trim(), ...(email?.value.trim() ? { email: email.value.trim() } : {}) } });

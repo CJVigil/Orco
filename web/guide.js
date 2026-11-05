@@ -1,3 +1,4 @@
+import { phoneLinkBlock } from './phone.js';
 // Getting started: first-run setup, adding and connecting agents, approving a computer, asking an
 // agent for something, the getting-started checklist, and plain explanations. DOM built with el() only.
 
@@ -168,10 +169,12 @@ export function createGuide(ctx) {
   async function showOtherDevice() {
     try {
       const link = await signInLink();
+      const code = link.url.slice(link.url.indexOf('#'));
       modal(
         'Sign in on another device',
         el('p', { class: 'small', text: 'Open this link on your phone or other computer. It signs you in there once, within 15 minutes.' }),
         copyBlock(link.url, 'Copy link'),
+        await phoneLinkBlock({ el, api }, code),
         el('p', { class: 'small muted', text: 'Keep it to yourself: anyone who opens it first is signed in as you.' }),
       );
     } catch (err) {

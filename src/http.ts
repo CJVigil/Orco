@@ -1,3 +1,4 @@
+import { lanAddresses, localOnly } from './lan.js';
 import type { PassReason } from './questions.js';
 import { AREA_TEXT, AREAS, LEVEL_TEXT, restArea } from './tooltable.js';
 import { at, basePath } from './basepath.js';
@@ -308,6 +309,8 @@ export interface AppOptions {
   publicUrl?: string;
   /** The database file, for the admin's Update button (#124). */
   dbPath?: string;
+  /** Where the server listens, so sign-in codes for phones use an address they can reach (#137). */
+  listen?: { host: string; port: number };
   now?: () => number;
   /** While no one has an account: the code that lets the first person set up Orco in the browser. */
   setupCode?: string;
@@ -1833,6 +1836,16 @@ export function createApp(store: Store, options: AppOptions = {}) {
     const id = optionalInt(req.params.id);
     if (id === undefined) throw new OrcoError('invalid', 'Expected a schedule id');
     res.status(201).json(store.schedules.runNow(req.participant!, id));
+  });
+  // Addresses a phone can open (#137), for sign-in and invite codes: the public URL if there is one,
+  // else this machine's LAN addresses when the server listens beyond localhost. Never loopback.
+  api.get('/phone-addresses', (req, res) => {
+    if (req.participant!.kind !== 'user') throw new OrcoError('forbidden', 'For people');
+    const publicUrl = (options.publicUrl ?? process.env.ORCO_PUBLIC_URL)?.replace(/\/+$/, '') ?? null;
+    const listen = options.listen;
+    const reachable = listen ? !localOnly(listen.host) : false;
+    const lan = reachable && listen ? lanAddresses().map((ip) => `http://${ip}:${listen.port}${basePath().replace(/\/$/, '')}`) : [];
+    res.json({ publicUrl, lan, localOnly: listen ? localOnly(listen.host) : null });
   });
   // Handoff context packs (#121): a ticket's pack, and an agent's pack size (its owner sets it).
   api.get('/tickets/:ref/pack', (req, res) => {
