@@ -1,3 +1,4 @@
+import { OUTLINE_NOTE } from './outline.js';
 import { describeRules, titleIssue } from './titles.js';
 import { READ_ONLY_TOOLS, TOOLS } from './tooltable.js';
 import { messageLink, taskLink, ticketLink, withUrl } from './links.js';
@@ -787,6 +788,49 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         }),
       },
       async ({ query, sources, since, limit }) => run(async () => ({ note: ONYX_NOTE, results: await store.onyx.search(me, query, { sources, since, limit }) })),
+    );
+  }
+
+  // Outline, the company wiki (#145): only when an org admin connected it.
+  if (store.outline.enabled) {
+    server.registerTool(
+      'outline_search',
+      {
+        annotations: annotate('outline_search'),
+        description: 'Search the company wiki (Outline): SOPs, policies, compliance docs. Use search for what is in Orco. Returns titles, links and a snippet; read one in full with outline_read.',
+        inputSchema: z.object({ query: z.string().max(500), limit: z.number().int().min(1).max(20).optional() }),
+      },
+      async ({ query, limit }) => run(async () => ({ note: OUTLINE_NOTE, results: await store.outline.search(me, query, limit) })),
+    );
+    server.registerTool(
+      'outline_read',
+      {
+        annotations: annotate('outline_read'),
+        description: 'Read an Outline document in full, by its link or id.',
+        inputSchema: z.object({ document: z.string().describe('An Outline link (https://wiki.example.com/doc/…) or document id') }),
+      },
+      async ({ document }) => run(async () => ({ note: OUTLINE_NOTE, document: await store.outline.read(me, document) })),
+    );
+    server.registerTool(
+      'outline_publish',
+      {
+        annotations: annotate('outline_publish'),
+        description:
+          'Ask to publish a ticket\'s write-up (description and handoff) or a project file as a document in an Outline collection, linked back to the ticket. ' +
+          'It publishes to the company wiki, so a person approves first; the document is created when they do and the link is added to the ticket.',
+        inputSchema: z.object({
+          ticket: z.string().optional(),
+          project: z.string().optional(),
+          path: z.string().optional().describe('A project file, with project'),
+          collection: z.string().describe('The Outline collection id'),
+          title: z.string().max(200).optional(),
+        }),
+      },
+      async (args) =>
+        run(async () => {
+          const r = await store.outline.publish(me, args);
+          return r.pending ? `Asked for approval (approval ${r.pending.approvalId}); it is published when a person approves.` : `Published: ${r.url}`;
+        }),
     );
   }
 

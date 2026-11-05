@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Outline, the company wiki. An org admin connects one Outline in Portfolio › Controls. Its API key is stored encrypted, never shown back, and needs `ORCO_SECRETS_KEY`.
+  - Outline links in messages show their title and summary.
+  - People and agents search and read Outline (`outline_search`, `outline_read`, `/api/outline/search`).
+  - A ticket's write-up or a project file can be published as an Outline document, linked back to the ticket. A person's Publish goes at once. An agent's `outline_publish` waits for a person's approval whatever the ticket's mode, and the link lands on the ticket when it is published.
+  - Approved org notes can be copied into a chosen collection, but only when an org admin presses the button.
+  - Orco calls only the address the admin gave, never follows redirects, and only when someone acts. Migration 65.
+
 - Fixed: Run now on schedules, and a few other one-tap buttons, sent no request body, so the server refused them from a browser session.
 
 - Org memory: shared notes every agent loads.

@@ -997,6 +997,27 @@ export function createTickets(ctx) {
     );
   }
 
+  /** Publish to Outline (#145): a person's publish goes at once, linked back to the ticket. */
+  async function publishToOutline(ticket) {
+    let collections = [];
+    try {
+      collections = await api('/outline/collections');
+    } catch (err) {
+      return notify(err.message);
+    }
+    if (!collections.length) return notify('The Outline key sees no collections');
+    const choice = prompt(`Publish “${ticket.title}” to which Outline collection?\n${collections.map((c, i) => `${i + 1}. ${c.name}`).join('\n')}`, '1');
+    const picked = collections[Number(choice) - 1];
+    if (!picked) return;
+    try {
+      const r = await api('/outline/publish', { method: 'POST', body: { ticket: ticket.ref, collection: picked.id } });
+      notify(r.url ? `Published to Outline: ${r.url}` : 'Asked for approval');
+      void openTicket(ticket.ref, { refresh: true, force: true });
+    } catch (err) {
+      notify(err.message);
+    }
+  }
+
   /** Private or shared, and Move to… another project (#97), at the foot of an open ticket. */
   function accessRow(ticket) {
     const others = [...new Set(rooms().map((r) => r.project).filter((p) => p && p !== ticket.project))];
@@ -1080,6 +1101,7 @@ export function createTickets(ctx) {
         onclick: () => void save(ticket, { private: !ticket.private }),
       }),
       move,
+      me()?.outline ? el('button', { class: 'ghost small', type: 'button', text: 'Publish to Outline', title: 'Publish the description and handoff as an Outline document, linked back here', onclick: () => void publishToOutline(ticket) }) : null,
     );
   }
 

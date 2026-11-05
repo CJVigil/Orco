@@ -504,7 +504,7 @@ export function createPortfolio(ctx) {
   async function controls() {
     const admin = isAdmin();
     const administered = admin ? projects().map((pr) => pr.name) : adminOf();
-    const [state, agents, groups, setup, models, onyx] = await Promise.all([api('/controls'), api('/agents'), admin ? api('/groups') : Promise.resolve([]), admin ? api('/setup') : Promise.resolve({}), admin ? api('/models') : Promise.resolve(null), admin ? api('/onyx') : Promise.resolve(null)]);
+    const [state, agents, groups, setup, models, onyx, outline] = await Promise.all([api('/controls'), api('/agents'), admin ? api('/groups') : Promise.resolve([]), admin ? api('/setup') : Promise.resolve({}), admin ? api('/models') : Promise.resolve(null), admin ? api('/onyx') : Promise.resolve(null), admin ? api('/outline') : Promise.resolve(null)]);
     if (!p.policyProject && administered[0] && !admin) p.policyProject = administered[0];
     const policy = p.policyProject || admin ? await api(`/policy${p.policyProject ? `?project=${encodeURIComponent(p.policyProject)}` : ''}`) : null;
     const scope = admin ? await api('/scope/settings') : null;
@@ -513,7 +513,7 @@ export function createPortfolio(ctx) {
     const deploy = administered.length || admin ? await Promise.all([api('/freezes'), api('/deploy-windows')]) : null;
     return [
       policyFile?.file ? el('p', { class: 'small muted plan-card', text: `Managed by the policy file ${policyFile.file}${policyFile.locked.length ? `: ${policyFile.locked.join(', ')} can only change there` : ''}.` }) : null,
-      pausesCard(state.pauses, administered, agents), deploy ? deployCard(deploy[0], deploy[1], administered, admin) : null, budgetsCard(state.budgets, administered, agents), scope ? scopeCard(scope) : null, rules ? rulesCard(rules) : null, admin ? updateCard() : null, admin ? peopleCard(setup.proxy ?? (setup.oidc ? { label: setup.oidc.label } : null)) : null, admin ? modelsCard(models) : null, admin ? onyxCard(onyx) : null, policy ? policyCard(policy, administered) : null, admin ? groupsCard(groups) : null];
+      pausesCard(state.pauses, administered, agents), deploy ? deployCard(deploy[0], deploy[1], administered, admin) : null, budgetsCard(state.budgets, administered, agents), scope ? scopeCard(scope) : null, rules ? rulesCard(rules) : null, admin ? updateCard() : null, admin ? peopleCard(setup.proxy ?? (setup.oidc ? { label: setup.oidc.label } : null)) : null, admin ? modelsCard(models) : null, admin ? onyxCard(onyx) : null, admin ? outlineCard(outline) : null, policy ? policyCard(policy, administered) : null, admin ? groupsCard(groups) : null];
   }
 
   /** Freezes and deploy windows (#112): start or end a freeze, and the weekly windows deploys keep to. */
@@ -708,6 +708,53 @@ export function createPortfolio(ctx) {
    * Onyx knowledge search: one Onyx server and its API key (stored encrypted). People search it from
    * the search box, agents with search_knowledge. Orco calls it only when someone searches.
    */
+  /* Outline, the company wiki (#145): previews, search, publish, and org notes mirrored on request. */
+  function outlineCard(outline) {
+    const current = outline?.settings;
+    const url = el('input', { placeholder: 'Outline address, like https://wiki.example.com', 'aria-label': 'Outline address', value: current?.baseUrl ?? '' });
+    const key = el('input', { placeholder: current ? 'API key (leave empty to keep it)' : 'API key', 'aria-label': 'Outline API key', type: 'password', autocomplete: 'off' });
+    const notes = el('input', { placeholder: 'Collection id for org notes (optional)', 'aria-label': 'Org notes collection', value: current?.notesCollection ?? '' });
+    return el(
+      'section',
+      { class: 'plan-card' },
+      el('h3', { text: 'Outline wiki' }),
+      el('p', {
+        class: 'small muted',
+        text: 'Connect Outline so its links show a title and summary, people and agents can search and read it, and tickets and project files can be published there (an agent’s publish waits for a person). Everyone signed in sees what this key sees. Orco calls Outline only when someone acts.',
+      }),
+      outline?.secrets ? null : el('p', { class: 'small warn-text', text: 'Turn on ORCO_SECRETS_KEY on the server first: the Outline key is stored encrypted with it.' }),
+      current
+        ? el(
+            'p',
+            { class: 'small' },
+            el('strong', { text: 'Connected' }),
+            el('span', { class: 'muted', text: ` to ${current.baseUrl} by ${current.updatedBy}` }),
+            ' ',
+            current.notesCollection
+              ? el('button', {
+                  class: 'ghost small',
+                  type: 'button',
+                  text: 'Copy org notes to Outline',
+                  title: 'Creates or updates one document per live org note in the chosen collection',
+                  onclick: () => void act(async () => notify(Object.entries(await api('/outline/sync-notes', { method: 'POST', body: {} })).map(([k, v]) => `${v} ${k}`).join(', '))),
+                })
+              : null,
+            el('button', { class: 'ghost small', type: 'button', text: 'Disconnect', onclick: () => confirm('Disconnect Outline?') && void act(() => api('/outline', { method: 'DELETE', body: {} })) }),
+          )
+        : null,
+      outline?.secrets
+        ? el(
+            'div',
+            { class: 'pf-stack' },
+            el('div', { class: 'pf-row' }, url),
+            el('div', { class: 'pf-row' }, key, notes),
+            el('p', { class: 'small muted', text: 'Make the key in Outline under Settings → API. The key is never shown again here.' }),
+            el('div', { class: 'row-end' }, el('button', { class: 'small', type: 'button', text: current ? 'Save' : 'Connect Outline', onclick: () => void act(() => api('/outline', { method: 'POST', body: { baseUrl: url.value.trim(), apiKey: key.value, notesCollection: notes.value } })) })),
+          )
+        : null,
+    );
+  }
+
   function onyxCard(onyx) {
     const current = onyx?.settings;
     const url = el('input', { placeholder: 'Onyx address, like https://onyx.example.com', 'aria-label': 'Onyx address', value: current?.baseUrl ?? '' });

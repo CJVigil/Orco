@@ -64,6 +64,8 @@ export const TOOLS: Record<string, Area> = {
   find_agent: 'read',
   summarize_thread: 'read',
   org_notes: 'read',
+  outline_search: 'read',
+  outline_read: 'read',
   // Its own things.
   remember: 'self',
   forget: 'self',
@@ -89,6 +91,7 @@ export const TOOLS: Record<string, Area> = {
   publish_artifact: 'post',
   propose_org_note: 'post',
   forget_org_note: 'post',
+  outline_publish: 'post',
   // Tickets and project records.
   create_ticket: 'tickets',
   create_tickets: 'tickets',
@@ -232,6 +235,8 @@ export function restArea(method: string, path: string): Area | 'all' {
     [/^\/(tickets|ticket-files|folders|labels|milestones|cycles|incidents|notes)(\/|$)/, 'tickets'],
     [/^\/projects\/[^/]+\/(tickets|files?|notes|folders|labels|milestones|cycles|plans)(\/|$)/, 'tickets'],
     [/^\/(messages|attachments|questions|approvals|reviews|artifacts|room-status|org-notes)(\/|$)/, 'post'],
+    [/^\/outline\/publish$/, 'post'],
+    [/^\/outline\/(search|read|preview|collections)$/, 'read'],
     [/^\/rooms\/[^/]+(\/[^/]+)?\/status$/, 'post'],
     [/^\/(memory|reminders|profile|runs|usage|presence)(\/|$)/, 'self'],
     [/^\/agents\/[^/]+\/memory(\/|$)/, 'self'],

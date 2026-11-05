@@ -276,6 +276,7 @@ function renderMessage(message, previous, { inThread = false } = {}) {
     ),
     message.text ? foldedBody(message.text) : null,
     message.text ? artifactCards(message.text) : null,
+    message.text ? outlinePreviews(message.text) : null,
     message.external ? externalBlock(message.external) : null,
     images.length
       ? el(
@@ -330,6 +331,26 @@ function renderMessage(message, previous, { inThread = false } = {}) {
     }
   }
   return node;
+}
+
+/** Cards for Outline links in a message (#145): title and summary, read with the server's key. */
+const outlineCache = new Map();
+function outlinePreviews(text) {
+  const base = state.me?.outline;
+  if (!base) return null;
+  const links = [...new Set(text.match(/https?:\/\/[^\s<>()]+/g) ?? [])].filter((u) => u.startsWith(`${base}/doc/`)).slice(0, 3);
+  if (!links.length) return null;
+  return el(
+    'div',
+    { class: 'outline-previews' },
+    links.map((url) => {
+      const card = el('a', { class: 'outline-card', href: url, target: '_blank', rel: 'noopener noreferrer' }, el('span', { class: 'small muted', text: 'Outline' }));
+      const fill = (p) => p && card.replaceChildren(el('span', { class: 'small muted', text: 'Outline' }), el('strong', { text: p.title }), el('span', { class: 'small', text: p.summary }));
+      if (!outlineCache.has(url)) outlineCache.set(url, api(`/outline/preview?url=${encodeURIComponent(url)}`).catch(() => null));
+      void outlineCache.get(url).then(fill);
+      return card;
+    }),
+  );
 }
 
 function formatBytes(bytes) {

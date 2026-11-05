@@ -18,6 +18,8 @@ export const MODE_LABEL: Record<Mode, string> = { supervised: 'Supervised', auto
 
 const OUTWARD = /\b(deploy|push|release|publish|send|email|post|tweet|merge|migrate|delete|drop|payment|charge|invoice|production|prod)\b/i;
 const DEPLOY = /\b(deploy(s|ing|ment)?|push(es|ing)?|release|ship(ping)?|roll ?out)\b/i;
+/** Publishing to the company wiki (#145) asks too, whatever the mode. */
+const WIKI = /\bpublish\b[\s\S]*\boutline\b/i;
 const EDIT = /\b(edit|change|fix|refactor|rename|update|write|add|docs?|readme|comment|test|lint|format|code)\b/i;
 
 export interface ModeInfo {
@@ -123,7 +125,7 @@ export class Modes {
    */
   allows(ticketId: number, text: string): { yes: boolean; info: ModeInfo } {
     const info = this.forTicket(ticketId);
-    if (DEPLOY.test(text)) return { yes: false, info };
+    if (DEPLOY.test(text) || WIKI.test(text)) return { yes: false, info };
     switch (info.mode) {
       case 'supervised':
         return { yes: false, info };

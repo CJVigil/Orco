@@ -1392,6 +1392,31 @@ export const MIGRATIONS = [
     replaces TEXT
   );
   CREATE INDEX org_notes_state ON org_notes (state);
+  `,  // 65: Outline as the company wiki (#145): one connection, and agents' publish requests.
+  `
+  CREATE TABLE outline_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    base_url TEXT NOT NULL,
+    ciphertext BLOB NOT NULL,
+    iv BLOB NOT NULL,
+    tag BLOB NOT NULL,
+    notes_collection TEXT,
+    updated_by INTEGER NOT NULL REFERENCES participants(id),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+  CREATE TABLE outline_publishes (
+    id INTEGER PRIMARY KEY,
+    approval_id INTEGER NOT NULL REFERENCES approvals(id),
+    requester_id INTEGER NOT NULL REFERENCES participants(id),
+    title TEXT NOT NULL,
+    text TEXT NOT NULL,
+    collection TEXT NOT NULL,
+    ticket_ref TEXT,
+    state TEXT NOT NULL,
+    url TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
   `,
 ];
 

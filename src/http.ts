@@ -723,6 +723,8 @@ export function createApp(store: Store, options: AppOptions = {}) {
       owner: store.ownerName(me),
       orgAdmin: store.isOrgAdmin(me),
       onyx: store.onyx.enabled,
+      // The wiki's address, so the app can tell its links apart for previews (#145).
+      outline: store.outline.enabled ? (store.db.prepare('SELECT base_url FROM outline_settings WHERE id = 1').get() as { base_url: string }).base_url : null,
       ...(me.kind === 'user' && !me.scope ? { attention: store.attention.settings(me) } : {}),
       ...(me.kind === 'user' && !me.scope ? { logins: store.identities.of(me.id) } : {}),
     });
@@ -799,6 +801,37 @@ export function createApp(store: Store, options: AppOptions = {}) {
         shared: b.shared === true,
       }),
     );
+  });
+  // Outline, the company wiki (#145): one connection by an org admin; the key is write-only.
+  api.get('/outline', (req, res) => {
+    res.json({ settings: store.outline.settings(req.participant!), secrets: store.secrets.enabled });
+  });
+  api.post('/outline', (req, res) => {
+    const b = req.body ?? {};
+    res.json(store.outline.save(req.participant!, { baseUrl: String(b.baseUrl ?? ''), apiKey: typeof b.apiKey === 'string' ? b.apiKey : undefined, notesCollection: b.notesCollection === undefined ? undefined : b.notesCollection }));
+  });
+  api.delete('/outline', (req, res) => {
+    store.outline.remove(req.participant!);
+    res.status(204).end();
+  });
+  api.get('/outline/search', async (req, res) => {
+    res.json(await store.outline.search(req.participant!, String(req.query.q ?? ''), optionalInt(req.query.limit)));
+  });
+  api.get('/outline/read', async (req, res) => {
+    res.json(await store.outline.read(req.participant!, String(req.query.doc ?? '')));
+  });
+  api.get('/outline/preview', async (req, res) => {
+    res.json(await store.outline.preview(req.participant!, String(req.query.url ?? '')));
+  });
+  api.get('/outline/collections', async (req, res) => {
+    res.json(await store.outline.collections(req.participant!));
+  });
+  api.post('/outline/publish', async (req, res) => {
+    const b = req.body ?? {};
+    res.json(await store.outline.publish(req.participant!, { ticket: b.ticket, project: b.project, path: b.path, collection: String(b.collection ?? ''), title: b.title }));
+  });
+  api.post('/outline/sync-notes', async (req, res) => {
+    res.json(await store.outline.syncNotes(req.participant!));
   });
   // Onyx knowledge search: one server, connected by an org admin (see onyx.ts).
   api.get('/onyx', (req, res) => {
