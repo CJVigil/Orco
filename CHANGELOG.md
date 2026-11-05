@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Agent journal and shared papercuts log (#146): every change an agent makes through a tool is journaled automatically, and the `journal` tool adds decisions and lessons with a why. `journal_search` filters by agent, project, ticket, resource and time window; `journal_digest` sums up a day. Papercuts keep the Symptom / Cause / Fix / (who, date) format, refuse duplicate symptoms, are corrected in place with `CORRECTED <date>:` and never deleted, and can be proposed as org notes. Tickets show the journal entries about them.
+
 - Fixed: the word "null" no longer appears in the Inbox (above Mentions when nothing needs you, and below the list when your agents have no open tasks), or at the end of the room's task ticker when one task is running. Empty parts are dropped before they reach the page, and a guard does the same for every `replaceChildren`, `append` and `prepend` in the app and the guest page.
 
 - UI pass 2:

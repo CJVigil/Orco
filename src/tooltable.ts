@@ -66,6 +66,9 @@ export const TOOLS: Record<string, Area> = {
   org_notes: 'read',
   outline_search: 'read',
   outline_read: 'read',
+  journal_search: 'read',
+  journal_digest: 'read',
+  papercuts_search: 'read',
   // Its own things.
   remember: 'self',
   forget: 'self',
@@ -76,6 +79,7 @@ export const TOOLS: Record<string, Area> = {
   report_progress: 'self',
   checkpoint: 'self',
   update_task: 'self',
+  journal: 'self',
   // Speaking.
   post: 'post',
   create_room: 'post',
@@ -92,6 +96,9 @@ export const TOOLS: Record<string, Area> = {
   propose_org_note: 'post',
   forget_org_note: 'post',
   outline_publish: 'post',
+  papercut_add: 'post',
+  papercut_correct: 'post',
+  promote_papercut: 'post',
   // Tickets and project records.
   create_ticket: 'tickets',
   create_tickets: 'tickets',
@@ -236,6 +243,8 @@ export function restArea(method: string, path: string): Area | 'all' {
     [/^\/projects\/[^/]+\/(tickets|files?|notes|folders|labels|milestones|cycles|plans)(\/|$)/, 'tickets'],
     [/^\/(messages|attachments|questions|approvals|reviews|artifacts|room-status|org-notes)(\/|$)/, 'post'],
     [/^\/outline\/publish$/, 'post'],
+    [/^\/journal$/, 'self'],
+    [/^\/papercuts(\/|$)/, 'post'],
     [/^\/outline\/(search|read|preview|collections)$/, 'read'],
     [/^\/rooms\/[^/]+(\/[^/]+)?\/status$/, 'post'],
     [/^\/(memory|reminders|profile|runs|usage|presence)(\/|$)/, 'self'],

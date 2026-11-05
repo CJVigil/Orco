@@ -1417,6 +1417,33 @@ export const MIGRATIONS = [
     error TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
+  `,  // 66: agent journal and shared papercuts log (#146).
+  `
+  CREATE TABLE journal (
+    id INTEGER PRIMARY KEY,
+    agent_id INTEGER NOT NULL REFERENCES participants(id),
+    at TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('action', 'decision', 'lesson')),
+    tool TEXT,
+    summary TEXT NOT NULL,
+    why TEXT,
+    resource TEXT,
+    ticket TEXT,
+    link TEXT,
+    project_id INTEGER REFERENCES projects(id)
+  );
+  CREATE INDEX journal_agent ON journal (agent_id, at);
+  CREATE INDEX journal_ticket ON journal (ticket);
+  CREATE INDEX journal_project ON journal (project_id, at);
+  CREATE TABLE papercuts (
+    id INTEGER PRIMARY KEY,
+    symptom TEXT NOT NULL,
+    cause TEXT NOT NULL,
+    fix TEXT NOT NULL,
+    author_id INTEGER NOT NULL REFERENCES participants(id),
+    created_at TEXT NOT NULL,
+    corrections TEXT NOT NULL DEFAULT '[]'
+  );
   `,
 ];
 

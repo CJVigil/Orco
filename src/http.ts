@@ -1501,7 +1501,44 @@ export function createApp(store: Store, options: AppOptions = {}) {
     const ticket = store.tickets.get(req.participant!, String(req.params.ref), optionalInt(req.query.since));
     // Org notes that mention it (#144): "notes about this".
     const notes = store.orgNotes.aboutTicket(ticket.ref).map((n) => ({ slug: n.slug, name: n.name, description: n.description, expired: n.expired }));
-    res.json(notes.length ? { ...ticket, orgNotes: notes } : ticket);
+    // Journal entries about it (#146).
+    const journal = store.journal.search(req.participant!, { ticket: ticket.ref, limit: 20 });
+    const extra = { ...(notes.length ? { orgNotes: notes } : {}), ...(journal.length ? { journal } : {}) };
+    res.json(Object.keys(extra).length ? { ...ticket, ...extra } : ticket);
+  });
+  // Agent journal and papercuts (#146).
+  api.get('/journal', (req, res) => {
+    const q = (k: string) => (typeof req.query[k] === 'string' ? String(req.query[k]) : undefined);
+    const kind = q('kind') as 'action' | 'decision' | 'lesson' | undefined;
+    res.json({ entries: store.journal.search(req.participant!, { agent: q('agent'), project: q('project'), ticket: q('ticket'), resource: q('resource'), from: q('from'), to: q('to'), kind, limit: optionalInt(req.query.limit) }) });
+  });
+  api.get('/journal/digest', (req, res) => {
+    const q = (k: string) => (typeof req.query[k] === 'string' ? String(req.query[k]) : undefined);
+    res.json(store.journal.digest(req.participant!, { agent: q('agent'), project: q('project'), date: q('date') }));
+  });
+  api.post('/journal', (req, res) => {
+    const b = req.body ?? {};
+    const entry = store.journal.record(req.participant!, { kind: b.kind === 'lesson' ? 'lesson' : 'decision', summary: String(b.summary ?? ''), why: b.why, ticket: b.ticket, resource: b.resource, link: b.link, project: b.project });
+    if (!entry) throw new OrcoError('invalid', 'Only agents keep a journal');
+    res.status(201).json(entry);
+  });
+  api.get('/papercuts', (req, res) => {
+    const text = typeof req.query.q === 'string' ? req.query.q : '';
+    res.json({ papercuts: text ? store.journal.searchPapercuts(req.participant!, text, 20) : store.journal.listPapercuts() });
+  });
+  api.post('/papercuts', (req, res) => {
+    const b = req.body ?? {};
+    res.status(201).json(store.journal.addPapercut(req.participant!, { symptom: b.symptom, cause: b.cause, fix: b.fix }));
+  });
+  api.post('/papercuts/:id/correct', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a papercut id');
+    res.json(store.journal.correctPapercut(req.participant!, id, String(req.body?.correction ?? '')));
+  });
+  api.post('/papercuts/:id/promote', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a papercut id');
+    res.status(201).json(store.journal.promotePapercut(req.participant!, id));
   });
   // Org memory (#144).
   api.get('/org-notes', (req, res) => {

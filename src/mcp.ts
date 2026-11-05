@@ -452,6 +452,22 @@ async function runTool(fn: () => unknown | Promise<unknown>): Promise<ToolResult
   }
 }
 
+const JOURNAL_SKIP = new Set(['journal', 'remember', 'forget', 'report_usage', 'report_progress', 'checkpoint', 'set_profile']);
+
+/** One line about a tool call, from its arguments: what it touched and where. */
+function journalFacts(tool: string, args: unknown): { summary: string; ticket?: string | null; room?: string | null; project?: string | null; resource?: string | null } {
+  const a = (args && typeof args === 'object' ? args : {}) as Record<string, unknown>;
+  const str = (k: string) => (typeof a[k] === 'string' || typeof a[k] === 'number' ? String(a[k]) : null);
+  const ticket = str('ticket') ?? str('ref');
+  const room = str('room');
+  const project = str('project');
+  const resource = str('resource') ?? str('path') ?? str('name');
+  const what = str('title') ?? str('summary') ?? str('text') ?? str('body') ?? str('status') ?? '';
+  const where = ticket ?? room ?? project ?? resource ?? '';
+  const summary = `${tool.replace(/_/g, ' ')}${where ? ` ${where}` : ''}${what ? `: ${what.replace(/\s+/g, ' ').slice(0, 160)}` : ''}`;
+  return { summary, ticket: ticket && /^[A-Za-z][A-Za-z0-9]*-\d+$/.test(ticket) ? ticket : null, room, project, resource };
+}
+
 export function buildMcpServer(store: Store, presence: Presence, me: Participant): McpServer {
   /** Runs a tool and tells the agent, once, about tasks of its that were cancelled while it worked. */
   const run = async (fn: () => unknown | Promise<unknown>): Promise<ToolResult> => {
@@ -512,6 +528,14 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
       const text = result?.content?.map((c) => c.text ?? '').join('') ?? '';
       const code = result?.isError ? (/^([a-z_]+):/.exec(text)?.[1] ?? 'error') : null;
       store.toolUsage.record(me, name, { bytes: Buffer.byteLength(text), ms: performance.now() - started, error: code });
+      // The journal (#146): every change an agent makes is written down, whether or not it remembers to.
+      if (!code && area !== 'read' && !JOURNAL_SKIP.has(name)) {
+        try {
+          store.journal.record(me, { kind: 'action', tool: name, ...journalFacts(name, callArgs[0]) });
+        } catch {
+          // The journal never fails the tool call it describes.
+        }
+      }
       return result;
     });
   };
@@ -833,6 +857,106 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         }),
     );
   }
+
+  // The agent journal and papercuts (#146): read when relevant, never loaded into context.
+  server.registerTool(
+    'journal',
+    {
+      annotations: annotate('journal'),
+      description:
+        'Write a decision or lesson in your journal, with a one-line why. Changes you make through tools are journaled for you; use this for what they do not show: ' +
+        'why you chose one way, what you ruled out, what you learned. Link the ticket, commit or message it is about.',
+      inputSchema: z.object({
+        kind: z.enum(['decision', 'lesson']),
+        summary: z.string().max(300).describe('One line: what you decided or learned'),
+        why: z.string().max(300).optional(),
+        ticket: z.string().optional().describe('Like API-12'),
+        resource: z.string().max(200).optional().describe('What it is about: a service, file, branch or host'),
+        link: z.string().max(500).optional().describe('An http(s) link to a commit, PR or message'),
+        project: z.string().optional(),
+      }),
+    },
+    async (args) => run(() => store.journal.record(me, args) ?? 'Only agents keep a journal; your actions are in the audit log.'),
+  );
+
+  server.registerTool(
+    'journal_search',
+    {
+      annotations: annotate('journal_search'),
+      description:
+        'Search agents\' journals: what was done and decided, newest first. Filter by agent, project, ticket, resource (a service, file or host) and time window ' +
+        '(from/to, ISO dates or times). "What touched prod between 2 and 4am?" is resource "prod", from and to.',
+      inputSchema: z.object({
+        agent: z.string().optional(),
+        project: z.string().optional(),
+        ticket: z.string().optional(),
+        resource: z.string().optional(),
+        from: z.string().optional(),
+        to: z.string().optional(),
+        kind: z.enum(['action', 'decision', 'lesson']).optional(),
+        limit: z.number().int().min(1).max(200).optional(),
+      }),
+    },
+    async (args) => run(() => ({ note: UNTRUSTED_NOTE, entries: store.journal.search(me, args) })),
+  );
+
+  server.registerTool(
+    'journal_digest',
+    {
+      annotations: annotate('journal_digest'),
+      description: 'A day of journal in a few lines ("12 tickets filed, 4 file writes, 2 decisions"), for one agent or project. date is YYYY-MM-DD, today by default.',
+      inputSchema: z.object({ agent: z.string().optional(), project: z.string().optional(), date: z.string().optional() }),
+    },
+    async (args) => run(() => store.journal.digest(me, args)),
+  );
+
+  server.registerTool(
+    'papercuts_search',
+    {
+      annotations: annotate('papercuts_search'),
+      description:
+        'Before you dig into an error, search the shared papercuts log with its exact text: someone may have hit it and written down the cause and fix. ' +
+        'Each entry is Symptom / Cause / Fix / (who, date), plus any CORRECTED lines, which win over the lines above them.',
+      inputSchema: z.object({ text: z.string().min(3).describe('The error message or symptom'), limit: z.number().int().min(1).max(20).optional() }),
+    },
+    async ({ text, limit }) => run(() => ({ note: UNTRUSTED_NOTE, papercuts: store.journal.searchPapercuts(me, text, limit) })),
+  );
+
+  server.registerTool(
+    'papercut_add',
+    {
+      annotations: annotate('papercut_add'),
+      description:
+        'Add a papercut once you have verified a failure and its fix: Symptom is the exact error text, Cause what was behind it, Fix what worked. ' +
+        'Only verified failures, no guesses and no blame. Search first; a papercut with the same symptom is refused, and you correct that one instead.',
+      inputSchema: z.object({ symptom: z.string().max(2000), cause: z.string().max(2000), fix: z.string().max(2000) }),
+    },
+    async (args) => run(() => store.journal.addPapercut(me, args).text),
+  );
+
+  server.registerTool(
+    'papercut_correct',
+    {
+      annotations: annotate('papercut_correct'),
+      description: 'Correct a papercut that turned out wrong or incomplete. Papercuts are never deleted: your correction is added as "CORRECTED <date>: …".',
+      inputSchema: z.object({ id: z.number().int(), correction: z.string().max(2000) }),
+    },
+    async ({ id, correction }) => run(() => store.journal.correctPapercut(me, id, correction).text),
+  );
+
+  server.registerTool(
+    'promote_papercut',
+    {
+      annotations: annotate('promote_papercut'),
+      description: 'Propose a papercut that keeps coming up as an org note, so every agent loads it. An org admin approves it.',
+      inputSchema: z.object({ id: z.number().int() }),
+    },
+    async ({ id }) =>
+      run(() => {
+        const n = store.journal.promotePapercut(me, id);
+        return n.state === 'live' ? `Saved [[${n.slug}]]; it is live.` : `Proposed [[${n.slug}]]; an org admin will approve or reject it.`;
+      }),
+  );
 
   // Org memory (#144): read for everyone; agents propose and ask to forget; people decide.
   server.registerTool(

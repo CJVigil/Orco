@@ -2330,6 +2330,24 @@ export function createTickets(ctx) {
             ticket.orgNotes.map((n) => el('a', { class: `small${n.expired ? ' muted' : ''}`, href: '#!portfolio/memory', title: n.description, text: `[[${n.slug}]] ${n.name}${n.expired ? ' (expired)' : ''}` })),
           )
         : null,
+      // What agents did and decided about it (#146).
+      ticket.journal?.length
+        ? el(
+            'details',
+            { class: 'files-strip journal-strip' },
+            el('summary', { class: 'small muted files-head', text: `Journal entries about this (${ticket.journal.length})` }),
+            ticket.journal.map((j) =>
+              el(
+                'div',
+                { class: 'small', title: j.at },
+                el('strong', { text: `@${j.agent} ` }),
+                el('span', { text: `${j.kind === 'action' ? '' : `${j.kind}: `}${j.summary}` }),
+                j.why ? el('span', { class: 'muted', text: ` (why: ${j.why})` }) : null,
+                j.link && /^https?:\/\//.test(j.link) ? el('a', { href: j.link, target: '_blank', rel: 'noopener noreferrer', text: ' link' }) : null,
+              ),
+            ),
+          )
+        : null,
       filesStrip(ticket),
       commitsStrip(ticket),
       ticket.artifacts?.length ? el('div', { class: 'files-strip' }, el('div', { class: 'small muted files-head', text: `Artifacts (${ticket.artifacts.length})` }), ticket.artifacts.map(artifactRow)) : null,

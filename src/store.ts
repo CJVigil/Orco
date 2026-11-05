@@ -5,6 +5,7 @@ import { Forms } from './forms.js';
 import { TitleRulesStore } from './titles.js';
 import { OrgNotes } from './orgnotes.js';
 import { Outline } from './outline.js';
+import { Journal } from './journal.js';
 import { ToolLevels, type ToolAccess } from './tooltable.js';
 import { Guests } from './guests.js';
 import { Incidents } from './incidents.js';
@@ -309,6 +310,7 @@ export class Store {
   readonly hosted: Hosted;
   readonly onyx: Onyx;
   readonly outline: Outline;
+  readonly journal: Journal;
   readonly roomStatus: RoomStatuses;
   readonly safety: Safety;
   readonly attention: Attention;
@@ -372,6 +374,7 @@ export class Store {
     this.hosted = new Hosted(this);
     this.onyx = new Onyx(this, undefined, () => this.now());
     this.outline = new Outline(this);
+    this.journal = new Journal(this);
     this.roomStatus = new RoomStatuses(this);
     this.safety = new Safety(this);
     this.attention = new Attention(this);
