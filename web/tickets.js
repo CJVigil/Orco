@@ -5,6 +5,7 @@ import { parseCommand } from './commands.js';
 import { voiceButton } from './voice.js';
 import { catchBigPastes } from './paste.js';
 import { openLightbox, prepareImage } from './photos.js';
+import { hold, offer } from './undo.js';
 
 const TABS = [
   ['board', 'Board'],
@@ -751,10 +752,15 @@ export function createTickets(ctx) {
       if (moved) list.insertBefore(moved, line);
       line.remove();
       const ticket = dragging;
+      const before = { ...ticket };
       ticket.sort = sort;
       ticket.status = { ...ticket.status, id: status.id, name: status.name, category: status.category };
       void api(`/tickets/${ticket.ref}`, { method: 'POST', body: { status: status.name, sort, ...(move ?? {}) } })
-        .then((result) => notify(result.warning))
+        .then((result) => {
+          notify(result.warning);
+          const changed = { ...(before.status?.name !== status.name ? { status: status.name } : {}), ...(move?.folder !== undefined ? { folder: move.folder } : {}) };
+          offerUndo(before, result.ticket, changed);
+        })
         .catch((err) => notify(err.message))
         .finally(() => void refreshTickets());
     });
@@ -1204,7 +1210,10 @@ export function createTickets(ctx) {
           dragging = null;
           if (!ticket) return;
           void api(`/tickets/${ticket.ref}`, { method: 'POST', body: lane.move })
-            .then((result) => notify(result.warning))
+            .then((result) => {
+              notify(result.warning);
+              offerUndo(ticket, result.ticket, lane.move);
+            })
             .catch((err) => notify(err.message))
             .finally(() => void refreshTickets());
         });
@@ -1274,10 +1283,28 @@ export function createTickets(ctx) {
     if (!refresh) ctx.onTicketOpen?.(ticket);
   }
 
+  // A status, folder, assignee or priority change can be undone for five seconds (#136), unless
+  // something newer changed the ticket in the meantime.
+  const UNDOABLE = { status: (x) => x.status?.name ?? x.status, folder: (x) => x.folder?.name ?? x.folder ?? null, assignee: (x) => x.assignee?.name ?? x.assignee ?? null, priority: (x) => x.priority };
+  function offerUndo(before, after, patch) {
+    const keys = Object.keys(patch);
+    if (!keys.length || !keys.every((k) => k in UNDOABLE)) return;
+    const back = Object.fromEntries(keys.map((k) => [k, UNDOABLE[k](before) ?? null]));
+    const what = keys.map((k) => `${k} ${UNDOABLE[k](after) ?? 'none'}`).join(', ');
+    offer(`${after.ref}: ${what}`, async () => {
+      const now = await api(`/tickets/${after.ref}`);
+      if (now.updatedAt !== after.updatedAt) throw new Error(`${after.ref} changed since; open it to change it back`);
+      const result = await api(`/tickets/${after.ref}`, { method: 'POST', body: back });
+      if (panel() === 'ticket' && t.open === after.ref) renderDetail(result.ticket);
+      else void refreshTickets();
+    });
+  }
+
   async function save(ticket, patch) {
     try {
       const result = await api(`/tickets/${ticket.ref}`, { method: 'POST', body: patch });
       renderDetail(result.ticket, result.warning);
+      offerUndo(ticket, result.ticket, patch);
     } catch (err) {
       // Required checklist items still open (#110): an admin may close it anyway, with a reason.
       if (patch.status && !patch.doneOverride && /required items unchecked/.test(err.message)) {
@@ -1534,8 +1561,8 @@ export function createTickets(ctx) {
       const w = ticket.waitingOn;
       const mine = w && w.person === me()?.name;
       const reply = (text) =>
-        void api(`/tickets/${ticket.ref}/waiting`, { method: 'POST', body: { reply: text } })
-          .then((updated) => renderDetail(updated))
+        void hold(text === 'not_yet' ? 'Not yet' : `Replying ${text}`, () => api(`/tickets/${ticket.ref}/waiting`, { method: 'POST', body: { reply: text } }))
+          .then((updated) => updated && renderDetail(updated))
           .catch((err) => notify(err.message));
       const line = el('input', { class: 'answer-input', placeholder: 'Or reply in a line', 'aria-label': 'Reply', maxlength: '140' });
       line.addEventListener('keydown', (event) => {

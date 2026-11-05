@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Five seconds to undo a tap:
+  - Approvals (Yes, No and the "always" choices), question answers, passes, and replies to waiting asks are held in the browser for five seconds with **Undo** before they are sent. Undo, or closing the page, sends nothing, so a mis-tapped approval fails safe.
+  - Later, and ticket status, folder, assignee and priority changes (including board drags), get an **Undo (5)** toast that reverses them, but only if nothing newer changed the ticket.
+  - Ctrl/Cmd+Z runs the latest Undo when you are not typing.
+
 - Pass on a question with one tap: question cards and Needs you have **Pass**, with three reasons.
   - **Not me** opens the question to everyone in the project now, and it leaves your list.
   - **Use your pick** answers with the option the agent recommended (shown only when it marked one).

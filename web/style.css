@@ -6129,3 +6129,29 @@ body.lightbox-open {
   flex-wrap: wrap;
   gap: 0.35rem;
 }
+
+/* Five seconds to undo (#136) */
+.undo-toast {
+  position: fixed;
+  left: 50%;
+  bottom: max(5.5rem, calc(env(safe-area-inset-bottom) + 4.5rem));
+  z-index: 350;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  max-width: calc(100vw - 2rem);
+  padding: 0.55rem 0.6rem 0.55rem 0.9rem;
+  border-radius: 10px;
+  background: var(--text, #111);
+  color: var(--bg, #fff);
+  box-shadow: var(--shadow);
+  transform: translateX(-50%);
+}
+
+.undo-toast button {
+  min-width: 5.5rem;
+  border: 0;
+  background: rgba(127, 127, 127, 0.25);
+  color: inherit;
+  font-weight: 600;
+}

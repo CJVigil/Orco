@@ -6,6 +6,7 @@ import { voiceButton } from './voice.js';
 import { quoteText } from './quotes.js';
 import { openLightbox, prepareImage } from './photos.js';
 import { actionBar } from './actions.js';
+import { hold } from './undo.js';
 import { createDrafts, createOutbox, newKey, retryable } from './drafts.js';
 import { catchBigPastes, MAX_MESSAGE_CHARS } from './paste.js';
 import { codeChildren, renderMarkdown } from './markdown.js';
@@ -984,7 +985,10 @@ async function decideApproval(id, decision, options = {}) {
     if (note === null) return;
   }
   try {
-    await api(`/approvals/${id}`, { method: 'POST', body: { decision, note: note || undefined, always_allow: Boolean(opts.alwaysAllow), standing: Boolean(opts.standing) } });
+    // Held for five seconds with Undo (#136): until then nothing reaches the server or the agent.
+    await hold(decision === 'approved' ? 'Approving' : 'Denying', () =>
+      api(`/approvals/${id}`, { method: 'POST', body: { decision, note: note || undefined, always_allow: Boolean(opts.alwaysAllow), standing: Boolean(opts.standing) } }),
+    );
   } catch (err) {
     alert(err.message);
   }
@@ -1160,7 +1164,8 @@ function answerBox(question, onDone) {
       await Promise.all(photos.map((p) => p.promise));
       const failed = photos.find((p) => p.status !== 'done');
       if (failed) throw new Error(`${failed.file.name} did not upload: ${failed.error}. Retry or remove it.`);
-      await api(`/questions/${question.id}/answer`, { method: 'POST', body: { answer: input.value, choices: [...picked], attachmentIds: photos.map((p) => p.id) } });
+      const sent = await hold('Answering', () => api(`/questions/${question.id}/answer`, { method: 'POST', body: { answer: input.value, choices: [...picked], attachmentIds: photos.map((p) => p.id) } }));
+      if (sent === undefined) return;
       for (const p of photos) URL.revokeObjectURL(p.url);
       onDone?.();
     } catch (err) {
@@ -1303,7 +1308,8 @@ function passRow(question, onDone) {
         text: label,
         onclick: async () => {
           try {
-            await api(`/questions/${question.id}/pass`, { method: 'POST', body: { reason } });
+            const sent = await hold(`Passing: ${label.toLowerCase()}`, () => api(`/questions/${question.id}/pass`, { method: 'POST', body: { reason } }));
+            if (sent === undefined) return;
             toast(`Passed: ${label.toLowerCase()}. ${question.asker ?? 'The agent'} has been told.`);
             onDone?.();
           } catch (err) {

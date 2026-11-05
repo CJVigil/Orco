@@ -4,6 +4,8 @@
 
 const SHOW = 3;
 
+import { hold, offer } from './undo.js';
+
 export function createNeeds(ctx) {
   // Claude Code treats a yes that comes through a tool as information, not the person's own (#100).
   const AGAIN = 'Approving this in Orco may need approval again in the agent.';
@@ -42,7 +44,8 @@ export function createNeeds(ctx) {
     }
     for (const t of inbox.waiting ?? []) {
       const reply = el('input', { class: 'answer-input', placeholder: 'Or reply in a line', 'aria-label': `Reply on ${t.ref}`, maxlength: '140' });
-      const send = (text) => act(() => api(`/tickets/${t.ref}/waiting`, { method: 'POST', body: { reply: text } }));
+      // Replies wait five seconds with Undo (#136), like answers.
+      const send = (text) => act(() => hold(text === 'not_yet' ? 'Not yet' : `Replying ${text}`, () => api(`/tickets/${t.ref}/waiting`, { method: 'POST', body: { reply: text } })));
       reply.addEventListener('keydown', (event) => {
         if (event.key === 'Enter' && reply.value.trim()) {
           event.preventDefault();
@@ -157,7 +160,11 @@ export function createNeeds(ctx) {
       d.setHours(9, 0, 0, 0);
       return d.toISOString();
     };
-    const snooze = (until) => act(() => api('/snoozes', { method: 'POST', body: { key, until } }));
+    const snooze = (until) =>
+      act(async () => {
+        await api('/snoozes', { method: 'POST', body: { key, until } });
+        offer('Hidden for now', () => act(() => api('/snoozes', { method: 'POST', body: { key, until: null } })));
+      });
     // One quiet "Later" instead of two buttons on every card; it opens into the two choices.
     const wrap = el('span', { class: 'needs-snooze' });
     const choices = () =>
