@@ -1739,7 +1739,13 @@ export function createApp(store: Store, options: AppOptions = {}) {
     const id = optionalInt(req.params.id);
     const state = String(req.body?.state ?? '');
     if (id === undefined || !TASK_STATES.has(state)) throw new OrcoError('invalid', 'Expected a task id and a valid state');
-    res.json(store.tasks.update(req.participant!, id, state as TaskState, str(req.body?.note, 'note'), taskResult(req.body)));
+    res.json(store.tasks.update(req.participant!, id, state as TaskState, str(req.body?.note, 'note'), taskResult(req.body), { withSubtasks: req.body?.withSubtasks !== false }));
+  });
+  // The tasks a task started, at any depth, with what each waits on (#140).
+  api.get('/tasks/:id/subtasks', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a task id');
+    res.json(store.tasks.subtasks(req.participant!, id));
   });
 
   api.get('/locks', (req, res) => {

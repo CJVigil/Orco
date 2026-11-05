@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Sub-tasks.
+  - A task card shows the tasks it started, at any depth, with how many are open and how many wait for an approval. The list shows each one's agent, state, elapsed time, spend and what it waits on.
+  - Approve or Deny appears inline for whoever decides an approval, and Stop is on each open branch.
+  - Cancelling a task offers "Also stop the N tasks it started", on by default, and each stopped task's agent is told why.
+  - `list_tasks` takes `parent_task_id`, and `get_task` shows sub-task counts. `GET /api/tasks/:id/subtasks`.
+
 - Plain ticket titles, with rules per project. By default a title is "Area: outcome", at most 70 characters, with no file paths, code identifiers, commit prefixes or listed internal names.
   - Project admins change the rules in Settings.
   - New ticket shows the rules under Title and warns as you type.

@@ -227,6 +227,8 @@ function formatTask(task: Task) {
     ...(task.expiresAt ? { expires_at: task.expiresAt } : {}),
     ...(task.runningOn ? { running_on: task.runningOn } : {}),
     ...(task.feedback.up || task.feedback.down ? { feedback: task.feedback } : {}),
+    // What it started (#140); list_tasks with parent_task_id lists them.
+    ...(task.subtasks ? { subtasks: { total: task.subtasks.total, open: task.subtasks.open, waiting_approval: task.subtasks.waitingApproval } } : {}),
     question: task.question
       ? {
           id: task.question.id,
@@ -1077,19 +1079,22 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
       inputSchema: z.object({
         scope: z.enum(['assigned', 'requested', 'room']).optional().describe('Default "assigned"'),
         room: z.string().optional().describe('Required when scope is "room"'),
+        parent_task_id: z.number().int().optional().describe('Only the tasks this task started (any scope)'),
         include_closed: z.boolean().optional(),
         fields: FIELDS,
       }),
     },
-    async ({ scope, room, include_closed, fields }) =>
+    async ({ scope, room, include_closed, fields, parent_task_id }) =>
       run(() => {
         const which = scope ?? 'assigned';
         if (which === 'room' && !room) throw new OrcoError('invalid', 'Pass room when scope is "room"');
         const tasks = store.tasks
           .list(me, {
-            assignedToMe: which === 'assigned',
-            requestedByMe: which === 'requested',
+            // With parent_task_id, the sub-tasks of that task whoever they are assigned to (#140).
+            assignedToMe: parent_task_id === undefined && which === 'assigned',
+            requestedByMe: parent_task_id === undefined && which === 'requested',
             room: which === 'room' ? room : undefined,
+            parentId: parent_task_id,
             open: !include_closed,
           });
         store.tasks.markSeen(me, tasks.filter((t) => t.assignee === me.name).map((t) => t.id));

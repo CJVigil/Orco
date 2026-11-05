@@ -131,3 +131,51 @@ describe('loop protection', () => {
     store.post(bot, 'lobby', 'two');
   });
 });
+
+describe('sub-tasks (#140)', () => {
+  it('cancelling a parent stops the tasks it started, and a sub-task waiting on approval shows on the parent', () => {
+    const store = new Store(openDatabase(':memory:'));
+    const ana = store.createUser('ana').participant;
+    const ben = store.createUser('ben').participant;
+    const lead = store.createAgent('ana', 'lead').participant;
+    const helper = store.createAgent('ana', 'helper').participant;
+    const other = store.createAgent('ben', 'other').participant;
+    store.createProject(ana, 'api');
+    store.addMember(ana, 'api', 'ben');
+    store.setTaskPolicy(ana, 'lead', 'open');
+    store.setTaskPolicy(ana, 'helper', 'open');
+    const parent = store.tasks.create(ana, { agent: 'lead', room: 'api/general', request: 'ship it' });
+    store.tasks.update(lead, parent.id, 'accepted');
+    const a = store.tasks.create(lead, { agent: 'helper', room: 'api/general', request: 'write the tests', parentId: parent.id });
+    store.tasks.update(helper, a.id, 'accepted');
+    // Ben's agent asks its owner first: this one waits for an approval.
+    const b = store.tasks.create(lead, { agent: 'other', room: 'api/general', request: 'review the diff', parentId: parent.id });
+    assert.equal(b.state, 'awaiting_approval');
+    const seen = store.tasks.get(ana, parent.id);
+    assert.deepEqual(seen.subtasks, { total: 2, open: 2, waitingApproval: 1 });
+    const list = store.tasks.subtasks(ana, parent.id);
+    assert.deepEqual(list.map((s) => [s.assignee, s.state, s.waiting?.kind ?? null]), [['helper', 'accepted', null], ['other', 'awaiting_approval', 'approval']]);
+    assert.equal(list[1]!.waiting?.kind === 'approval' && list[1]!.waiting.approver, 'ben');
+    assert.deepEqual(store.tasks.list(ana, { parentId: parent.id }).map((t) => t.id).sort(), [a.id, b.id].sort());
+
+    store.tasks.update(ana, parent.id, 'cancelled');
+    for (const id of [parent.id, a.id, b.id]) assert.equal(store.tasks.get(ana, id).state, 'cancelled');
+    assert.match(store.unseenMentions(helper).at(-1)!.text, /Stopped with task #\d+/);
+    void other;
+  });
+
+  it('can leave the sub-tasks running', () => {
+    const store = new Store(openDatabase(':memory:'));
+    const ana = store.createUser('ana').participant;
+    const lead = store.createAgent('ana', 'lead').participant;
+    store.createAgent('ana', 'helper');
+    store.createProject(ana, 'api');
+    store.setTaskPolicy(ana, 'lead', 'open');
+    store.setTaskPolicy(ana, 'helper', 'open');
+    const parent = store.tasks.create(ana, { agent: 'lead', room: 'api/general', request: 'ship it' });
+    store.tasks.update(lead, parent.id, 'accepted');
+    const a = store.tasks.create(lead, { agent: 'helper', room: 'api/general', request: 'tests', parentId: parent.id });
+    store.tasks.update(ana, parent.id, 'cancelled', undefined, {}, { withSubtasks: false });
+    assert.equal(store.tasks.get(ana, a.id).state, 'requested');
+  });
+});

@@ -882,6 +882,95 @@ function renderWorkStatus() {
   box.hidden = false;
 }
 
+/*
+ * Sub-tasks (#140): what a task started, at any depth, with what each waits on. Cancelling a task
+ * offers to stop them too (on by default); each one can be stopped on its own.
+ */
+function cancelTaskPrompt(button, id, subtasks) {
+  const openKids = subtasks?.open ?? 0;
+  const also = el('input', { type: 'checkbox', checked: true });
+  const row = el(
+    'span',
+    { class: 'cancel-confirm' },
+    el('span', { class: 'small', text: `Cancel task #${id}?` }),
+    openKids ? el('label', { class: 'check small' }, also, `Also stop the ${openKids} task${openKids === 1 ? '' : 's'} it started`) : null,
+    el('button', {
+      class: 'small danger',
+      type: 'button',
+      text: 'Cancel task',
+      onclick: async () => {
+        try {
+          await api(`/tasks/${id}`, { method: 'POST', body: { state: 'cancelled', withSubtasks: openKids ? also.checked : true } });
+        } catch (err) {
+          alert(err.message);
+        }
+      },
+    }),
+    el('button', { class: 'ghost small', type: 'button', text: 'Keep it', onclick: () => row.replaceWith(button) }),
+  );
+  button.replaceWith(row);
+}
+
+function subtaskList(id, counts) {
+  const body = el('div', { class: 'subtask-list' });
+  const summary = `${counts.total} sub-task${counts.total === 1 ? '' : 's'}${counts.open ? ` · ${counts.open} open` : ''}${counts.waitingApproval ? ` · ${counts.waitingApproval} waiting for approval` : ''}`;
+  const load = async () => {
+    const list = await api(`/tasks/${id}/subtasks`);
+    body.replaceChildren(
+      ...list.map((s) => {
+        const open = ['awaiting_approval', 'requested', 'accepted', 'needs_input'].includes(s.state);
+        const waiting =
+          s.waiting?.kind === 'approval'
+            ? s.waiting.approver === state.me.name
+              ? el(
+                  'span',
+                  { class: 'subtask-decide' },
+                  el('button', { class: 'small primary', type: 'button', text: 'Approve', onclick: () => void decideApproval(s.waiting.approvalId, 'approved').then(load) }),
+                  el('button', { class: 'small ghost', type: 'button', text: 'Deny', onclick: () => void decideApproval(s.waiting.approvalId, 'denied').then(load) }),
+                )
+              : el('span', { class: 'chip waiting', text: `waits for ${s.waiting.approver ?? 'an approval'}` })
+            : s.waiting?.kind === 'question'
+              ? el('span', { class: 'chip waiting', text: 'waits for an answer' })
+              : null;
+        const spend = [s.spentCents ? money(s.spentCents) : null, s.spentTokens ? `${s.spentTokens.toLocaleString()} tokens` : null].filter(Boolean).join(' · ');
+        return el(
+          'div',
+          { class: `subtask-row depth-${Math.min(s.depth, 4)}`, style: `padding-left: ${(s.depth - 1) * 1}rem` },
+          el('span', { class: 'task-id', text: `#${s.id}` }),
+          el('strong', { text: s.assignee }),
+          el('span', { class: `chip task-${s.state}`, text: s.state.replace('_', ' ') }),
+          el('span', { class: 'muted small subtask-request', title: s.request, text: s.request.split('\n')[0].slice(0, 80) }),
+          s.elapsedMinutes !== null ? el('span', { class: 'muted small', text: `${s.elapsedMinutes} min` }) : null,
+          spend ? el('span', { class: 'muted small', text: spend }) : null,
+          waiting,
+          open
+            ? el('button', {
+                class: 'ghost small',
+                type: 'button',
+                text: 'Stop',
+                title: 'Cancel this one and what it started',
+                onclick: async () => {
+                  try {
+                    await api(`/tasks/${s.id}`, { method: 'POST', body: { state: 'cancelled', note: `Stopped from task #${id}` } });
+                    void load();
+                  } catch (err) {
+                    alert(err.message);
+                  }
+                },
+              })
+            : null,
+        );
+      }),
+    );
+  };
+  return el(
+    'details',
+    { class: 'subtasks', ontoggle: (event) => event.target.open && void load() },
+    el('summary', { class: `small${counts.waitingApproval ? ' needs-attention' : ''}`, text: summary }),
+    body,
+  );
+}
+
 function taskCard(message) {
   const { id, state: taskState, assignee, since, chain = [], progress = null, stalled = false, seenAt = null, budget = null, links = [], followups = [], feedback = { up: 0, down: 0 } } = message.task;
   const open = ['awaiting_approval', 'requested', 'accepted', 'needs_input'].includes(taskState);
@@ -936,17 +1025,11 @@ function taskCard(message) {
             class: 'ghost small',
             type: 'button',
             text: 'Cancel',
-            onclick: async () => {
-              if (!confirm(`Cancel task #${id}?`)) return;
-              try {
-                await api(`/tasks/${id}`, { method: 'POST', body: { state: 'cancelled' } });
-              } catch (err) {
-                alert(err.message);
-              }
-            },
+            onclick: (event) => cancelTaskPrompt(event.currentTarget, id, message.task.subtasks),
           })
         : null,
     ),
+    message.task.subtasks ? subtaskList(id, message.task.subtasks) : null,
   );
   const hint = el('div', {
     class: 'task-hint small',

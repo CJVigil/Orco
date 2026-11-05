@@ -6288,3 +6288,41 @@ body.lightbox-open {
 .title-rules input[type='number'] {
   width: 4.5rem;
 }
+
+/* Sub-tasks (#140) */
+.subtasks {
+  flex-basis: 100%;
+  margin-top: 0.3rem;
+}
+
+.subtasks summary.needs-attention {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.subtask-list {
+  display: grid;
+  gap: 0.25rem;
+  margin-top: 0.3rem;
+}
+
+.subtask-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.subtask-request {
+  overflow: hidden;
+  max-width: 22rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cancel-confirm {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}

@@ -112,6 +112,23 @@ export interface TaskSummary {
   followups: TaskFollowup[];
   /** Thumbs from people on a finished task. */
   feedback: { up: number; down: number };
+  /** Tasks this one started, at any depth (#140): how many, how many open, how many wait for an approval. */
+  subtasks?: { total: number; open: number; waitingApproval: number };
+}
+
+/** A task this one started, directly or further down (#140). */
+export interface Subtask {
+  id: number;
+  parentId: number;
+  depth: number;
+  assignee: string;
+  state: TaskState;
+  request: string;
+  elapsedMinutes: number | null;
+  spentCents: number;
+  spentTokens: number;
+  /** What it waits on: an approval (and from whom), or an answer. */
+  waiting: { kind: 'approval'; approvalId: number; approver: string | null } | { kind: 'question'; questionId: number } | null;
 }
 
 export interface TaskCheckpoint {
@@ -161,6 +178,8 @@ export interface AgentActivity {
 
 export interface Task {
   id: number;
+  /** Tasks this one started, at any depth (#140). */
+  subtasks?: { total: number; open: number; waitingApproval: number };
   room: string;
   projectId: number | null;
   messageId: number;
@@ -512,7 +531,7 @@ export class Tasks {
     return !this.store.trusts(assignee, requesterHuman);
   }
 
-  update(actor: Participant, id: number, state: TaskState, note?: string, result: TaskResult = {}): Task {
+  update(actor: Participant, id: number, state: TaskState, note?: string, result: TaskResult = {}, options: { withSubtasks?: boolean } = {}): Task {
     const row = this.row(id);
     if (!row || !this.store.canSeeRoomId(actor, row.room_id)) throw new OrcoError('not_found', `No task ${id}`);
     const trimmedNote = this.store.hideSecrets(actor, note?.trim() ?? '') || null;
@@ -548,6 +567,15 @@ export class Tasks {
     if (links.length) this.store.db.prepare('UPDATE tasks SET links = ? WHERE id = ?').run(JSON.stringify(links), id);
     if (steps) this.store.db.prepare('UPDATE tasks SET steps = ? WHERE id = ?').run(JSON.stringify(steps), id);
     for (const f of followups) this.store.suggestions.create(actor, row.id, row.project_id!, f);
+    // Cancelling a task stops the tasks it started too, unless asked not to (#140). Whoever may cancel
+    // the parent may stop the work it set going; each sub-task's agent gets the usual cancel notice.
+    if (state === 'cancelled' && options.withSubtasks !== false) {
+      for (const child of this.descendants(id)) {
+        if (!OPEN_STATES.includes(effectiveState(child))) continue;
+        if (child.approval_id !== null) this.store.approvals.withdraw(child.approval_id);
+        this.transition(actor, child, 'cancelled', `Stopped with task #${id}, which started it.`);
+      }
+    }
     return this.transition(actor, row, state, trimmedNote, {
       ...(links.length ? { links } : {}),
       ...(followups.length ? { followups: followups.map((f) => f.title) } : {}),
@@ -1113,6 +1141,8 @@ export class Tasks {
       forMyAgents?: boolean;
       room?: string;
       open?: boolean;
+      /** Only tasks this task started directly (#140). */
+      parentId?: number;
       limit?: number;
     } = {},
   ): Task[] {
@@ -1133,6 +1163,10 @@ export class Tasks {
     if (filter.room) {
       where.push('t.room_id = ?');
       params.push(this.store.room(actor, filter.room).id);
+    }
+    if (filter.parentId !== undefined) {
+      where.push('t.parent_id = ?');
+      params.push(filter.parentId);
     }
     if (filter.open) where.push(`t.state IN (${OPEN_STATES.map((s) => `'${s}'`).join(', ')})`);
     const limit = Math.min(Math.max(filter.limit ?? 50, 1), 200);
@@ -1164,7 +1198,58 @@ export class Tasks {
       links: JSON.parse(row.links) as TaskLink[],
       followups: this.store.suggestions.forTask(row.id),
       feedback: this.feedbackCounts(row.id),
+      ...this.subtaskCounts(row.id),
     };
+  }
+
+  /** Every task below this one, nearest first (#140). */
+  private descendants(id: number): TaskRow[] {
+    const ids = this.store.db
+      .prepare(
+        `WITH RECURSIVE below(id, level) AS (SELECT id, 1 FROM tasks WHERE parent_id = ? UNION ALL SELECT t.id, b.level + 1 FROM tasks t JOIN below b ON t.parent_id = b.id WHERE b.level < 20)
+         SELECT id FROM below ORDER BY level, id`,
+      )
+      .all(id) as { id: number }[];
+    return ids.map((r) => this.row(r.id)!).filter(Boolean);
+  }
+
+  private subtaskCounts(id: number): { subtasks?: TaskSummary['subtasks'] } {
+    const rows = this.descendants(id);
+    if (!rows.length) return {};
+    const open = rows.filter((r) => OPEN_STATES.includes(effectiveState(r)));
+    return { subtasks: { total: rows.length, open: open.length, waitingApproval: open.filter((r) => effectiveState(r) === 'awaiting_approval').length } };
+  }
+
+  /** The tasks a task started, at any depth, with what each waits on (#140). */
+  subtasks(actor: Participant, id: number): Subtask[] {
+    const top = this.row(id);
+    if (!top || !this.store.canSeeRoomId(actor, top.room_id)) throw new OrcoError('not_found', `No task ${id}`);
+    return this.descendants(id)
+      .filter((r) => this.store.canSeeRoomId(actor, r.room_id))
+      .map((r) => {
+        const state = effectiveState(r);
+        const approver =
+          state === 'awaiting_approval' && r.approval_id !== null
+            ? ((this.store.db.prepare('SELECT p.name FROM approvals a LEFT JOIN participants p ON p.id = a.approver_id WHERE a.id = ?').get(r.approval_id) as { name: string | null } | undefined)?.name ?? null)
+            : null;
+        return {
+          id: r.id,
+          parentId: r.parent_id!,
+          depth: r.depth - top.depth,
+          assignee: r.assignee,
+          state,
+          request: r.request,
+          elapsedMinutes: this.elapsedMinutes(r),
+          spentCents: r.spent_cents,
+          spentTokens: r.spent_tokens,
+          waiting:
+            state === 'awaiting_approval' && r.approval_id !== null
+              ? { kind: 'approval' as const, approvalId: r.approval_id, approver }
+              : r.open_question !== null
+                ? { kind: 'question' as const, questionId: r.open_question }
+                : null,
+        };
+      });
   }
 
   activity(viewer: Participant): Map<number, AgentActivity> {
@@ -1196,6 +1281,7 @@ export class Tasks {
       links: JSON.parse(row.links) as TaskLink[],
       followups: this.store.suggestions.forTask(row.id),
       feedback: this.feedbackCounts(row.id),
+      ...this.subtaskCounts(row.id),
     };
   }
 
