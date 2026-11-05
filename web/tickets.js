@@ -266,7 +266,7 @@ export function createTickets(ctx) {
       t.tab === 'spend' ? api(`/projects/${p}/spend?days=7`) : Promise.resolve(t.spend ?? null),
       t.tab === 'report' ? api(`/projects/${p}/report?${reportQuery()}`) : Promise.resolve(t.report ?? null),
       t.tab === 'integrations'
-        ? Promise.all([api(`/hooks?project=${p}`), api(`/projects/${p}/secrets`), api(`/leases?project=${p}`), api(`/projects/${p}/actions`)]).then(([hooks, secrets, leases, actions]) => ({ hooks, secrets, leases, actions }))
+        ? Promise.all([api(`/hooks?project=${p}`), api(`/projects/${p}/secrets`), api(`/leases?project=${p}`), api(`/projects/${p}/actions`), api(`/projects/${p}/forms`)]).then(([hooks, secrets, leases, actions, forms]) => ({ hooks, secrets, leases, actions, forms }))
         : Promise.resolve(t.integrations ?? null),
     ]);
     if (t.project !== project) return;
@@ -2118,11 +2118,98 @@ export function createTickets(ctx) {
     return `${new URL('.', location.href).href}${kind}?${q}`;
   }
 
+  /** A ticket from an intake form (#134): its fields, required ones enforced, then the form's labels and folder. */
+  function openFormTicket(project, form, defaults = {}) {
+    openPanel('new-ticket', form.name);
+    const plan = plans.get(project);
+    const given = defaults.formFields ?? {};
+    const photos = [];
+    const inputs = form.fields.map((f) => {
+      const value = given[f.label] ?? Object.entries(given).find(([k]) => k.toLowerCase() === f.label.toLowerCase())?.[1] ?? '';
+      const attrs = { name: f.label, 'aria-label': f.label, required: f.required && f.type !== 'photo' };
+      let input;
+      if (f.type === 'choice') input = el('select', attrs, el('option', { value: '', text: f.required ? 'Choose…' : '—' }), f.options.map((o) => el('option', { value: o, text: o, selected: o === value })));
+      else if (f.type === 'person')
+        input = el('select', attrs, el('option', { value: '', text: f.required ? 'Choose…' : '—' }), (plan?.members ?? []).filter((m) => m.kind === 'user').map((m) => el('option', { value: m.name, text: m.name, selected: m.name === value })));
+      else if (f.type === 'photo') {
+        input = el('input', { type: 'file', accept: 'image/*', capture: 'environment', multiple: true, 'aria-label': f.label });
+        input.addEventListener('change', async () => {
+          for (const file of [...input.files]) {
+            try {
+              const ready = await prepareImage(file);
+              photos.push((await uploadTicketFile(project, ready)).id);
+            } catch (err) {
+              notify(`${file.name}: ${err.message}`);
+            }
+          }
+          note.textContent = photos.length ? `${photos.length} photo${photos.length === 1 ? '' : 's'} ready` : '';
+        });
+      } else input = el('input', { ...attrs, type: f.type === 'number' ? 'number' : 'text', inputmode: f.type === 'number' ? 'decimal' : null, value, maxlength: '1000', autocomplete: 'off', placeholder: f.type === 'item' ? 'Item code' : f.type === 'location' ? 'Where' : '' });
+      const note = el('span', { class: 'small muted' });
+      return { field: f, input, row: el('label', { class: 'field' }, el('span', { class: 'small', text: `${f.label}${f.required ? ' *' : ''}` }), input, note) };
+    });
+    const title = el('input', { maxlength: '200', placeholder: `Title (optional: “${form.name}: …”)`, 'aria-label': 'Title', value: defaults.title ?? '' });
+    const notes = el('textarea', { rows: '3', placeholder: 'Anything else (optional)', 'aria-label': 'Notes' });
+    notes.value = defaults.description ?? '';
+    const error = el('p', { class: 'error', role: 'alert', hidden: true });
+    const formEl = el(
+      'form',
+      {
+        class: 'new-ticket intake-form',
+        onsubmit: async (event) => {
+          event.preventDefault();
+          const missingPhoto = form.fields.find((f) => f.type === 'photo' && f.required) && !photos.length;
+          if (missingPhoto) {
+            error.textContent = `${form.name} needs a photo`;
+            error.hidden = false;
+            return;
+          }
+          const fields = Object.fromEntries(inputs.filter((i) => i.field.type !== 'photo').map((i) => [i.field.label, i.input.value]));
+          try {
+            const result = await api(`/projects/${encodeURIComponent(project)}/tickets`, { method: 'POST', body: { form: form.name, fields, title: title.value || undefined, description: notes.value, attachmentIds: photos } });
+            openPanel('ticket', result.ticket.ref);
+            t.open = result.ticket.ref;
+            renderDetail(result.ticket, result.warning);
+          } catch (err) {
+            error.textContent = err.message;
+            error.hidden = false;
+          }
+        },
+      },
+      form.hint ? el('p', { class: 'muted small', text: form.hint }) : null,
+      inputs.map((i) => i.row),
+      title,
+      notes,
+      error,
+      el('div', { class: 'row-end' }, el('button', { class: 'ghost', type: 'button', text: 'Back', onclick: () => void openNewTicket({ project }) }), el('button', { class: 'primary', type: 'submit', text: `File ${form.name}` })),
+    );
+    $('panel-body').replaceChildren(formEl);
+    inputs[0]?.input.focus();
+  }
+
   async function openNewTicket(defaults = {}) {
     const project = defaults.project ?? t.project;
     const plan = await planFor(project);
     openPanel('new-ticket', `New ${plan.key} ticket`);
     t.open = null;
+    // Intake forms (#134): pick one, or Blank for the usual fields.
+    const forms = plan.forms ?? [];
+    const named = defaults.form ? forms.find((f) => f.name.toLowerCase() === defaults.form.toLowerCase()) : null;
+    if (named) return openFormTicket(project, named, defaults);
+    if (forms.length && !defaults.blank && !defaults.title && !defaults.description) {
+      $('panel-body').replaceChildren(
+        el(
+          'div',
+          { class: 'form-picker' },
+          el('p', { class: 'muted small', text: 'What are you reporting?' }),
+          forms.map((f) =>
+            el('button', { class: 'form-choice', type: 'button', onclick: () => openFormTicket(project, f, defaults) }, el('strong', { text: f.name }), f.hint ? el('span', { class: 'muted small', text: f.hint }) : null),
+          ),
+          el('button', { class: 'form-choice blank', type: 'button', onclick: () => void openNewTicket({ ...defaults, blank: true }) }, el('strong', { text: 'Blank' }), el('span', { class: 'muted small', text: 'Title, description and the usual fields' })),
+        ),
+      );
+      return;
+    }
     const title = el('input', { name: 'title', required: true, maxlength: '200', placeholder: 'Title', 'aria-label': 'Title', autocomplete: 'off' });
     const description = el('textarea', { name: 'description', rows: '5', placeholder: 'Description (Markdown)', 'aria-label': 'Description' });
     // A prompt link (#118) fills the draft; nothing is created until the reader presses Create.
@@ -2685,6 +2772,93 @@ export function createTickets(ctx) {
 
   /* Integrations: one-tap actions (#133), webhooks and secrets */
 
+  /*
+   * Intake forms (#134). Fields are typed one per line: a label, * when required, and a type in
+   * brackets, like "Location * (location)" or "Severity (choice: minor, major)".
+   */
+  const fieldLine = (f) => `${f.label}${f.required ? ' *' : ''} (${f.type}${f.options ? `: ${f.options.join(', ')}` : ''})`;
+  const parseFieldLines = (text) =>
+    text
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const m = /^(.+?)\s*(\*)?\s*(?:\((\w+)(?::\s*(.*))?\))?\s*(\*)?$/.exec(line);
+        if (!m) throw new Error(`Cannot read “${line}”`);
+        return { label: m[1].trim(), required: Boolean(m[2] || m[5]), type: (m[3] || 'text').toLowerCase(), options: m[4] };
+      });
+
+  function formEditor(existing, onDone) {
+    const name = el('input', { required: true, maxlength: '60', placeholder: 'Damaged pallet', value: existing?.name ?? '', 'aria-label': 'Form name' });
+    const hint = el('input', { maxlength: '200', placeholder: 'When to use it', value: existing?.hint ?? '', 'aria-label': 'When to use it' });
+    const fields = el('textarea', { rows: '5', class: 'mono', required: true, 'aria-label': 'Fields', placeholder: 'Location * (location)\nItem code * (item)\nSeverity (choice: minor, major)\nPhoto (photo)' });
+    fields.value = existing ? existing.fields.map(fieldLine).join('\n') : '';
+    const labels = el('input', { placeholder: 'damage, warehouse', value: existing?.labels.join(', ') ?? '', 'aria-label': 'Labels' });
+    const folders = t.plan?.folders ?? [];
+    const folder = el('select', { 'aria-label': 'Folder' }, el('option', { value: '', text: 'No folder' }), folders.map((f) => el('option', { value: f.name, text: f.name, selected: existing?.folder === f.name })));
+    const members = people();
+    const assignee = el('select', { 'aria-label': 'Assignee' }, el('option', { value: '', text: 'Unassigned' }), members.map((m) => el('option', { value: m.name, text: m.kind === 'agent' ? `${m.name} (agent)` : m.name, selected: existing?.assignee === m.name })));
+    const priority = el('select', { 'aria-label': 'Priority' }, el('option', { value: '', text: 'Priority as usual' }), PRIORITY_ORDER.map((p) => el('option', { value: p, text: PRIORITY_LABEL[p], selected: existing?.priority === p })));
+    const waiting = el('select', { 'aria-label': 'Waits on' }, el('option', { value: '', text: 'Waits on nobody' }), members.filter((m) => m.kind === 'user').map((m) => el('option', { value: m.name, text: `Waits on ${m.name}`, selected: existing?.waitingOn === m.name })));
+    return el(
+      'form',
+      {
+        class: 'schedule-form plan-card',
+        onsubmit: (event) => {
+          event.preventDefault();
+          void act(async () => {
+            const body = { name: name.value, hint: hint.value, fields: parseFieldLines(fields.value), labels: labels.value, folder: folder.value, assignee: assignee.value, priority: priority.value, waitingOn: waiting.value };
+            await api(existing ? `/forms/${existing.id}` : `/projects/${encodeURIComponent(t.project)}/forms`, { method: existing ? 'PUT' : 'POST', body });
+            onDone?.();
+          });
+        },
+      },
+      el('h3', { text: existing ? `Edit ${existing.name}` : 'New form' }),
+      el('div', { class: 'schedule-grid' }, el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Name' }), name), el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'When to use it' }), hint)),
+      el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Fields, one per line: Label * (type). Types: text, number, choice: a, b, person, item, location, photo' }), fields),
+      el(
+        'div',
+        { class: 'schedule-grid' },
+        el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Labels' }), labels),
+        el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Folder' }), folder),
+        el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Assignee' }), assignee),
+        el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Priority' }), priority),
+        el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Waits on' }), waiting),
+      ),
+      el('div', { class: 'row-end' }, existing ? el('button', { class: 'ghost small', type: 'button', text: 'Cancel', onclick: () => onDone?.() }) : null, el('button', { class: 'primary small', type: 'submit', text: existing ? 'Save form' : 'Add form' })),
+    );
+  }
+
+  function formsSection() {
+    const forms = t.integrations?.forms ?? [];
+    const editing = el('div');
+    return el(
+      'section',
+      { class: 'settings-section' },
+      el('h3', { text: 'Intake forms' }),
+      el('p', { class: 'muted small', text: 'New ticket offers these, so a report from a phone arrives with what the work needs. Required fields must be filled before it files; agents file the same forms with create_ticket.' }),
+      forms.length
+        ? el(
+            'div',
+            { class: 'file-list plan-card' },
+            forms.map((f) =>
+              el(
+                'div',
+                { class: 'file-row' },
+                el('strong', { text: f.name }),
+                el('span', { class: 'muted small', text: `${f.fields.length} field${f.fields.length === 1 ? '' : 's'}, ${f.fields.filter((x) => x.required).length} required${f.labels.length ? ` · ${f.labels.join(', ')}` : ''}${f.folder ? ` · ${f.folder}` : ''}` }),
+                el('span', { class: 'spacer' }),
+                el('button', { class: 'ghost small', type: 'button', text: 'Edit', onclick: () => editing.replaceChildren(formEditor(f, () => editing.replaceChildren())) }),
+                el('button', { class: 'ghost small danger', type: 'button', text: 'Remove', onclick: () => confirm(`Remove the ${f.name} form?`) && void act(() => api(`/forms/${f.id}`, { method: 'DELETE' })) }),
+              ),
+            ),
+          )
+        : null,
+      editing,
+      formEditor(null),
+    );
+  }
+
   function actionsSection() {
     const actions = t.integrations?.actions ?? [];
     const agents = people().filter((m) => m.kind === 'agent');
@@ -2952,6 +3126,7 @@ export function createTickets(ctx) {
       ),
     );
     return [
+      formsSection(),
       actionsSection(),
       el('section', { class: 'settings-section' },
         el('h3', { text: 'Webhooks' }),

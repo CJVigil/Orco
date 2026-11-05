@@ -353,7 +353,8 @@ async function openPromptLink(spec) {
   if (kind === 'new') {
     const project = q.get('project') ?? state.room?.project;
     if (!project || !state.projects.some((p) => p.name === project)) return toast(`You are not in a project named ${project ?? '(none)'}`);
-    await tickets.openNewTicket({ project, title: cut(q.get('title'), 200), description: cut(q.get('body'), 5000), folder: q.get('folder') || undefined, assignee: q.get('assignee') || undefined });
+    const formFields = Object.fromEntries([...q].filter(([k]) => k.startsWith('f.')).map(([k, v]) => [k.slice(2), cut(v, 1000)]));
+    await tickets.openNewTicket({ project, title: cut(q.get('title'), 200), description: cut(q.get('body'), 5000), folder: q.get('folder') || undefined, assignee: q.get('assignee') || undefined, form: q.get('form') || undefined, formFields });
     return;
   }
   const agent = (q.get('agent') ?? '').replace(/^@/, '');

@@ -1273,6 +1273,19 @@ export const MIGRATIONS = [
     updated_at TEXT NOT NULL
   );
   CREATE INDEX project_actions_project ON project_actions (project_id);
+  `,  // 60: intake forms for new tickets (#134).
+  `
+  CREATE TABLE ticket_forms (
+    id INTEGER PRIMARY KEY,
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    name TEXT NOT NULL,
+    hint TEXT NOT NULL DEFAULT '',
+    fields TEXT NOT NULL,
+    defaults TEXT NOT NULL,
+    created_by INTEGER NOT NULL REFERENCES participants(id),
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX ticket_forms_project ON ticket_forms (project_id);
   `,
 ];
 

@@ -227,7 +227,7 @@ export function restArea(method: string, path: string): Area | 'all' {
     [/^\/schedules(\/|$)/, 'schedules'],
     [/^\/locks(\/|$)/, 'locks'],
     [/^\/(tickets|ticket-files|folders|labels|milestones|cycles|incidents|notes)(\/|$)/, 'tickets'],
-    [/^\/projects\/[^/]+\/(files?|notes|folders|labels|milestones|cycles)(\/|$)/, 'tickets'],
+    [/^\/projects\/[^/]+\/(tickets|files?|notes|folders|labels|milestones|cycles|plans)(\/|$)/, 'tickets'],
     [/^\/(messages|attachments|questions|approvals|reviews|artifacts|room-status)(\/|$)/, 'post'],
     [/^\/rooms\/[^/]+(\/[^/]+)?\/status$/, 'post'],
     [/^\/(memory|reminders|profile|runs|usage|presence)(\/|$)/, 'self'],

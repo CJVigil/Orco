@@ -1387,7 +1387,30 @@ export function createApp(store: Store, options: AppOptions = {}) {
   });
   api.post('/projects/:project/tickets', (req, res) => {
     const input = ticketInput(req.body);
-    res.status(201).json(store.tickets.create(req.participant!, String(req.params.project), { ...input, title: input.title ?? '' }));
+    const project = String(req.params.project);
+    // Filed with an intake form (#134): fields by label; the form fills in the rest.
+    const form = typeof req.body?.form === 'string' && req.body.form ? req.body.form : null;
+    const fields = req.body?.fields && typeof req.body.fields === 'object' ? (req.body.fields as Record<string, unknown>) : {};
+    const full = form ? store.forms.ticketInput(req.participant!, project, form, fields, input) : { ...input, title: input.title ?? '' };
+    res.status(201).json(store.tickets.create(req.participant!, project, full));
+  });
+  // Intake forms (#134): project admins set them up; everyone files with them.
+  api.get('/projects/:project/forms', (req, res) => {
+    res.json(store.forms.list(req.participant!, String(req.params.project)));
+  });
+  api.post('/projects/:project/forms', (req, res) => {
+    res.status(201).json(store.forms.create(req.participant!, String(req.params.project), req.body ?? {}));
+  });
+  api.put('/forms/:id', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a form id');
+    res.json(store.forms.update(req.participant!, id, req.body ?? {}));
+  });
+  api.delete('/forms/:id', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a form id');
+    store.forms.delete(req.participant!, id);
+    res.status(204).end();
   });
   api.get('/tickets/:ref', (req, res) => {
     res.json(store.tickets.get(req.participant!, String(req.params.ref), optionalInt(req.query.since)));
@@ -2502,8 +2525,10 @@ export function createApp(store: Store, options: AppOptions = {}) {
   // Prompt links (#118): /new and /ask open the app with a draft from the query; they create nothing.
   for (const kind of ['new', 'ask']) {
     app.get(`/${kind}`, (req, res) => {
-      const keys = kind === 'new' ? ['project', 'title', 'body', 'folder', 'assignee'] : ['agent', 'prompt', 'ticket'];
-      const query = new URLSearchParams(Object.entries(req.query).filter((e): e is [string, string] => keys.includes(e[0]) && typeof e[1] === 'string')).toString().slice(0, 6000);
+      const keys = kind === 'new' ? ['project', 'title', 'body', 'folder', 'assignee', 'form'] : ['agent', 'prompt', 'ticket'];
+      // A form's fields come as f.<Label>=value (#134).
+      const wanted = (k: string) => keys.includes(k) || (kind === 'new' && /^f\.[^:\n]{1,60}$/.test(k));
+      const query = new URLSearchParams(Object.entries(req.query).filter((e): e is [string, string] => wanted(e[0]) && typeof e[1] === 'string')).toString().slice(0, 6000);
       res.redirect(302, at(`#!${kind}?${query}`));
     });
   }

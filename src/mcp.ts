@@ -1334,10 +1334,25 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
     {
       annotations: annotate('create_ticket'),
       description:
-        'File a ticket in a project. It starts in the first backlog status unless you pass one. When the project has folders (list_folders), put it in the one that fits with folder. Replies with a summary; full: true for the whole ticket.',
-      inputSchema: z.object({ project: z.string(), ...ticketFields, title: z.string().max(MAX_TITLE), full: z.boolean().optional() }),
+        'File a ticket in a project. It starts in the first backlog status unless you pass one. When the project has folders (list_folders), put it in the one that fits with folder. ' +
+        'When project_plan lists intake forms, file reports with the matching form: form is its name and fields its values by label; missing required fields are refused by name, and the form sets labels, folder and assignee. ' +
+        'Replies with a summary; full: true for the whole ticket.',
+      inputSchema: z.object({
+        project: z.string(),
+        ...ticketFields,
+        title: z.string().max(MAX_TITLE).optional().describe('Required unless you use a form (then it defaults to the form name and first field)'),
+        form: z.string().optional().describe('An intake form from project_plan'),
+        fields: z.record(z.string(), z.union([z.string(), z.number()])).optional().describe('The form fields by label, like {"Location": "Bay 4"}'),
+        full: z.boolean().optional(),
+      }),
     },
-    async ({ project, full, ...args }) => run(() => formatWritten(store.tickets.create(me, project, { ...ticketInput(args), title: args.title }), full)),
+    async ({ project, full, form, fields, ...args }) =>
+      run(() => {
+        const input = ticketInput(args);
+        if (form) return formatWritten(store.tickets.create(me, project, store.forms.ticketInput(me, project, form, fields ?? {}, { ...input, title: args.title })), full);
+        if (!args.title?.trim()) throw new OrcoError('invalid', 'Give the ticket a title (or file it with a form)');
+        return formatWritten(store.tickets.create(me, project, { ...input, title: args.title }), full);
+      }),
   );
 
   server.registerTool(

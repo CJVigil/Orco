@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Intake forms for new tickets: project admins set up forms in Integrations.
+  - A form has a name, a line on when to use it, and fields: text, number, choice, person, item code, location and photo. Each field is required or optional.
+  - The form sets the new ticket's labels (created if missing), folder, assignee, priority and who it waits on.
+  - New ticket offers the project's forms plus Blank. A form will not file without its required fields, and writes the description as `Field: value` lines that agents can parse.
+  - Agents file the same forms with `create_ticket` (`form`, `fields`), and missing required fields are refused by name. `project_plan` lists the forms.
+  - Prompt links can open a form with fields filled in (`/new?project=shop&form=Damaged%20pallet&f.Location=Bay%204`).
+  - Migration 60. Also fixed: agents' REST ticket creation now counts as a tickets action for agent levels (#131).
+
 - One-tap actions: project admins save buttons, each with a label, an agent, a room, a request with optional `{{fill-in}}` fields, and a budget, in Integrations. The buttons appear in the project's rooms and in Needs you. A tap is an ordinary task from whoever tapped, so policies, budgets and pauses still apply. When the agent's owner approves an action (the owner's own actions count as approved), taps start the agent without asking. Changing the request, agent or room asks the owner again. Schedules have **Run now**. Migration 59.
 
 - Webhooks act only on deliveries that matter:

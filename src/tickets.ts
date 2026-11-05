@@ -1,3 +1,4 @@
+import type { TicketForm } from './forms.js';
 import type { ModeInfo } from './modes.js';
 import type { GuestRequest } from './guests.js';
 import type { OrderRule } from './order.js';
@@ -326,6 +327,8 @@ export interface TicketFilter {
 }
 
 export interface ProjectPlan {
+  /** Intake forms for new tickets (#134). */
+  forms: TicketForm[];
   /** The scope gate (#108): where the project stands, and what SCOPE.md still needs. */
   scope: ScopeStatus;
   /** Build order rules that apply here, the org's first (#109). */
@@ -1358,6 +1361,7 @@ export class Tickets {
       milestones: this.milestones(proj.id),
       cycles: this.cycles(proj.id),
       folders: this.folderList(proj.id),
+      forms: this.store.forms.list(actor, proj.name),
       members: this.store.members(actor, proj.name).map((p) => ({ name: p.name, kind: p.kind, owner: p.owner })),
     };
   }
