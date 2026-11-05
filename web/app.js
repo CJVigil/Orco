@@ -1,3 +1,4 @@
+import { guardDom, replace } from './dom.js';
 import { skeleton } from './skeleton.js';
 import { attachMentionAutocomplete, attachSuggest } from './autocomplete.js';
 import { commandSuggestions, parseCommand } from './commands.js';
@@ -16,6 +17,9 @@ import { createGuide } from './guide.js';
 import { createNeeds } from './needs.js';
 import { createPortfolio } from './portfolio.js';
 import { createTickets } from './tickets.js';
+
+// Before anything renders: null children never become the text "null" (#147).
+guardDom();
 
 const $ = (id) => document.getElementById(id);
 const GROUP_MS = 5 * 60 * 1000;
@@ -904,7 +908,8 @@ function renderWorkStatus() {
       message.task.progress ? el('span', { class: 'muted work-tail', text: ` · ${message.task.progress.text}` }) : el('span', { class: 'muted work-tail', text: ` · ${(message.text ?? '').replace(/^@[a-z0-9-]+\s*/, '').split('\n')[0]}` }),
     );
   const [first, ...rest] = live;
-  box.replaceChildren(
+  replace(
+    box,
     line(first),
     rest.length ? el('details', { class: 'work-more' }, el('summary', { class: 'small', text: `+${rest.length}` }), el('div', { class: 'work-list' }, rest.map(line))) : null,
   );
@@ -3845,7 +3850,8 @@ function renderPersonInbox(inbox) {
   const needsCount = c.approvals + c.questions + (c.waiting ?? 0) + (c.reviews ?? 0) + c.flags + c.stalled;
   const mentions = inbox.mentions.filter((m) => m.question?.state !== 'open');
   const unread = mentions.filter((m) => !m.seen);
-  $('panel-body').replaceChildren(
+  replace(
+    $('panel-body'),
     needsCount
       ? el(
           'button',

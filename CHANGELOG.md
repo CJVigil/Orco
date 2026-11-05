@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: the word "null" no longer appears in the Inbox (above Mentions when nothing needs you, and below the list when your agents have no open tasks), or at the end of the room's task ticker when one task is running. Empty parts are dropped before they reach the page, and a guard does the same for every `replaceChildren`, `append` and `prepend` in the app and the guest page.
+
 - UI pass 2:
   - **Needs you:** cards are compact. The kind is a small label, a long request shows two lines until tapped, exact details fold under "Details", and choices are inline buttons with the first one filled.
   - **Sidebar:** each project has a coloured initial, the folders sit folded under one "Folders" line, and Recent lists only what the sidebar is not already showing.

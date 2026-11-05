@@ -1,6 +1,10 @@
 // A guest's view of one shared ticket (#117): its title, status and comments, refreshed every few
 // seconds, and a box to ask something (with a photo). What the guest writes waits for someone in the
 // project to send it on. Built with textContent only: everything here comes from other people.
+import { guardDom } from './dom.js';
+
+// Null children never become the text "null" (#147).
+guardDom();
 
 const token = location.hash.slice(1);
 // Keep the token out of the address bar and history once read.
