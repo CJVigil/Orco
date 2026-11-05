@@ -483,6 +483,7 @@ export function createTickets(ctx) {
     const views = { board: renderBoard, list: renderList, milestones: renderMilestones, cycles: renderCycles, notes: renderNotes, files: renderFiles, artifacts: renderArtifacts, spend: renderSpend, report: renderReport, schedules: renderSchedules, integrations: renderIntegrations, settings: renderSettings };
     const banner = t.tab === 'board' || t.tab === 'list' || t.tab === 'files' ? scopeBanner() : null;
     body.replaceChildren(...[banner, views[t.tab]()].flat(Infinity).filter((node) => node !== null && node !== undefined));
+    decorateSelection(body);
   }
 
   /**
@@ -1148,6 +1149,201 @@ export function createTickets(ctx) {
   }
 
   /* List */
+
+  /*
+   * Select several tickets and change them in one go (#138). A box on each card and row (shown on
+   * hover, always on touch, and once anything is selected); shift-click selects a range; long-press
+   * on a phone selects; Esc clears. The bar sends one bulk request, all or nothing, with an optional
+   * comment, and offers one Undo for the whole change.
+   */
+  const selection = new Set();
+  let lastPicked = null;
+  const refsOnScreen = () => [...($('ticket-body')?.querySelectorAll('[data-ref]') ?? [])].map((n) => n.dataset.ref);
+
+  function toggleSelect(ref, range) {
+    if (range && lastPicked) {
+      const refs = refsOnScreen();
+      const [a, b] = [refs.indexOf(lastPicked), refs.indexOf(ref)].sort((x, y) => x - y);
+      if (a >= 0 && b >= 0) for (const r of refs.slice(a, b + 1)) selection.add(r);
+    } else if (selection.has(ref)) selection.delete(ref);
+    else selection.add(ref);
+    lastPicked = ref;
+    paintSelection();
+  }
+
+  function clearSelection() {
+    selection.clear();
+    lastPicked = null;
+    paintSelection();
+  }
+
+  function decorateSelection(body) {
+    if (t.tab !== 'board' && t.tab !== 'list') {
+      if (selection.size) clearSelection();
+      return;
+    }
+    // Tickets no longer on screen (filtered away, moved to another project) leave the selection.
+    const present = new Set(t.tickets.map((x) => x.ref));
+    for (const ref of [...selection]) if (!present.has(ref)) selection.delete(ref);
+    for (const node of body.querySelectorAll('[data-ref]')) {
+      if (node.querySelector(':scope > .select-box')) continue;
+      const ref = node.dataset.ref;
+      const box = el('span', {
+        class: 'select-box',
+        role: 'checkbox',
+        tabindex: '0',
+        'aria-label': `Select ${ref}`,
+        onclick: (event) => {
+          event.stopPropagation();
+          event.preventDefault();
+          toggleSelect(ref, event.shiftKey);
+        },
+        onkeydown: (event) => {
+          if (event.key === ' ' || event.key === 'Enter') {
+            event.preventDefault();
+            event.stopPropagation();
+            toggleSelect(ref, event.shiftKey);
+          }
+        },
+      });
+      node.prepend(box);
+      // Long-press selects on touch screens; the tap that ends it does not open the ticket.
+      let timer = null;
+      let pressed = false;
+      node.addEventListener('pointerdown', (event) => {
+        if (event.pointerType !== 'touch') return;
+        pressed = false;
+        timer = setTimeout(() => {
+          pressed = true;
+          toggleSelect(ref, false);
+          navigator.vibrate?.(15);
+        }, 500);
+      });
+      for (const end of ['pointerup', 'pointercancel', 'pointermove']) node.addEventListener(end, () => clearTimeout(timer));
+      node.addEventListener(
+        'click',
+        (event) => {
+          // While selecting, a tap (or shift-click) on a card selects instead of opening it.
+          if (pressed || selection.size || event.shiftKey) {
+            event.stopPropagation();
+            event.preventDefault();
+            if (!pressed) toggleSelect(ref, event.shiftKey);
+            pressed = false;
+          }
+        },
+        true,
+      );
+    }
+    paintSelection();
+  }
+
+  function paintSelection() {
+    const body = $('ticket-body');
+    if (!body) return;
+    body.classList.toggle('selecting', selection.size > 0);
+    for (const node of body.querySelectorAll('[data-ref]')) {
+      const on = selection.has(node.dataset.ref);
+      node.classList.toggle('selected', on);
+      node.querySelector(':scope > .select-box')?.setAttribute('aria-checked', String(on));
+    }
+    renderBulkBar();
+  }
+
+  const nameOf = (v) => (v && typeof v === 'object' ? (v.name ?? (v.number !== undefined ? String(v.number) : null)) : v ?? null);
+  /** The fields a bulk change touches, read back from a ticket, so Undo can restore them. */
+  const READ = {
+    status: (x) => x.status?.name,
+    folder: (x) => nameOf(x.folder),
+    assignee: (x) => nameOf(x.assignee),
+    milestone: (x) => nameOf(x.milestone),
+    cycle: (x) => (x.cycle ? Number(x.cycle.number ?? x.cycle) : null),
+    priority: (x) => x.priority,
+    labels: (x) => x.labels.map((l) => l.name ?? l),
+    waitingOn: (x) => nameOf(x.waitingOn?.person ?? null),
+  };
+
+  async function applyBulk(what, perTicket, comment) {
+    const chosen = t.tickets.filter((x) => selection.has(x.ref));
+    if (!chosen.length) return;
+    const entries = chosen.map((x) => ({ ticket: x.ref, ...perTicket(x) }));
+    const touched = [...new Set(entries.flatMap((e) => Object.keys(e).filter((k) => k !== 'ticket')))];
+    const before = chosen.map((x) => ({ ticket: x.ref, ...Object.fromEntries(touched.filter((k) => READ[k]).map((k) => [k, READ[k](x)])) }));
+    try {
+      const results = await api('/tickets/bulk', { method: 'POST', body: { tickets: entries, ...(comment ? { set: { comment } } : {}) } });
+      const after = new Map(results.map((r) => [r.ticket.ref, r.ticket.updatedAt]));
+      clearSelection();
+      await refreshTickets();
+      // A waiting ask cannot be put back as it was (its wording and time), so that change has no Undo.
+      if (touched.includes('waitingOn')) return notify(`${what} · ${chosen.length} tickets`);
+      // One Undo for the whole change, refused if any of them changed again since.
+      offer(`${what} · ${chosen.length} ticket${chosen.length === 1 ? '' : 's'}`, async () => {
+        await refreshTickets();
+        const moved = t.tickets.filter((x) => after.has(x.ref) && x.updatedAt !== after.get(x.ref)).map((x) => x.ref);
+        if (moved.length) throw new Error(`${moved.join(', ')} changed since; change ${moved.length === 1 ? 'it' : 'them'} back by hand`);
+        await api('/tickets/bulk', { method: 'POST', body: { tickets: before } });
+        await refreshTickets();
+      });
+    } catch (err) {
+      notify(`${err.message}`);
+    }
+  }
+
+  function renderBulkBar() {
+    let bar = root?.querySelector('.bulk-bar');
+    if (!selection.size) {
+      bar?.remove();
+      return;
+    }
+    if (!bar) {
+      bar = el('div', { class: 'bulk-bar', role: 'toolbar', 'aria-label': 'Change the selected tickets' });
+      root.append(bar);
+    }
+    const plan = t.plan;
+    const why = el('input', { class: 'bulk-why', placeholder: 'Why (optional, added as a comment)', maxlength: '500', 'aria-label': 'Why' });
+    const pick = (label, options, run) =>
+      el(
+        'select',
+        {
+          'aria-label': label,
+          onchange: (event) => {
+            const value = event.target.value;
+            event.target.selectedIndex = 0;
+            if (value !== '__') void run(value === '' ? null : value);
+          },
+        },
+        el('option', { value: '__', text: label }),
+        options.map(([value, text]) => el('option', { value, text })),
+      );
+    const users = plan.members.filter((m) => m.kind === 'user');
+    const closed = plan.statuses.find((s) => s.category === 'completed');
+    bar.replaceChildren(
+      el('strong', { text: `${selection.size} selected` }),
+      pick('Status', plan.statuses.map((s) => [s.name, s.name]), (v) => applyBulk(`Status ${v}`, () => ({ status: v }), why.value)),
+      plan.folders?.length ? pick('Folder', [['', 'No folder'], ...plan.folders.map((f) => [f.name, f.name])], (v) => applyBulk(v ? `Folder ${v}` : 'Out of folders', () => ({ folder: v }), why.value)) : null,
+      plan.labels.length
+        ? pick('Add label', plan.labels.map((l) => [l.name, l.name]), (v) => applyBulk(`Label ${v}`, (x) => ({ labels: [...new Set([...READ.labels(x), v])] }), why.value))
+        : null,
+      plan.labels.length
+        ? pick('Remove label', plan.labels.map((l) => [l.name, l.name]), (v) => applyBulk(`Removed ${v}`, (x) => ({ labels: READ.labels(x).filter((l) => l !== v) }), why.value))
+        : null,
+      pick('Assignee', [['', 'Unassigned'], ...plan.members.map((m) => [m.name, m.kind === 'agent' ? `${m.name} (agent)` : m.name])], (v) => applyBulk(v ? `Assigned ${v}` : 'Unassigned', () => ({ assignee: v }), why.value)),
+      plan.milestones.length ? pick('Milestone', [['', 'No milestone'], ...plan.milestones.map((m) => [m.name, m.name])], (v) => applyBulk('Milestone', () => ({ milestone: v }), why.value)) : null,
+      plan.cycles.some((c) => !c.completedAt) ? pick('Cycle', [['', 'No cycle'], ...plan.cycles.filter((c) => !c.completedAt).map((c) => [String(c.number), c.name])], (v) => applyBulk('Cycle', () => ({ cycle: v === null ? null : Number(v) }), why.value)) : null,
+      pick('Priority', PRIORITY_ORDER.map((p) => [p, PRIORITY_LABEL[p]]), (v) => applyBulk(`Priority ${v}`, () => ({ priority: v }), why.value)),
+      pick('Waiting on', [['', 'Nobody'], ...users.map((u) => [u.name, u.name])], (v) => {
+        const ask = v ? prompt(`What do they need to do? (asked of ${v} on each ticket)`) : '';
+        if (v && !ask?.trim()) return;
+        return applyBulk(v ? `Waiting on ${v}` : 'Waiting on nobody', () => (v ? { waitingOn: v, waitingAsk: ask } : { waitingOn: null }), why.value);
+      }),
+      closed ? el('button', { class: 'small', type: 'button', text: 'Close', title: `Move to ${closed.name}`, onclick: () => void applyBulk(`Closed`, () => ({ status: closed.name }), why.value) }) : null,
+      why,
+      el('button', { class: 'ghost small', type: 'button', text: 'Clear', title: 'Clear the selection (Esc)', onclick: clearSelection }),
+    );
+  }
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && selection.size && !event.defaultPrevented) clearSelection();
+  });
 
   function listRow(ticket, { grouped = false } = {}) {
     return el(

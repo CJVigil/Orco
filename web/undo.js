@@ -22,7 +22,9 @@ function toastNode(text, onUndo) {
   label.textContent = text;
   const button = document.createElement('button');
   button.type = 'button';
-  button.className = 'small';
+  button.className = 'small undo-button';
+  // Inline, so no page-wide button style can turn it white on white.
+  button.style.cssText = 'background:transparent;color:inherit;border:1px solid rgba(255,255,255,.4);min-width:5.5rem;font-weight:600';
   button.addEventListener('click', onUndo);
   node.append(label, button);
   document.body.append(node);

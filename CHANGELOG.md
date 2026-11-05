@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Select several tickets and change them in one go.
+  - Board cards and list rows get a checkbox: on hover, or by long-press on a phone. Shift-click selects a range, and Esc clears.
+  - A bar shows how many are selected and changes status, folder, labels (add or remove), assignee, milestone, cycle, priority or waiting-on, or closes them.
+  - It sends one bulk request, all or nothing, with an optional "why" added as a comment, and offers one Undo. Undo is refused if any of the tickets changed since.
+- Fixed: the Undo button was white on white in the light theme.
+
 - Sign in on a phone by scanning a QR code on the PC screen.
   - Sign in on another device, and invite links, show a large QR code, drawn by a small built-in encoder that makes no network calls.
   - The code uses `ORCO_PUBLIC_URL`, or the address the page is open at, or one of the server's LAN addresses when you are browsing at localhost, with a picker when there are several. It never points at localhost or 127.0.0.1.
