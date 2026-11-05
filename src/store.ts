@@ -3,6 +3,7 @@ import { Modes } from './modes.js';
 import { Actions } from './actions.js';
 import { Forms } from './forms.js';
 import { TitleRulesStore } from './titles.js';
+import { OrgNotes } from './orgnotes.js';
 import { ToolLevels, type ToolAccess } from './tooltable.js';
 import { Guests } from './guests.js';
 import { Incidents } from './incidents.js';
@@ -288,6 +289,7 @@ export class Store {
   readonly actions: Actions;
   readonly forms: Forms;
   readonly titleRules: TitleRulesStore;
+  readonly orgNotes: OrgNotes;
   readonly toolLevels: ToolLevels;
   readonly policyFile: PolicyFiles;
   readonly questions: Questions;
@@ -349,6 +351,7 @@ export class Store {
     this.actions = new Actions(this);
     this.forms = new Forms(this);
     this.titleRules = new TitleRulesStore(this);
+    this.orgNotes = new OrgNotes(this);
     this.toolLevels = new ToolLevels(this);
     this.policyFile = new PolicyFiles(this);
     this.questions = new Questions(this);

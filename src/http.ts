@@ -1465,7 +1465,39 @@ export function createApp(store: Store, options: AppOptions = {}) {
     res.status(204).end();
   });
   api.get('/tickets/:ref', (req, res) => {
-    res.json(store.tickets.get(req.participant!, String(req.params.ref), optionalInt(req.query.since)));
+    const ticket = store.tickets.get(req.participant!, String(req.params.ref), optionalInt(req.query.since));
+    // Org notes that mention it (#144): "notes about this".
+    const notes = store.orgNotes.aboutTicket(ticket.ref).map((n) => ({ slug: n.slug, name: n.name, description: n.description, expired: n.expired }));
+    res.json(notes.length ? { ...ticket, orgNotes: notes } : ticket);
+  });
+  // Org memory (#144).
+  api.get('/org-notes', (req, res) => {
+    const state = typeof req.query.state === 'string' ? (req.query.state as 'live' | 'proposed' | 'all') : 'live';
+    res.json({ notes: store.orgNotes.list(req.participant!, { state }), index: store.orgNotes.index() });
+  });
+  api.post('/org-notes', (req, res) => {
+    const b = req.body ?? {};
+    res.status(201).json(store.orgNotes.propose(req.participant!, { name: String(b.name ?? ''), description: b.description, type: b.type, body: String(b.body ?? ''), source: b.source ?? null, expires: b.expires ?? null }));
+  });
+  api.post('/org-notes/:id/approve', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a note id');
+    res.json(store.orgNotes.approve(req.participant!, id));
+  });
+  api.post('/org-notes/:id/reject', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a note id');
+    store.orgNotes.reject(req.participant!, id);
+    res.status(204).end();
+  });
+  api.post('/org-notes/:id/keep', (req, res) => {
+    const id = optionalInt(req.params.id);
+    if (id === undefined) throw new OrcoError('invalid', 'Expected a note id');
+    store.orgNotes.keep(req.participant!, id);
+    res.status(204).end();
+  });
+  api.delete('/org-notes/:slug', (req, res) => {
+    res.json(store.orgNotes.forget(req.participant!, String(req.params.slug), str(req.body?.reason, 'reason')));
   });
   // Several tickets at once, all or nothing: { tickets: [{ ticket, ...fields }], set: { ...fields } }.
   api.post('/tickets/bulk', (req, res) => {

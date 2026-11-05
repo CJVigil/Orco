@@ -9,6 +9,7 @@ const TABS = [
   ['digest', 'Digest'],
   ['controls', 'Controls'],
   ['tools', 'Tool use'],
+  ['memory', 'Org memory'],
 ];
 
 const HEALTH_TEXT = { red: 'Needs attention', amber: 'Watch', green: 'On track' };
@@ -68,11 +69,99 @@ export function createPortfolio(ctx) {
     const body = $('portfolio-body');
     if (!body) return;
     try {
-      const view = await { overview, roadmap, decisions, digest, controls, tools }[p.tab]();
+      const view = await { overview, roadmap, decisions, digest, controls, tools, memory }[p.tab]();
       body.replaceChildren(...[view].flat(3).filter(Boolean));
     } catch (err) {
       body.replaceChildren(el('p', { class: 'error', text: err.message }));
     }
+  }
+
+  /*
+   * Org memory (#144): notes every agent loads. Agents propose; org admins approve or reject, and
+   * decide on requests to forget. Anyone can propose; an org admin's note is live at once.
+   */
+  async function memory() {
+    const admin = Boolean(me()?.orgAdmin);
+    const [live, queue] = await Promise.all([api('/org-notes'), api('/org-notes?state=proposed')]);
+    const act = (fn) => void fn().then(load, (err) => notify(err.message));
+    const typeChip = (t) => el('span', { class: 'chip', text: t });
+    const noteCard = (n, actions) =>
+      el(
+        'article',
+        { class: `plan-card org-note${n.expired ? ' expired' : ''}` },
+        el('div', { class: 'plan-card-head' }, typeChip(n.type), el('h3', { text: n.name }), el('span', { class: 'spacer' }), actions),
+        n.description ? el('p', { class: 'small', text: n.description }) : null,
+        el('div', { class: 'md org-note-body' }, richText(n.body)),
+        el('p', {
+          class: 'muted small',
+          text: `By ${n.author} · ${n.created.slice(0, 10)}${n.source ? ` · from ${n.source}` : ''}${n.approvedBy ? ` · approved by ${n.approvedBy}` : ''}${n.expires ? ` · ${n.expired ? 'expired' : 'until'} ${n.expires}` : ''}`,
+        }),
+        n.forgetRequestedBy ? el('p', { class: 'small warning-note', text: `${n.forgetRequestedBy} asks to forget this.` }) : null,
+      );
+    const name = el('input', { maxlength: '80', required: true, placeholder: 'Deploy freeze', 'aria-label': 'Name' });
+    const description = el('input', { maxlength: '200', placeholder: 'One line for the index', 'aria-label': 'Description' });
+    const type = el('select', { 'aria-label': 'Type' }, ['rule', 'fact', 'howto', 'contact', 'status'].map((t) => el('option', { value: t, text: t })));
+    const body = el('textarea', { rows: '4', required: true, maxlength: '8000', placeholder: 'One fact per note. Link others with [[their-name]]; mention tickets like API-12.', 'aria-label': 'Note' });
+    const source = el('input', { maxlength: '100', placeholder: 'API-12 or message 123', 'aria-label': 'Source' });
+    const expires = el('input', { type: 'date', 'aria-label': 'Expires' });
+    return [
+      el('p', { class: 'muted plan-intro', text: 'Notes every agent loads as shared memory. Agents propose them; an org admin approves before they go live. Statuses expire and are then flagged, not stated as current. orco vault export <dir> opens them in Obsidian.' }),
+      queue.notes.length
+        ? el(
+            'section',
+            { class: 'settings-section' },
+            el('h3', { text: admin ? `Waiting for approval (${queue.notes.length})` : 'Your proposals' }),
+            queue.notes.map((n) =>
+              noteCard(
+                n,
+                admin
+                  ? el(
+                      'span',
+                      { class: 'row-end' },
+                      el('button', { class: 'primary small', type: 'button', text: 'Approve', onclick: () => act(() => api(`/org-notes/${n.id}/approve`, { method: 'POST', body: {} })) }),
+                      el('button', { class: 'ghost small danger', type: 'button', text: 'Reject', onclick: () => act(() => api(`/org-notes/${n.id}/reject`, { method: 'POST', body: {} })) }),
+                    )
+                  : el('span', { class: 'chip waiting', text: 'Waiting for an org admin' }),
+              ),
+            ),
+          )
+        : null,
+      el(
+        'section',
+        { class: 'settings-section' },
+        el('h3', { text: `Live (${live.notes.length})` }),
+        live.notes.length
+          ? live.notes.map((n) =>
+              noteCard(
+                n,
+                admin
+                  ? el(
+                      'span',
+                      { class: 'row-end' },
+                      n.forgetRequestedBy ? el('button', { class: 'ghost small', type: 'button', text: 'Keep', onclick: () => act(() => api(`/org-notes/${n.id}/keep`, { method: 'POST', body: {} })) }) : null,
+                      el('button', { class: 'ghost small danger', type: 'button', text: 'Forget', onclick: () => confirm(`Forget “${n.name}” for every agent?`) && act(() => api(`/org-notes/${encodeURIComponent(n.slug)}`, { method: 'DELETE', body: {} })) }),
+                    )
+                  : null,
+              ),
+            )
+          : el('p', { class: 'muted small', text: 'No org notes yet.' }),
+      ),
+      el(
+        'form',
+        {
+          class: 'schedule-form plan-card',
+          onsubmit: (event) => {
+            event.preventDefault();
+            act(() => api('/org-notes', { method: 'POST', body: { name: name.value, description: description.value, type: type.value, body: body.value, source: source.value || null, expires: expires.value || null } }));
+          },
+        },
+        el('h3', { text: admin ? 'New org note' : 'Propose an org note' }),
+        el('div', { class: 'schedule-grid' }, el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Name' }), name), el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Type' }), type), el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Expires (statuses)' }), expires), el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Source' }), source)),
+        el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Index line' }), description),
+        el('label', { class: 'field' }, el('span', { class: 'small muted', text: 'Note' }), body),
+        el('div', { class: 'row-end' }, el('button', { class: 'primary small', type: 'submit', text: admin ? 'Save' : 'Propose' })),
+      ),
+    ];
   }
 
   /* Tool use (#103): which MCP replies are big, which tools fail, which go unused. Org admins only. */

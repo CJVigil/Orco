@@ -6326,3 +6326,16 @@ body.lightbox-open {
   align-items: center;
   gap: 0.4rem;
 }
+
+/* Org memory (#144) */
+.org-note.expired {
+  opacity: 0.6;
+}
+
+.org-note-body {
+  margin: 0.3rem 0;
+}
+
+.org-notes-strip a {
+  display: block;
+}

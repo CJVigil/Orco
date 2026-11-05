@@ -45,6 +45,7 @@ Server commands (run where the database lives):
   audit export [--since N]   Print the audit log as JSON lines
   backup <file>              Write a consistent copy of the database, safe while serving
   restore <file> [--force]   Replace the database with a backup (stop the server first)
+  vault export|import <dir>  Org memory as an Obsidian-compatible folder (one note per file, INDEX.md)
   tools                      Every MCP tool, what it touches, and which agent levels may call it
   service install|status|start|stop|restart|logs [N]|uninstall
                              Keep the server running at boot or sign-in (systemd, launchd or a Windows
@@ -373,6 +374,24 @@ export function main(): void {
       for (const name of names) console.log(`  ${name.padEnd(width)}  ${READ_ONLY_TOOLS.has(name) ? 'read-only' : 'writes'}`);
     }
     console.log(`\n${Object.keys(TOOLS).length} tools. Set an agent's level in its settings, or POST /api/agents/<name>/tool-level.`);
+    return;
+  }
+
+  // orco vault export|import <dir> (#144): org memory as an Obsidian-compatible folder.
+  if (command === 'vault') {
+    const dir = args[0] ? resolve(args[0]) : undefined;
+    if (!dir || (sub !== 'export' && sub !== 'import')) throw new OrcoError('invalid', 'Usage: orco vault export <dir> | orco vault import <dir>');
+    const store = new Store(openDatabase(values.db));
+    if (sub === 'export') {
+      const n = store.orgNotes.exportVault(dir);
+      console.log(`Wrote ${n} org note${n === 1 ? '' : 's'} and INDEX.md to ${dir}. Open the folder in Obsidian; bring edits back with orco vault import ${args[0]}.`);
+    } else {
+      // Notes edited in the vault come back as the server's operator: the first org admin.
+      const operator = store.orgAdmins()[0];
+      if (!operator) throw new OrcoError('conflict', 'Make someone an org admin first; imported notes are written as them');
+      const n = store.orgNotes.importVault(dir, operator);
+      console.log(`Read ${n} note${n === 1 ? '' : 's'} from ${dir} as ${operator.name}; they are live.`);
+    }
     return;
   }
 

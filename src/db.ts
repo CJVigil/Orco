@@ -1371,6 +1371,27 @@ export const MIGRATIONS = [
   INSERT INTO search_fts (rowid, body, kind, key)
     SELECT f.id * 8 + 6, f.path || ' ' || v.content, 'file', f.id FROM files f JOIN file_versions v ON v.file_id = f.id
     WHERE v.version = (SELECT max(version) FROM file_versions WHERE file_id = f.id);
+  `,  // 64: org memory (#144): shared notes every agent loads, approved by an org admin.
+  `
+  CREATE TABLE org_notes (
+    id INTEGER PRIMARY KEY,
+    slug TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    type TEXT NOT NULL,
+    body TEXT NOT NULL,
+    author_id INTEGER NOT NULL REFERENCES participants(id),
+    source TEXT,
+    state TEXT NOT NULL CHECK (state IN ('proposed', 'live', 'rejected')),
+    created_at TEXT NOT NULL,
+    expires TEXT,
+    approved_by INTEGER REFERENCES participants(id),
+    approved_at TEXT,
+    forget_requested_by INTEGER REFERENCES participants(id),
+    forget_reason TEXT,
+    replaces TEXT
+  );
+  CREATE INDEX org_notes_state ON org_notes (state);
   `,
 ];
 

@@ -472,6 +472,7 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
     const issue = titleIssue(title, store.titleRules.forProject(projectId));
     return issue ? `Title rule: ${issue}. It was filed as written; fix it with update_ticket.` : null;
   };
+  const orgIndex = store.orgNotes.index();
   const server: McpServer = new McpServer(
     { name: 'orco', version: VERSION },
     {
@@ -489,6 +490,8 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
         'ticket, read it with get_ticket, keep it current with update_ticket and comment_ticket, and mark the task done when the ' +
         'work is ready for review. ' +
         (store.onyx.enabled ? 'For company knowledge outside Orco (docs, wikis, chat history), use search_knowledge. ' : '') +
+        // Org memory (#144): what everyone here has agreed is true, one line per note.
+        (orgIndex ? `\n\n${orgIndex}\n\nPropose what the whole org should remember with propose_org_note (an org admin approves it); ask to forget one that no longer holds with forget_org_note.\n\n` : '') +
         `${WRITING} Keep each ticket's next_step current; when you need a person to act, set waiting_on. ` +
         UNTRUSTED_NOTE,
     },
@@ -786,6 +789,62 @@ export function buildMcpServer(store: Store, presence: Presence, me: Participant
       async ({ query, sources, since, limit }) => run(async () => ({ note: ONYX_NOTE, results: await store.onyx.search(me, query, { sources, since, limit }) })),
     );
   }
+
+  // Org memory (#144): read for everyone; agents propose and ask to forget; people decide.
+  server.registerTool(
+    'org_notes',
+    {
+      annotations: annotate('org_notes'),
+      description:
+        'Org memory: notes everyone here has agreed on (rules, facts, how-tos, contacts, statuses). Without name, the index, one line per note; ' +
+        'with name, that note in full, with who wrote it, where it came from and when it expires. An expired note may no longer hold.',
+      inputSchema: z.object({ name: z.string().optional().describe('A note from the index, like [[deploy-freeze]]') }),
+    },
+    async ({ name }) =>
+      run(() => {
+        if (!name) return store.orgNotes.index() || 'No org notes yet. Propose one with propose_org_note.';
+        const n = store.orgNotes.read(me, name.replace(/^\[\[|\]\]$/g, ''));
+        return { note: UNTRUSTED_NOTE, ...n };
+      }),
+  );
+
+  server.registerTool(
+    'propose_org_note',
+    {
+      annotations: annotate('propose_org_note'),
+      description:
+        'Propose a note for org memory, which every agent loads: one fact per note, with where you learned it (a ticket like API-12, or a message). ' +
+        'An org admin approves it before it goes live; a misread remark must not become everyone\'s fact. Situational facts ("X is down") need expires. ' +
+        'Link other notes with [[their-name]]. Proposing a note with an existing name proposes a change to it.',
+      inputSchema: z.object({
+        name: z.string().max(80),
+        description: z.string().max(200).describe('One line for the index'),
+        type: z.enum(['rule', 'fact', 'howto', 'contact', 'status']),
+        body: z.string().max(8000),
+        source: z.string().max(100).optional().describe('Where it came from: a ticket ref or "message 123"'),
+        expires: z.string().optional().describe('YYYY-MM-DD; required for a status'),
+      }),
+    },
+    async (args) =>
+      run(() => {
+        const n = store.orgNotes.propose(me, args);
+        return n.state === 'live' ? `Saved [[${n.slug}]]; it is live.` : `Proposed [[${n.slug}]]; an org admin will approve or reject it.`;
+      }),
+  );
+
+  server.registerTool(
+    'forget_org_note',
+    {
+      annotations: annotate('forget_org_note'),
+      description: 'Ask for an org note to be forgotten because it no longer holds. An org admin decides; say why.',
+      inputSchema: z.object({ name: z.string(), reason: z.string().max(300) }),
+    },
+    async ({ name, reason }) =>
+      run(() => {
+        const done = store.orgNotes.forget(me, name.replace(/^\[\[|\]\]$/g, ''), reason);
+        return done.removed ? 'Forgotten.' : 'Asked; an org admin will decide.';
+      }),
+  );
 
   server.registerTool(
     'my_notes',

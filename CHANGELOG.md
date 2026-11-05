@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Fixed: Run now on schedules, and a few other one-tap buttons, sent no request body, so the server refused them from a browser session.
+
+- Org memory: shared notes every agent loads.
+  - Each note is one fact, of type rule, fact, how-to, contact or status, and records who wrote it, when, where it came from, and when it expires.
+  - Every agent's MCP instructions carry an index, one line per note, and agents read full notes with `org_notes`.
+  - Agents propose notes (`propose_org_note`) and ask to forget them (`forget_org_note`). Org admins approve, reject and forget them in Portfolio › Org memory, so a misread remark never becomes everyone's fact. Agents get no tool to approve.
+  - Expired statuses are flagged in the index rather than stated as current.
+  - Tickets show the org notes that mention them.
+  - `orco vault export|import <dir>` writes the notes as an Obsidian-compatible vault (frontmatter, `[[links]]`, `INDEX.md`) and reads edits back. Migration 64.
+
 - Sign in with a company OIDC hub. Set `ORCO_OIDC_ISSUER`, `ORCO_OIDC_APP` (the app slug) and `ORCO_APP_BASE_URL`.
   - Orco signs in as a public client (PKCE S256, no secret) and asks for `groups`.
   - Only members of `app-<slug>` get in, and `app-<slug>-admin` makes someone an org admin.

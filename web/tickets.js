@@ -1657,7 +1657,7 @@ export function createTickets(ctx) {
                   text: ticket.task ? 'Start again' : 'Start task',
                   onclick: async () => {
                     try {
-                      renderDetail((await api(`/tickets/${ticket.ref}/start`, { method: 'POST' })).ticket);
+                      renderDetail((await api(`/tickets/${ticket.ref}/start`, { method: 'POST', body: {} })).ticket);
                     } catch (err) {
                       notify(err.message);
                     }
@@ -2298,6 +2298,15 @@ export function createTickets(ctx) {
         el('label', { class: 'check small' }, el('input', { type: 'checkbox', checked: peopleOnly, onchange: (event) => (setPeopleOnly(event.target.checked), renderDetail(ticket)) }), 'People only'),
       ),
       guestRequests(ticket),
+      // Org memory that mentions this ticket (#144).
+      ticket.orgNotes?.length
+        ? el(
+            'div',
+            { class: 'files-strip org-notes-strip' },
+            el('div', { class: 'small muted files-head', text: `Org notes about this (${ticket.orgNotes.length})` }),
+            ticket.orgNotes.map((n) => el('a', { class: `small${n.expired ? ' muted' : ''}`, href: '#!portfolio/memory', title: n.description, text: `[[${n.slug}]] ${n.name}${n.expired ? ' (expired)' : ''}` })),
+          )
+        : null,
       filesStrip(ticket),
       commitsStrip(ticket),
       ticket.artifacts?.length ? el('div', { class: 'files-strip' }, el('div', { class: 'small muted files-head', text: `Artifacts (${ticket.artifacts.length})` }), ticket.artifacts.map(artifactRow)) : null,
@@ -2700,7 +2709,7 @@ export function createTickets(ctx) {
                 onclick: () => {
                   if (!confirm(`Complete ${c.name}? Unfinished tickets move to the next cycle.`)) return;
                   void act(async () => {
-                    const result = await api(`/projects/${encodeURIComponent(t.project)}/cycles/${c.id}/complete`, { method: 'POST' });
+                    const result = await api(`/projects/${encodeURIComponent(t.project)}/cycles/${c.id}/complete`, { method: 'POST', body: {} });
                     notify(
                       result.moved
                         ? `${result.moved} unfinished ${result.moved === 1 ? 'ticket' : 'tickets'} moved to ${result.movedTo ? `Cycle ${result.movedTo}` : 'no cycle (add the next one)'}.`
@@ -3477,7 +3486,7 @@ export function createTickets(ctx) {
             title: 'Start this now, as a task from you, without changing the schedule',
             onclick: () =>
               void act(async () => {
-                const task = await api(`/schedules/${s.id}/run`, { method: 'POST' });
+                const task = await api(`/schedules/${s.id}/run`, { method: 'POST', body: {} });
                 notify(task.state === 'awaiting_approval' ? `Waiting for ${s.agent}'s owner to approve` : `${s.agent} is on it (task #${task.id})`);
               }),
           }),
