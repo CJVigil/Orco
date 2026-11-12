@@ -31,6 +31,48 @@ jobs:
       - run: npm test
       - run: npm run build
 
+  # The whole suite on PostgreSQL and on MongoDB (#148), plus the moves between them and SQLite.
+  storage:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        db: [postgres, mongo]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: orco
+          POSTGRES_PASSWORD: orco
+          POSTGRES_DB: orco
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U orco" --health-interval 2s --health-timeout 5s --health-retries 20
+    env:
+      ORCO_TEST_POSTGRES_URL: postgres://orco:orco@127.0.0.1:5432/orco
+      ORCO_TEST_MONGO_URL: mongodb://127.0.0.1:27017/?replicaSet=rs0&directConnection=true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: MongoDB as a single-node replica set
+        run: |
+          docker run -d --name mongo -p 27017:27017 mongo:8 --replSet rs0 --bind_ip_all
+          for i in $(seq 1 30); do docker exec mongo mongosh --quiet --eval 'db.runCommand({ ping: 1 })' && break; sleep 1; done
+          docker exec mongo mongosh --quiet --eval 'rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "127.0.0.1:27017" }] })'
+          for i in $(seq 1 30); do docker exec mongo mongosh --quiet --eval 'db.hello().isWritablePrimary' | grep -q true && break; sleep 1; done
+      - run: npm ci
+      - run: npm run typecheck
+      - name: Moves between SQLite, PostgreSQL and MongoDB
+        if: matrix.db == 'postgres'
+        run: node --disable-warning=ExperimentalWarning --import tsx --import ./test/setup.ts --test test/storage.test.ts
+      - name: The whole suite on ${{ matrix.db }}
+        run: npm test
+        env:
+          ORCO_TEST_DATABASE_URL: ${{ matrix.db == 'postgres' && env.ORCO_TEST_POSTGRES_URL || env.ORCO_TEST_MONGO_URL }}
+
   docker:
     runs-on: ubuntu-latest
     steps:

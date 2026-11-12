@@ -107,7 +107,9 @@ deploys it.
 | --- | --- | --- |
 | `ORCO_HOST` | `127.0.0.1` (`0.0.0.0` in Docker) | Address to listen on |
 | `ORCO_PORT` | `7420` | Port |
-| `ORCO_DB` | `./orco.db` (`/data/orco.db` in Docker) | SQLite file |
+| `ORCO_DB` | `./orco.db` (`/data/orco.db` in Docker) | A SQLite file, a `postgres://…` or `mongodb://…` address, or `sqlite`, `postgres` or `mongo` with `ORCO_DATABASE_URL` (see [Storage](#storage)) |
+| `ORCO_DATABASE_URL` | unset | The PostgreSQL or MongoDB address, kept out of command lines |
+| `ORCO_DATABASE_TIMEOUT_MS` | `30000` | How long a PostgreSQL or MongoDB write may take before the request fails |
 | `ORCO_TRUST_PROXY` | unset | Behind a proxy (Caddy, Nginx, `tailscale serve`): the number of proxies in front of Orco (like `1`), or `loopback`, `uniquelocal` or their addresses. Without it every request seems to come from the proxy, so sign-in limits are shared by everyone; Orco warns at the first proxied request. `true` is refused: it would trust headers any client makes up. Prefer the proxy's addresses; a hop count is only safe when clients cannot reach Orco except through the proxy |
 | `ORCO_PUBLIC_URL` | unset | Public origin; turns on OAuth for cloud agents (see [cloud-agents.md](cloud-agents.md)) |
 | `ORCO_RESTART_CMD` | unset | How `orco update` restarts the server after switching versions, like `systemctl restart orco` (run without a shell) |
@@ -304,7 +306,11 @@ Who decides what:
 
 ## Storage
 
-Orco keeps everything (messages, tickets, files, attachments) in one SQLite file. Keep that file
+Orco keeps everything (messages, tickets, files, attachments) in one database: a SQLite file by
+default, or PostgreSQL or MongoDB for hosts that cannot keep a SQLite file on local disk (a Docker
+Swarm whose volumes are network storage, say). See [PostgreSQL or MongoDB](#postgresql-or-mongodb).
+
+Keep a SQLite file
 on the host's **local disk**: SQLite's locking is not reliable on network filesystems (Gluster,
 NFS, SMB, Ceph FUSE mounts), and a database there can be corrupted without any error. Orco logs a
 warning at start when it finds its database on one.
@@ -345,11 +351,65 @@ not built to run as several replicas.
 3. Start Orco. Tokens, settings and history come with the database; with the secrets broker, set
    the same `ORCO_SECRETS_KEY`.
 
+### PostgreSQL or MongoDB
+
+```bash
+ORCO_DB=postgres ORCO_DATABASE_URL=postgres://orco:secret@db:5432/orco orco serve
+ORCO_DB=mongo    ORCO_DATABASE_URL='mongodb://db:27017/orco?replicaSet=rs0' orco serve
+```
+
+On first start Orco creates its tables (`orco_meta`, then one `orco_<table>` per Orco table, with
+the same columns plus `__rowid`) or collections (`orco_<n>_<table>`, one document per row). Use an
+empty database or schema of its own; add `?options=-c%20search_path%3Dorco` to a PostgreSQL address
+to keep Orco in a schema. MongoDB must run as a replica set, a single node is enough
+(`mongod --replSet rs0`, then `rs.initiate()` once), for multi-document transactions; MongoDB 4.4 or
+later.
+
+How it works: at start Orco reads everything into an in-memory SQLite database, which answers every
+query (search included) as before, and writes each change through to PostgreSQL or MongoDB, in one
+transaction, before the request that made it returns. So:
+
+- **Run one Orco server per database.** A second server would not see the first one's writes. (Orco
+  is a single server anyway: presence and live streams are in memory.)
+- **The data has to fit in memory**, attachments included. A team's chat fits easily; watch the
+  server's memory if you keep years of large attachments.
+- **If the database stops answering**, the request that wrote fails with a 503 and the change is
+  sent again with the next write. Restart Orco after a long outage so it reloads from the database.
+- Search still uses SQLite's trigram index, rebuilt in memory at start.
+
+Schema upgrades work as with SQLite: Orco upgrades the in-memory copy and rewrites its tables. For
+MongoDB the rewrite fills new collections and switches to them at the end, so an upgrade that stops
+part way leaves the data as it was.
+
+### Moving between SQLite, PostgreSQL and MongoDB
+
+Stop Orco, then copy:
+
+```bash
+orco migrate --from /data/orco.db --to postgres://orco:secret@db:5432/orco --dry-run   # counts, nothing written
+orco migrate --from /data/orco.db --to postgres://orco:secret@db:5432/orco
+orco migrate --from postgres://orco:secret@db:5432/orco --to 'mongodb://db:27017/orco?replicaSet=rs0'
+orco migrate --from 'mongodb://db:27017/orco?replicaSet=rs0' --to /data/orco.db
+```
+
+Everything comes along: ids, ticket refs and numbering, versions, history, files and attachments.
+`migrate` refuses a target that already holds Orco data (`--force` replaces it), copies one table
+at a time so a stopped copy picks up where it left off when run again (Orco refuses to start on a
+half-finished copy), and checks every table's row count at the end. `--to` defaults to the
+configured database (`ORCO_DB` / `ORCO_DATABASE_URL`), which keeps the password off the command line.
+
 ## Backups and upgrades
 
 ```bash
 docker compose exec orco orco backup /backups/manual-$(date +%F).db   # consistent copy, safe while serving
 ```
+
+With PostgreSQL or MongoDB, `orco backup <file>` runs `pg_dump` (custom format; restore with
+`pg_restore`) or `mongodump` (a gzipped archive; restore with `mongorestore`), which must be
+installed where you run it; the password is passed in the environment or a private file, never on
+the command line. A name ending in `.db` gets a consistent SQLite copy instead, from any database,
+and scheduled backups (`ORCO_BACKUP_DIR`) are always SQLite copies. Put a SQLite copy back with
+`orco migrate --from <copy.db> --force`. `orco restore` is for SQLite files.
 
 Upgrades apply database migrations automatically on start. Take a backup first. Migrations only
 move forward; to roll back, restore the backup with the older version.

@@ -1,4 +1,4 @@
-export type OrcoErrorCode = 'invalid' | 'not_found' | 'forbidden' | 'conflict' | 'rate_limited';
+export type OrcoErrorCode = 'invalid' | 'not_found' | 'forbidden' | 'conflict' | 'rate_limited' | 'unavailable';
 
 export class OrcoError extends Error {
   constructor(

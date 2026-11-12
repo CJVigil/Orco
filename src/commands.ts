@@ -20,7 +20,9 @@ import { ForgeSync, loadForgeSyncConfig } from './sync/forge.js';
 import { connect, DEFAULT_CONFIG, DEFAULT_TOKEN_DIR } from './connect.js';
 import { CLIENT_COMMANDS, CLIENT_USAGE, readStdin, runClient } from './client.js';
 import { checkTimeZone, parseCron } from './cron.js';
-import { openDatabase } from './db.js';
+import { migrate as migrateData, nativeBackup } from './storage/migrate.js';
+import { openStorage } from './storage/open.js';
+import { describeTarget, parseTarget, targetFromEnv } from './storage/target.js';
 import { createApp } from './http.js';
 import { importTickets, parseImport } from './import.js';
 import { parseSecretsKey } from './secrets.js';
@@ -43,8 +45,13 @@ Server commands (run where the database lives):
   agent policy <agent> <p>   Who may give the agent tasks: open, ask (default) or owner_only
   agent trust <agent> <user> Let a user's tasks reach the agent without asking (untrust to undo)
   audit export [--since N]   Print the audit log as JSON lines
-  backup <file>              Write a consistent copy of the database, safe while serving
-  restore <file> [--force]   Replace the database with a backup (stop the server first)
+  backup <file>              Write a consistent copy of the database, safe while serving (PostgreSQL: pg_dump;
+                             MongoDB: mongodump; a name ending in .db gets a SQLite copy from any database)
+  restore <file> [--force]   Replace the SQLite database with a backup (stop the server first)
+  migrate --from <db> [--to <db>] [--dry-run] [--force]
+                             Copy everything between SQLite, PostgreSQL and MongoDB (stop the server first);
+                             --to defaults to the configured database; refuses a target holding data
+                             (unless --force), resumes a stopped copy, checks every table
   vault export|import <dir>  Org memory as an Obsidian-compatible folder (one note per file, INDEX.md)
   tools                      Every MCP tool, what it touches, and which agent levels may call it
   service install|status|start|stop|restart|logs [N]|uninstall
@@ -73,7 +80,8 @@ Agent setup:
 
 Options:
   --config <path> Bridge config (env ORCO_BRIDGE_CONFIG, default ./orco-bridge.json)
-  --db <path>     SQLite file (env ORCO_DB, default ./orco.db)
+  --db <db>       A SQLite file, postgres://… or mongodb://… (env ORCO_DB, default ./orco.db;
+                  or ORCO_DB=sqlite|postgres|mongo with ORCO_DATABASE_URL)
   --host <host>   Address to listen on (env ORCO_HOST, default 127.0.0.1)
   --port <port>   Port to listen on (env ORCO_PORT, default 7420)
 `;
@@ -183,7 +191,9 @@ export function main(): void {
   const { values, positionals } = parseArgs({
     allowPositionals: true,
     options: {
-      db: { type: 'string', default: process.env.ORCO_DB ?? './orco.db' },
+      db: { type: 'string' },
+      from: { type: 'string' },
+      to: { type: 'string' },
       host: { type: 'string', default: process.env.ORCO_HOST ?? '127.0.0.1' },
       port: { type: 'string', default: process.env.ORCO_PORT ?? '7420' },
       config: { type: 'string', default: process.env.ORCO_BRIDGE_CONFIG ?? defaultBridgeConfig() },
@@ -212,6 +222,27 @@ export function main(): void {
     },
   });
   const [command, sub, ...args] = positionals;
+  // Where the data is (#148): a SQLite file, PostgreSQL or MongoDB.
+  const target = targetFromEnv(values.db);
+  const dbText = target.kind === 'sqlite' ? target.path : target.url;
+  const dbName = describeTarget(target);
+  // Child processes (orco update) find a remote database here, not in their arguments where ps shows the password.
+  if (target.kind !== 'sqlite') process.env.ORCO_DATABASE_URL = target.url;
+
+  // orco migrate (#148): copy everything between two databases. Stop the server first.
+  if (command === 'migrate') {
+    if (!values.from) throw new OrcoError('invalid', 'Usage: orco migrate --from <file|postgres://…|mongodb://…> [--to <file|postgres://…|mongodb://…>] [--dry-run] [--force] (--to defaults to the configured database)');
+    const result = migrateData(parseTarget(values.from), values.to ? parseTarget(values.to) : target, { dryRun: values['dry-run'], force: values.force, log: (line) => console.log(line) });
+    if (!result.dryRun) console.log(`Done: ${result.rows} rows in ${Object.keys(result.tables).length} tables. Point ORCO_DB or ORCO_DATABASE_URL at the new database and start the server.`);
+    return;
+  }
+
+  // A backup of a PostgreSQL or MongoDB database with its own tool (a .db name gets a SQLite copy instead).
+  if (command === 'backup' && sub && target.kind !== 'sqlite' && !/\.(db|sqlite3?)$/i.test(sub)) {
+    const restoreWith = nativeBackup(target, sub);
+    console.log(`Backed up ${dbName} to ${sub} (put it back with ${restoreWith}, into an empty database)`);
+    return;
+  }
   if (values.version || command === 'version') {
     console.log(VERSION);
     return;
@@ -252,9 +283,12 @@ export function main(): void {
 
   // Restoring replaces the database file, so it runs before anything opens it.
   if (command === 'restore') {
+    if (target.kind !== 'sqlite') {
+      throw new OrcoError('invalid', `Restore a ${target.kind === 'postgres' ? 'PostgreSQL' : 'MongoDB'} database with ${target.kind === 'postgres' ? 'pg_restore' : 'mongorestore'}, or copy a .db backup into it with orco migrate --from <backup.db> --to <url> --force (stop the server first)`);
+    }
     if (!sub) throw new OrcoError('invalid', 'Usage: orco restore <backup file> [--force]');
-    const { replaced } = restore(sub, values.db, { force: values.force });
-    console.log(`Restored ${values.db} from ${sub}.${replaced ? ` The database it replaced is at ${replaced}.` : ''}`);
+    const { replaced } = restore(sub, dbText, { force: values.force });
+    console.log(`Restored ${dbText} from ${sub}.${replaced ? ` The database it replaced is at ${replaced}.` : ''}`);
     return;
   }
 
@@ -319,7 +353,7 @@ export function main(): void {
   if (command === 'service') {
     void (async () => {
     try {
-      if (sub === 'install') for (const line of svc.install({ db: values.db, port: values.port, host: values.host }).lines) console.log(line);
+      if (sub === 'install') for (const line of svc.install({ db: dbText, port: values.port, host: values.host }).lines) console.log(line);
       else if (sub === 'status') for (const line of svc.formatStatus(await svc.status({ port: values.port }))) console.log(line);
       else if (sub === 'stop' || sub === 'restart' || sub === 'start') console.log(svc.control(sub));
       else if (sub === 'logs') {
@@ -343,7 +377,7 @@ export function main(): void {
     const repoDir = values.repo ?? resolve(dirname(fileURLToPath(import.meta.url)), '..');
     void update({
       repo: repoDir,
-      db: values.db,
+      db: dbText,
       ref: values.ref,
       restart: restartCmd ? restartCmd.split(/\s+/).filter(Boolean) : undefined,
       url: values.url ?? process.env.ORCO_PUBLIC_URL ?? `http://127.0.0.1:${values.port}`,
@@ -381,7 +415,7 @@ export function main(): void {
   if (command === 'vault') {
     const dir = args[0] ? resolve(args[0]) : undefined;
     if (!dir || (sub !== 'export' && sub !== 'import')) throw new OrcoError('invalid', 'Usage: orco vault export <dir> | orco vault import <dir>');
-    const store = new Store(openDatabase(values.db));
+    const store = new Store(openStorage(target).db);
     if (sub === 'export') {
       const n = store.orgNotes.exportVault(dir);
       console.log(`Wrote ${n} org note${n === 1 ? '' : 's'} and INDEX.md to ${dir}. Open the folder in Obsidian; bring edits back with orco vault import ${args[0]}.`);
@@ -410,7 +444,7 @@ export function main(): void {
     return;
   }
 
-  const store = new Store(openDatabase(values.db, { snapshotDir: process.env.ORCO_BACKUP_DIR?.trim() || dirname(resolve(values.db)), log: (m) => console.log(m) }), { limits: limitsFromEnv(), secretsKey: parseSecretsKey(process.env.ORCO_SECRETS_KEY), digest: digestFromEnv() });
+  const store = new Store(openStorage(target, { snapshotDir: process.env.ORCO_BACKUP_DIR?.trim() || (target.kind === 'sqlite' ? dirname(resolve(target.path)) : undefined), log: (m) => console.log(m) }).db, { limits: limitsFromEnv(), secretsKey: parseSecretsKey(process.env.ORCO_SECRETS_KEY), digest: digestFromEnv() });
   const key = sub && !['serve', 'list', 'backup', 'import'].includes(command) ? `${command} ${sub}` : command;
 
   switch (key) {
@@ -428,8 +462,8 @@ export function main(): void {
       const proxyAuth = proxyAuthSetting(process.env.ORCO_AUTH_HEADER, process.env.ORCO_AUTH_LABEL, trust, process.env.ORCO_AUTH_SECRET);
       const oidcConfig = oidcSetting(process.env, publicUrl);
       const oidc = oidcConfig ? new Oidc(oidcConfig) : undefined;
-      const { app, close, closeStreams, oauth } = createApp(store, { publicUrl, setupCode, proxyAuth, oidc, dbPath: resolve(values.db), listen: { host: values.host, port: Number(values.port) } });
-      const warning = networkFilesystemWarning(values.db);
+      const { app, close, closeStreams, oauth } = createApp(store, { publicUrl, setupCode, proxyAuth, oidc, dbPath: target.kind === 'sqlite' ? resolve(target.path) : '', listen: { host: values.host, port: Number(values.port) } });
+      const warning = target.kind === 'sqlite' ? networkFilesystemWarning(target.path) : null;
       if (warning) console.error(warning);
       const backups = backupsFromEnv(store);
       const backupTimer = backups
@@ -456,7 +490,7 @@ export function main(): void {
         console.log(`Orco ${VERSION} listening on http://${values.host}:${port}`);
         console.log(`  MCP endpoint: http://${values.host}:${port}/mcp`);
         console.log('  Agent sessions that were open before this start (or began while Orco was down) lose its tools until they reconnect (Claude Code: /mcp, then reconnect orco).');
-        console.log(`  Database: ${values.db}`);
+        console.log(`  Database: ${dbName}${target.kind === 'sqlite' ? '' : ' (loaded into memory; one server per database)'}`);
         if (oauth) console.log(`  OAuth for cloud agents: on, issuer ${oauth.issuer}`);
         if (oidcConfig) console.log(`  Sign-in with ${oidcConfig.label}: on, issuer ${oidcConfig.issuer}, back to ${oidcConfig.redirectUri}`);
         if (proxyAuth) {
@@ -591,10 +625,10 @@ export function main(): void {
       return;
     }
     case 'backup': {
-      const target = sub;
-      if (!target) throw new OrcoError('invalid', 'Usage: orco backup <file>');
-      backupTo(store.db, target);
-      console.log(`Backed up ${values.db} to ${target}`);
+      const file = sub;
+      if (!file) throw new OrcoError('invalid', 'Usage: orco backup <file>');
+      backupTo(store.db, file);
+      console.log(`Backed up ${dbName} to ${file}`);
       return;
     }
     case 'import': {

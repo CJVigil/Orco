@@ -68,7 +68,9 @@ export async function healthy(url: string, seconds: number): Promise<boolean> {
 
 export async function update(o: UpdateOptions): Promise<{ from: string; to: string; rolledBack: boolean; reason?: string }> {
   const repo = resolve(o.repo);
-  const db = resolve(o.db);
+  // PostgreSQL or MongoDB (#148): the address reaches child processes through ORCO_DATABASE_URL, not argv.
+  const remote = /^(postgres(ql)?|mongodb(\+srv)?):\/\//i.test(o.db);
+  const db = remote ? o.db : resolve(o.db);
   const health = o.healthSeconds ?? 30;
   if (!existsSync(join(repo, '.git'))) throw new UpdateError(`${repo} is not a git checkout; orco update works on one (container installs: pull the new image instead)`);
   if (run('git', ['status', '--porcelain', '--untracked-files=no'], repo, o.log)) throw new UpdateError('The checkout has local changes; commit or stash them first');
@@ -84,7 +86,7 @@ export async function update(o: UpdateOptions): Promise<{ from: string; to: stri
   const work = join(repo, '.orco-update');
   mkdirSync(work, { recursive: true });
   const backup = join(work, `before-${from.slice(0, 7)}-${Date.now()}.db`);
-  run(process.execPath, [join(repo, 'dist', 'cli.js'), 'backup', backup, '--db', db], repo, o.log);
+  run(process.execPath, [join(repo, 'dist', 'cli.js'), 'backup', backup, ...(remote ? [] : ['--db', db])], repo, o.log);
   o.log(`Backed up the database to ${backup}`);
 
   // 2. Stage and preflight.
@@ -134,8 +136,11 @@ export async function update(o: UpdateOptions): Promise<{ from: string; to: stri
     run('git', ['checkout', '--detach', from], repo, o.log);
     run(npm, ['ci', '--no-audit', '--no-fund'], repo, o.log);
     run(npm, ['run', 'build'], repo, o.log);
-    copyFileSync(backup, db);
-    for (const suffix of ['-wal', '-shm']) rmSync(`${db}${suffix}`, { force: true });
+    if (remote) run(process.execPath, [join(repo, 'dist', 'cli.js'), 'migrate', '--from', backup, '--force'], repo, o.log);
+    else {
+      copyFileSync(backup, db);
+      for (const suffix of ['-wal', '-shm']) rmSync(`${db}${suffix}`, { force: true });
+    }
     restart();
     return { from, to, rolledBack: true, reason };
   }

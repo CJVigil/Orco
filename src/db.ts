@@ -1457,6 +1457,8 @@ export interface OpenOptions {
 }
 
 export function openDatabase(path: string, options: OpenOptions = {}): DatabaseSync {
+  // The test suite on PostgreSQL or MongoDB (#148): in-memory databases become fresh remote ones.
+  if (path === ':memory:' && process.env.ORCO_TEST_DATABASE_URL && testHook) return testHook(process.env.ORCO_TEST_DATABASE_URL);
   const db = new DatabaseSync(path);
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
   const { user_version: version } = db.prepare('PRAGMA user_version').get() as { user_version: number };
@@ -1468,6 +1470,20 @@ export function openDatabase(path: string, options: OpenOptions = {}): DatabaseS
     db.prepare('VACUUM INTO ?').run(target);
     options.log?.(`Upgrading the database from schema ${version} to ${MIGRATIONS.length}. A copy of it from before is at ${target} (orco restore puts it back).`);
   }
+  migrate(db);
+  return db;
+}
+
+let testHook: ((url: string) => DatabaseSync) | null = null;
+/** Set by test/setup.ts when ORCO_TEST_DATABASE_URL is set. */
+export function setTestDatabaseHook(hook: typeof testHook): void {
+  testHook = hook;
+}
+
+/** Brings a database up to the newest schema; returns how many migrations ran. */
+export function migrate(db: DatabaseSync): number {
+  const { user_version: version } = db.prepare('PRAGMA user_version').get() as { user_version: number };
+  if (version > MIGRATIONS.length) throw new Error(`This database is at schema ${version}, newer than this Orco (${MIGRATIONS.length}). Upgrade Orco.`);
   for (let i = version; i < MIGRATIONS.length; i++) {
     db.exec('BEGIN');
     try {
@@ -1479,5 +1495,5 @@ export function openDatabase(path: string, options: OpenOptions = {}): DatabaseS
       throw err;
     }
   }
-  return db;
+  return Math.max(0, MIGRATIONS.length - version);
 }

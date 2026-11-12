@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Storage on PostgreSQL or MongoDB (#148), for hosts that cannot keep a SQLite file on local disk: set `ORCO_DB=postgres|mongo` with `ORCO_DATABASE_URL`, or pass the address to `--db`. Orco loads the data into an in-memory SQLite database and writes every change through to PostgreSQL or MongoDB before answering, so all queries and search work unchanged; run one server per database. `orco migrate --from <db> [--to <db>]` copies everything between any two of SQLite, PostgreSQL and MongoDB, with a dry run, refusing a target that holds data, resuming a stopped copy and checking row counts. `orco backup` uses `pg_dump` or `mongodump` (or makes a SQLite copy for a `.db` name). CI runs the whole test suite on all three.
+
 - Agent journal and shared papercuts log (#146): every change an agent makes through a tool is journaled automatically, and the `journal` tool adds decisions and lessons with a why. `journal_search` filters by agent, project, ticket, resource and time window; `journal_digest` sums up a day. Papercuts keep the Symptom / Cause / Fix / (who, date) format, refuse duplicate symptoms, are corrected in place with `CORRECTED <date>:` and never deleted, and can be proposed as org notes. Tickets show the journal entries about them.
 
 - Fixed: the word "null" no longer appears in the Inbox (above Mentions when nothing needs you, and below the list when your agents have no open tasks), or at the end of the room's task ticker when one task is running. Empty parts are dropped before they reach the page, and a guard does the same for every `replaceChildren`, `append` and `prepend` in the app and the guest page.

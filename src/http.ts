@@ -56,6 +56,7 @@ const STATUS: Record<OrcoError['code'], number> = {
   forbidden: 403,
   conflict: 409,
   rate_limited: 429,
+  unavailable: 503,
 };
 const OIDC_COOKIE = 'orco_oidc';
 /**
@@ -1916,10 +1917,10 @@ export function createApp(store: Store, options: AppOptions = {}) {
   api.post('/admin/update', (req, res) => {
     const me = req.participant!;
     if (me.kind !== 'user' || !store.isOrgAdmin(me)) throw new OrcoError('forbidden', 'Only org admins update Orco');
-    if (!options.dbPath || !process.argv[1]) throw new OrcoError('invalid', 'This server cannot update itself; run orco update on its machine');
+    if (options.dbPath === undefined || !process.argv[1]) throw new OrcoError('invalid', 'This server cannot update itself; run orco update on its machine');
     mkdirSync(join(process.cwd(), '.orco-update'), { recursive: true });
     const out = openSync(updateLog(), 'w');
-    const child = spawn(process.execPath, [...process.execArgv, process.argv[1], 'update', '--db', options.dbPath], { detached: true, stdio: ['ignore', out, out], shell: false, cwd: process.cwd() });
+    const child = spawn(process.execPath, [...process.execArgv, process.argv[1], 'update', ...(options.dbPath ? ['--db', options.dbPath] : [])], { detached: true, stdio: ['ignore', out, out], shell: false, cwd: process.cwd() });
     child.unref();
     store.audit.record(me, 'server.update', { detail: { pid: child.pid } });
     res.status(202).json({ started: true });
