@@ -788,6 +788,27 @@ mentions every flag the command passes (or that the model API answers and lists 
 step: issues become tickets, comments flow both ways, and closing either side closes the other. See
 [`docs/forge-sync.md`](docs/forge-sync.md).
 
+## Move a board to a server
+
+With a shell on the server, copy a backup there and run `orco restore` (see
+[docs/deploy.md](docs/deploy.md#moving-to-another-host)). Without one (only a deploy tool's
+Environment field and Deploy button), seed the new, empty server over HTTPS. Tickets keep their
+numbers, comments and history, so `API-12` in notes and commits still matches:
+
+1. On the old machine: `orco backup board.db`.
+2. On the new server, add `ORCO_RESTORE_TOKEN` to its environment (a long random value, like the
+   output of `openssl rand -hex 32`) and deploy. Don't create anyone on it first: the restore only
+   works while the server has no people or agents.
+3. `orco push-restore board.db --url https://orco.example.com --token <that value>`. The server
+   checks the file (sound, an Orco database, not from a newer Orco), saves it and restarts; at
+   start it restores it before opening its database, then `push-restore` waits until it is back.
+   This relies on the server restarting when it exits (`restart: unless-stopped` in Docker
+   Compose; most deploy tools do this).
+4. Remove `ORCO_RESTORE_TOKEN` and deploy again. Without it the route does not exist.
+
+Every attempt, accepted or refused, is logged with its address (never the token), and wrong tokens
+count toward the sign-in rate limit.
+
 ## Command line
 
 The same `orco` command is also a client for a running server, from any machine with a token. It

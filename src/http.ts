@@ -19,6 +19,7 @@ import { roomMatcher } from './rooms.js';
 import { OAUTH_SCOPE, OAuth } from './oauth.js';
 import { oauthRouter } from './oauth-routes.js';
 import { Presence, type PresenceChange } from './presence.js';
+import { acceptUpload, tokenMatches } from './pushrestore.js';
 import { RateLimiter } from './ratelimit.js';
 import { type Message, OrcoError, type Participant, type Store } from './store.js';
 import { parsePolicy } from './policies.js';
@@ -338,6 +339,11 @@ export interface AppOptions {
   proxyAuth?: { header: string; label: string; secret: string };
   /** Sign-in with an OpenID Connect provider (ORCO_OIDC_*). */
   oidc?: Oidc;
+  /**
+   * Seeding an empty server from a backup over HTTPS (#149), on only with ORCO_RESTORE_TOKEN: the
+   * token, where the upload waits for the next start, and what to do once it is saved (exit).
+   */
+  restore?: { token: string; dir: string; onAccepted: () => void };
 }
 
 /** Cookies are Secure on HTTPS, and whenever Orco's public address is HTTPS (a proxy may speak HTTP to it). */
@@ -473,6 +479,39 @@ export function createApp(store: Store, options: AppOptions = {}) {
 
   app.get('/healthz', (_req, res) => {
     res.json({ ok: true, version: VERSION, uptimeSeconds: Math.round(process.uptime()) });
+  });
+
+  // Restore over HTTPS (#149): 404 unless ORCO_RESTORE_TOKEN is set; only into a server with nobody on it.
+  app.post('/api/admin/restore', (req, res, next) => {
+    // Off: the same answer as a route that does not exist.
+    if (!options.restore) return next(new OrcoError('not_found', 'Not found'));
+    const restoreOptions = options.restore;
+    const ip = req.ip ?? 'unknown';
+    const refuse = (status: number, reason: string) => {
+      console.log(`${new Date().toISOString()} Restore upload from ${ip} refused: ${reason}`);
+      store.audit.record(null, 'server.restore_refused', { detail: { ip, reason } });
+      res.status(status).json({ error: reason });
+    };
+    if (logins.blocked(ip)) return refuse(429, 'Too many tries. Wait 15 minutes and try again.');
+    const header = req.headers.authorization;
+    if (!tokenMatches(header?.startsWith('Bearer ') ? header.slice(7) : undefined, restoreOptions.token)) {
+      logins.hit(ip);
+      return refuse(403, 'Wrong restore token');
+    }
+    const people = (store.db.prepare('SELECT count(*) AS n FROM participants').get() as { n: number }).n;
+    if (Number(people)) return refuse(409, 'This server already has people on it; a restore over HTTPS only seeds an empty server');
+    express.raw({ type: () => true, limit: process.env.ORCO_RESTORE_MAX_BYTES || '1gb' })(req, res, (err?: unknown) => {
+      if (err) return refuse(413, (err as Error).message);
+      try {
+        const info = acceptUpload(restoreOptions.dir, Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0));
+        console.log(`${new Date().toISOString()} Restore upload from ${ip} accepted (schema ${info.version}, ${info.participants} people and agents); restarting to restore it`);
+        store.audit.record(null, 'server.restore_accepted', { detail: { ip, version: info.version, participants: info.participants } });
+        res.on('finish', () => restoreOptions.onAccepted());
+        res.status(202).json({ accepted: true, participants: info.participants, restarting: true });
+      } catch (e) {
+        refuse(e instanceof OrcoError ? 400 : 500, (e as Error).message);
+      }
+    });
   });
 
   // The same code anyone can get from the repository; served so a new computer needs only Node.

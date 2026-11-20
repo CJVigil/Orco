@@ -108,6 +108,7 @@ deploys it.
 | `ORCO_HOST` | `127.0.0.1` (`0.0.0.0` in Docker) | Address to listen on |
 | `ORCO_PORT` | `7420` | Port |
 | `ORCO_DB` | `./orco.db` (`/data/orco.db` in Docker) | A SQLite file, a `postgres://…` or `mongodb://…` address, or `sqlite`, `postgres` or `mongo` with `ORCO_DATABASE_URL` (see [Storage](#storage)) |
+| `ORCO_RESTORE_TOKEN` | unset | Turns on `POST /api/admin/restore` so `orco push-restore` can seed an **empty** server from a backup over HTTPS (see the README's *Move a board to a server*). Remove it once the board is moved |
 | `ORCO_DATABASE_URL` | unset | The PostgreSQL or MongoDB address, kept out of command lines |
 | `ORCO_DATABASE_TIMEOUT_MS` | `30000` | How long a PostgreSQL or MongoDB write may take before the request fails |
 | `ORCO_TRUST_PROXY` | unset | Behind a proxy (Caddy, Nginx, `tailscale serve`): the number of proxies in front of Orco (like `1`), or `loopback`, `uniquelocal` or their addresses. Without it every request seems to come from the proxy, so sign-in limits are shared by everyone; Orco warns at the first proxied request. `true` is refused: it would trust headers any client makes up. Prefer the proxy's addresses; a hop count is only safe when clients cannot reach Orco except through the proxy |

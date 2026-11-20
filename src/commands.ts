@@ -20,6 +20,7 @@ import { ForgeSync, loadForgeSyncConfig } from './sync/forge.js';
 import { connect, DEFAULT_CONFIG, DEFAULT_TOKEN_DIR } from './connect.js';
 import { CLIENT_COMMANDS, CLIENT_USAGE, readStdin, runClient } from './client.js';
 import { checkTimeZone, parseCron } from './cron.js';
+import { applyPending, checkBackup, pushRestore } from './pushrestore.js';
 import { migrate as migrateData, nativeBackup } from './storage/migrate.js';
 import { openStorage } from './storage/open.js';
 import { describeTarget, parseTarget, targetFromEnv } from './storage/target.js';
@@ -48,6 +49,9 @@ Server commands (run where the database lives):
   backup <file>              Write a consistent copy of the database, safe while serving (PostgreSQL: pg_dump;
                              MongoDB: mongodump; a name ending in .db gets a SQLite copy from any database)
   restore <file> [--force]   Replace the SQLite database with a backup (stop the server first)
+  push-restore <file> --url <server> --token <t>
+                             Seed an empty server from a backup over HTTPS (the server needs
+                             ORCO_RESTORE_TOKEN); waits until it is back with the board
   migrate --from <db> [--to <db>] [--dry-run] [--force]
                              Copy everything between SQLite, PostgreSQL and MongoDB (stop the server first);
                              --to defaults to the configured database; refuses a target holding data
@@ -167,6 +171,9 @@ async function runBridge(path: string): Promise<void> {
   process.once('SIGTERM', shutdown);
 }
 
+/** The exit code after accepting a restore upload: non-zero, so restart policies that only restart on failure (systemd on-failure, orco service) bring the server back too. */
+const RESTART_EXIT = 75;
+
 export function main(): void {
   // Client commands talk to a server over HTTP and take their own options.
   const first = process.argv[2];
@@ -215,6 +222,7 @@ export function main(): void {
       ref: { type: 'string' },
       restart: { type: 'string' },
       url: { type: 'string' },
+      token: { type: 'string' },
       repo: { type: 'string' },
       qr: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
@@ -228,6 +236,18 @@ export function main(): void {
   const dbName = describeTarget(target);
   // Child processes (orco update) find a remote database here, not in their arguments where ps shows the password.
   if (target.kind !== 'sqlite') process.env.ORCO_DATABASE_URL = target.url;
+
+  // orco push-restore (#149): seed an empty server from a backup over HTTPS.
+  if (command === 'push-restore') {
+    const token = values.token ?? process.env.ORCO_RESTORE_TOKEN;
+    if (!sub || !values.url || !token) throw new OrcoError('invalid', 'Usage: orco push-restore <backup.db> --url <server> --token <ORCO_RESTORE_TOKEN> (or set ORCO_RESTORE_TOKEN)');
+    checkBackup(sub);
+    void pushRestore(readFileSync(sub), values.url, token, (line) => console.log(line)).catch((err: Error) => {
+      console.error(err.message);
+      process.exitCode = 1;
+    });
+    return;
+  }
 
   // orco migrate (#148): copy everything between two databases. Stop the server first.
   if (command === 'migrate') {
@@ -444,6 +464,9 @@ export function main(): void {
     return;
   }
 
+  // A backup uploaded over HTTPS (#149) is restored at start, before the database opens.
+  const restoreDir = process.env.ORCO_BACKUP_DIR?.trim() || (target.kind === 'sqlite' ? dirname(resolve(target.path)) : process.cwd());
+  if (command === 'serve') applyPending(restoreDir, target, (m) => console.log(`${new Date().toISOString()} ${m}`));
   const store = new Store(openStorage(target, { snapshotDir: process.env.ORCO_BACKUP_DIR?.trim() || (target.kind === 'sqlite' ? dirname(resolve(target.path)) : undefined), log: (m) => console.log(m) }).db, { limits: limitsFromEnv(), secretsKey: parseSecretsKey(process.env.ORCO_SECRETS_KEY), digest: digestFromEnv() });
   const key = sub && !['serve', 'list', 'backup', 'import'].includes(command) ? `${command} ${sub}` : command;
 
@@ -462,7 +485,11 @@ export function main(): void {
       const proxyAuth = proxyAuthSetting(process.env.ORCO_AUTH_HEADER, process.env.ORCO_AUTH_LABEL, trust, process.env.ORCO_AUTH_SECRET);
       const oidcConfig = oidcSetting(process.env, publicUrl);
       const oidc = oidcConfig ? new Oidc(oidcConfig) : undefined;
-      const { app, close, closeStreams, oauth } = createApp(store, { publicUrl, setupCode, proxyAuth, oidc, dbPath: target.kind === 'sqlite' ? resolve(target.path) : '', listen: { host: values.host, port: Number(values.port) } });
+      const { app, close, closeStreams, oauth } = createApp(store, { publicUrl, setupCode, proxyAuth, oidc, dbPath: target.kind === 'sqlite' ? resolve(target.path) : '',
+        restore: process.env.ORCO_RESTORE_TOKEN?.trim()
+          ? { token: process.env.ORCO_RESTORE_TOKEN.trim(), dir: restoreDir, onAccepted: () => shutdown('Restore upload', RESTART_EXIT) }
+          : undefined,
+        listen: { host: values.host, port: Number(values.port) } });
       const warning = target.kind === 'sqlite' ? networkFilesystemWarning(target.path) : null;
       if (warning) console.error(warning);
       const backups = backupsFromEnv(store);
@@ -519,7 +546,7 @@ export function main(): void {
         console.error(`Could not listen on ${values.host}:${port}: ${err.message}`);
         process.exit(1);
       });
-      const shutdown = (signal: string) => {
+      const shutdown = (signal: string, code = 0) => {
         console.log(`${signal} received, shutting down`);
         if (backupTimer) clearInterval(backupTimer);
         void hosted?.stop();
@@ -528,9 +555,9 @@ export function main(): void {
         server.closeAllConnections();
         void close().finally(() => {
           store.db.close();
-          process.exit(0);
+          process.exit(code);
         });
-        setTimeout(() => process.exit(1), 5_000).unref();
+        setTimeout(() => process.exit(code || 1), 5_000).unref();
       };
       process.once('SIGINT', () => shutdown('SIGINT'));
       process.once('SIGTERM', () => shutdown('SIGTERM'));
