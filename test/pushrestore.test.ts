@@ -101,7 +101,8 @@ describe('restore over HTTPS (#149)', () => {
     const file = board(dir);
     const live = join(dir, 'live.db');
     let accepted = false;
-    const s = await serve(new Store(openDatabase(live)), { dir, onAccepted: () => (accepted = true) });
+    const running = new Store(openDatabase(live));
+    const s = await serve(running, { dir, onAccepted: () => (accepted = true) });
     try {
       const res = await s.post(readFileSync(file));
       assert.equal(res.status, 202);
@@ -111,6 +112,8 @@ describe('restore over HTTPS (#149)', () => {
       assert.equal(existsSync(pendingFile(dir)), true);
     } finally {
       await s.stop();
+      // The server exits after accepting; on Windows an open database file cannot be replaced.
+      running.db.close();
     }
     // The next start, before the database opens.
     const lines: string[] = [];
