@@ -48,6 +48,8 @@ declare module 'express-serve-static-core' {
   interface Request {
     participant?: Participant;
     viaCookie?: boolean;
+    /** The browser session (from a sign-in link or sign-in), when the request came with one. */
+    webSession?: string;
   }
 }
 
@@ -151,6 +153,7 @@ function authenticate(store: Store, presence: Presence, oauth?: OAuth, proxyIden
     }
     req.participant = participant;
     req.viaCookie = bearer === undefined;
+    if (req.viaCookie && token && store.signins.isSession(token)) req.webSession = token;
     // An agent's REST writes are held to the same level as its MCP tools (#131).
     if (participant.kind === 'agent' && req.baseUrl === '/api') {
       const area = restArea(req.method, req.path);
@@ -957,6 +960,21 @@ export function createApp(store: Store, options: AppOptions = {}) {
     const agent = store.participantByName(String(req.params.name));
     if (me.kind !== 'user' || me.scope || !agent || agent.kind !== 'agent' || agent.ownerId !== me.id) throw new OrcoError('not_found', 'You have no agent by that name');
     res.json({ name: agent.name, token: store.rotateToken(agent.name) });
+  });
+  // A new personal token from the web app (#151). Only from a browser session: a request carrying a
+  // token cannot replace it, so a leaked token cannot lock its owner out.
+  api.post('/me/token', (req, res) => {
+    const me = req.participant!;
+    if (me.kind !== 'user' || me.scope || !req.webSession) throw new OrcoError('forbidden', 'Make a new personal token from the web app, signed in in your browser');
+    res.json({ name: me.name, token: store.rotateToken(me.name, { actor: me, keepSession: req.webSession }) });
+  });
+  // An org admin replaces someone else's, for a person who is locked out.
+  api.post('/users/:name/token', (req, res) => {
+    const me = req.participant!;
+    if (me.kind !== 'user' || me.scope || !req.webSession || !store.isOrgAdmin(me)) throw new OrcoError('forbidden', 'Only org admins, signed in in their browser, replace someone else\'s token');
+    const person = store.participantByName(String(req.params.name));
+    if (!person || person.kind !== 'user' || store.isSystem(person)) throw new OrcoError('not_found', `No person named ${String(req.params.name)}`);
+    res.json({ name: person.name, token: store.rotateToken(person.name, { actor: me, keepSession: person.id === me.id ? req.webSession : undefined }) });
   });
   api.post('/users', (req, res) => {
     const me = req.participant!;

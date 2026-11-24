@@ -182,6 +182,22 @@ export function createGuide(ctx) {
     }
   }
 
+  /** A new personal token (#151): the old one stops working everywhere; this browser stays signed in. */
+  async function showNewToken() {
+    if (!confirm('Make a new personal token? Your current token stops working everywhere it is used (the command line, MCP clients, scripts), and your other browsers are signed out. This one stays signed in.')) return;
+    try {
+      const made = await api('/me/token', { method: 'POST', body: {} });
+      modal(
+        'Your new personal token',
+        el('p', { class: 'small', text: 'Copy it now: it is shown only this once. Use it wherever the old one was (orco login, an MCP client).' }),
+        copyBlock(made.token, 'Copy token'),
+        el('p', { class: 'small muted', text: 'Keep it to yourself: it acts as you.' }),
+      );
+    } catch (err) {
+      modal('New personal token', el('p', { class: 'error', text: err.message }));
+    }
+  }
+
   /** The first screen after someone opens their invite. */
   function showWelcome(name) {
     modal(
@@ -818,5 +834,5 @@ export function createGuide(ctx) {
     );
   }
 
-  return { tryAgent, stepsDismissed: dismissed, signInLink, showOtherDevice, showWelcome, copyBlock, showSetup, addAgent, showConnect, connectComputer, askAgent, refreshSteps, showSteps, showHelp };
+  return { tryAgent, stepsDismissed: dismissed, signInLink, showOtherDevice, showNewToken, showWelcome, copyBlock, showSetup, addAgent, showConnect, connectComputer, askAgent, refreshSteps, showSteps, showHelp };
 }

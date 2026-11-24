@@ -867,8 +867,28 @@ export function createPortfolio(ctx) {
       el('p', { class: 'small muted', text: 'Add someone to this Orco. They see only the projects you add them to.' }),
       el('div', { class: 'pf-row' }, name, email, el('button', { class: 'small', type: 'button', text: 'Add person', onclick: () => void add() })),
       result,
+      tokenRow(copyRow),
       el('p', { class: 'small muted', text: 'Someone lost access? Whoever runs the server makes them a new sign-in link with orco user link <name>.' }),
     );
+  }
+
+  /** An org admin replaces a locked-out person's token (#151). */
+  function tokenRow(copyRow) {
+    const who = el('input', { placeholder: 'Their name', 'aria-label': 'Whose token to replace' });
+    const out = el('div', { class: 'people-result' });
+    const go = async () => {
+      const name = who.value.trim();
+      if (!name) return;
+      if (!confirm(`Make a new token for ${name}? Their current token stops working everywhere, and their browsers are signed out.`)) return;
+      try {
+        const made = await api(`/users/${encodeURIComponent(name)}/token`, { method: 'POST', body: {} });
+        who.value = '';
+        out.replaceChildren(el('p', { class: 'small', text: `New token for ${made.name} (shown once). Send it to them privately.` }), copyRow(made.token, 'Copy token'));
+      } catch (err) {
+        notify(err.message);
+      }
+    };
+    return el('div', {}, el('div', { class: 'pf-row' }, who, el('button', { class: 'small', type: 'button', text: 'New token for them', onclick: () => void go() })), out);
   }
 
   function pausesCard(pauses, administered, agents) {

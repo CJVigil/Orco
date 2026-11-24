@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- New personal token from the web app (#151): *your name → New personal token* replaces your token and shows the new one once; the old one stops working at once and your other browsers are signed out, this one stays. Only from a browser session (`POST /api/me/token`), so a leaked token cannot lock its owner out. Org admins replace a locked-out person's token under *Portfolio → Controls → People* (`POST /api/users/:name/token`). Both are in the audit log as `token.rotate` with who did it.
+
 - `orco push-restore --force` (#150) replaces a server that has sign-ups but no tickets or messages (anything with work on it is still refused; the old database is kept and the log says how many participants were replaced). `orco backup` now copies the database as it is, read-only, instead of upgrading its schema under a running server.
 
 - Restore over HTTPS into an empty server (#149), for hosts without a shell: with `ORCO_RESTORE_TOKEN` set, `orco push-restore board.db --url <server> --token <t>` uploads a backup; the server checks it, refuses unless it has no people or agents yet, restarts, and restores it at start, keeping ticket numbers, comments and history. Off (404) without the token; every attempt is logged without the token.

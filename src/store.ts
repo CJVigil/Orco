@@ -474,14 +474,18 @@ export class Store {
     return created;
   }
 
-  rotateToken(name: string): string {
+  /**
+   * Replaces a token. `actor` is who did it (null from the command line); `keepSession` is the browser
+   * session a person used to replace their own, which stays signed in while every other one ends.
+   */
+  rotateToken(name: string, options: { actor?: Participant | null; keepSession?: string } = {}): string {
     const participant = this.participantByName(name);
     if (!participant || this.isSystem(participant)) throw new OrcoError('not_found', `No user or agent named ${name}`);
     const token = newToken(participant.kind);
     this.db.prepare('UPDATE participants SET token_hash = ? WHERE id = ?').run(hashToken(token), participant.id);
     // A new token is a fresh start: browsers signed in with a link (a lost laptop, say) are signed out too.
-    if (participant.kind === 'user') this.signins.endAll(participant.id);
-    this.audit.record(null, 'token.rotate', { subject: `${participant.kind}:${name}` });
+    if (participant.kind === 'user') this.signins.endAll(participant.id, options.keepSession);
+    this.audit.record(options.actor ?? null, 'token.rotate', { subject: `${participant.kind}:${name}` });
     this.events.emit('credentials', { participantId: participant.id });
     return token;
   }

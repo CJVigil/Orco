@@ -3739,6 +3739,7 @@ function showNotifications() {
 }
 
 $('other-device').addEventListener('click', () => void guide.showOtherDevice());
+$('new-token').addEventListener('click', () => void guide.showNewToken());
 $('logout-all').addEventListener('click', async () => {
   if (!confirm('Sign out of Orco in every browser, including this one, and cancel sign-in links you have not used? Your token for the command line keeps working.')) return;
   try {
