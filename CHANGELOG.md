@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `orco push-restore --force` (#150) replaces a server that has sign-ups but no tickets or messages (anything with work on it is still refused; the old database is kept and the log says how many participants were replaced). `orco backup` now copies the database as it is, read-only, instead of upgrading its schema under a running server.
+
 - Restore over HTTPS into an empty server (#149), for hosts without a shell: with `ORCO_RESTORE_TOKEN` set, `orco push-restore board.db --url <server> --token <t>` uploads a backup; the server checks it, refuses unless it has no people or agents yet, restarts, and restores it at start, keeping ticket numbers, comments and history. Off (404) without the token; every attempt is logged without the token.
 
 - Storage on PostgreSQL or MongoDB (#148), for hosts that cannot keep a SQLite file on local disk: set `ORCO_DB=postgres|mongo` with `ORCO_DATABASE_URL`, or pass the address to `--db`. Orco loads the data into an in-memory SQLite database and writes every change through to PostgreSQL or MongoDB before answering, so all queries and search work unchanged; run one server per database. `orco migrate --from <db> [--to <db>]` copies everything between any two of SQLite, PostgreSQL and MongoDB, with a dry run, refusing a target that holds data, resuming a stopped copy and checking row counts. `orco backup` uses `pg_dump` or `mongodump` (or makes a SQLite copy for a `.db` name). CI runs the whole test suite on all three.

@@ -498,14 +498,23 @@ export function createApp(store: Store, options: AppOptions = {}) {
       logins.hit(ip);
       return refuse(403, 'Wrong restore token');
     }
-    const people = (store.db.prepare('SELECT count(*) AS n FROM participants').get() as { n: number }).n;
-    if (Number(people)) return refuse(409, 'This server already has people on it; a restore over HTTPS only seeds an empty server');
+    const count = (table: string) => Number((store.db.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n);
+    const people = count('participants');
+    // force (#150): a board with sign-ups but no work (no tickets, no messages) may be replaced.
+    const force = req.query.force === '1' || req.query.force === 'true';
+    if (people && !force) return refuse(409, 'This server already has people on it; a restore over HTTPS only seeds an empty server (--force replaces one with sign-ups but no tickets or messages)');
+    if (people && force) {
+      const tickets = count('tickets');
+      const messages = count('messages');
+      if (tickets || messages) return refuse(409, `This server has ${tickets} ticket${tickets === 1 ? '' : 's'} and ${messages} message${messages === 1 ? '' : 's'}; even with --force a restore never replaces a board in use`);
+    }
     express.raw({ type: () => true, limit: process.env.ORCO_RESTORE_MAX_BYTES || '1gb' })(req, res, (err?: unknown) => {
       if (err) return refuse(413, (err as Error).message);
       try {
         const info = acceptUpload(restoreOptions.dir, Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0));
-        console.log(`${new Date().toISOString()} Restore upload from ${ip} accepted (schema ${info.version}, ${info.participants} people and agents); restarting to restore it`);
-        store.audit.record(null, 'server.restore_accepted', { detail: { ip, version: info.version, participants: info.participants } });
+        const replacing = people ? `; forced, replacing ${people} participant${people === 1 ? '' : 's'} (the old database is kept beside the new one)` : '';
+        console.log(`${new Date().toISOString()} Restore upload from ${ip} accepted (schema ${info.version}, ${info.participants} people and agents)${replacing}; restarting to restore it`);
+        store.audit.record(null, 'server.restore_accepted', { detail: { ip, version: info.version, participants: info.participants, forced: Boolean(people), replaced: people } });
         res.on('finish', () => restoreOptions.onAccepted());
         res.status(202).json({ accepted: true, participants: info.participants, restarting: true });
       } catch (e) {

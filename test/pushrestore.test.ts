@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, it } from 'node:test';
-import { openDatabase } from '../src/db.js';
+import { backupAsIs } from '../src/backups.js';
+import { MIGRATIONS, openDatabase } from '../src/db.js';
 import { createApp } from '../src/http.js';
 import { applyPending, pendingFile, pushRestore } from '../src/pushrestore.js';
 import { parseTarget } from '../src/storage/target.js';
@@ -158,5 +159,92 @@ describe('restore over HTTPS (#149)', () => {
     assert.match(lines.at(-1)!, /unset ORCO_RESTORE_TOKEN and redeploy/);
     const notOn = (async () => new Response('{}', { status: 404 })) as typeof fetch;
     await assert.rejects(pushRestore(Buffer.from('x'), 'https://o', TOKEN, () => {}, notOn), /set ORCO_RESTORE_TOKEN/);
+  });
+});
+
+describe('restore over HTTPS with --force (#150)', () => {
+  const upload = (base: string, body: Buffer, force: boolean) =>
+    fetch(`${base}/api/admin/restore${force ? '?force=1' : ''}`, { method: 'POST', headers: { authorization: `Bearer ${TOKEN}` }, body: new Uint8Array(body) });
+
+  it('replaces a board with sign-ups but no tickets or messages, keeping the old database beside it', async (t) => {
+    const logged: string[] = [];
+    t.mock.method(console, 'log', (m: string) => logged.push(m));
+    const dir = mkdtempSync(join(tmpdir(), 'orco-force-'));
+    const file = readFileSync(board(dir));
+    const live = join(dir, 'live.db');
+    const running = new Store(openDatabase(live));
+    running.createUser('first-signup');
+    running.createUser('second-signup');
+    const s = await serve(running, { dir, onAccepted: () => {} });
+    try {
+      assert.equal((await upload(s.base, file, false)).status, 409, 'without --force, people on it means no');
+      assert.equal(existsSync(pendingFile(dir)), false);
+      const res = await upload(s.base, file, true);
+      assert.equal(res.status, 202);
+      assert.ok(logged.some((l) => /forced, replacing 2 participants/.test(l)));
+    } finally {
+      await s.stop();
+      running.db.close();
+    }
+    const lines: string[] = [];
+    assert.equal(applyPending(dir, parseTarget(live), (l) => lines.push(l)), true);
+    assert.match(lines[0]!, /the database it replaced is at .*before-restore/);
+    const store = new Store(openDatabase(live));
+    const ana = store.participantByName('ana')!;
+    assert.equal(store.participantByName('first-signup'), null);
+    assert.ok(store.tickets.get(ana, 'API-12').activity.some((a) => a.kind === 'comment'));
+    store.db.close();
+  });
+
+  for (const work of ['a ticket', 'a message'] as const) {
+    it(`never replaces a board with ${work}, even with --force`, async (t) => {
+      t.mock.method(console, 'log', () => {});
+      const dir = mkdtempSync(join(tmpdir(), 'orco-force-'));
+      const file = readFileSync(board(dir));
+      const running = new Store(openDatabase(':memory:'));
+      const ana = running.createUser('ana').participant;
+      running.createProject(ana, 'web');
+      if (work === 'a ticket') running.tickets.create(ana, 'web', { title: 'Home: one thing' });
+      else running.post(ana, 'web/general', 'hello');
+      const s = await serve(running, { dir, onAccepted: () => assert.fail('must not restart') });
+      try {
+        const res = await upload(s.base, file, true);
+        assert.equal(res.status, 409);
+        assert.match(((await res.json()) as { error: string }).error, /never replaces a board in use/);
+        assert.equal(existsSync(pendingFile(dir)), false, 'nothing saved');
+      } finally {
+        await s.stop();
+      }
+    });
+  }
+
+  it('orco push-restore --force asks for it', async () => {
+    let asked = '';
+    const fake = (async (url: string | URL | Request) => {
+      if (String(url).includes('/api/admin/restore')) {
+        asked = String(url);
+        return new Response(JSON.stringify({ accepted: true, participants: 1 }), { status: 202 });
+      }
+      return new Response(JSON.stringify({ ok: true, uptimeSeconds: 0 }), { status: 200 });
+    }) as typeof fetch;
+    await pushRestore(Buffer.from('x'), 'https://o', TOKEN, () => {}, fake, 10, true);
+    assert.equal(asked, 'https://o/api/admin/restore?force=1');
+  });
+});
+
+describe('orco backup reads the database as it is (#150)', () => {
+  it('copies an older schema without upgrading it', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'orco-asis-'));
+    const path = join(dir, 'old.db');
+    const old = new DatabaseSync(path);
+    for (const m of MIGRATIONS.slice(0, 10)) old.exec(m);
+    old.exec('PRAGMA user_version = 10');
+    old.close();
+    backupAsIs(path, join(dir, 'copy.db'));
+    for (const f of [path, join(dir, 'copy.db')]) {
+      const db = new DatabaseSync(f, { readOnly: true });
+      assert.equal((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 10, f);
+      db.close();
+    }
   });
 });

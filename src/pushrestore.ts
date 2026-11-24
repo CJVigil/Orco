@@ -105,9 +105,9 @@ export function applyPending(dir: string, target: Target, log: (line: string) =>
 }
 
 /** orco push-restore: uploads a backup and waits for the server to come back with it. */
-export async function pushRestore(file: Buffer, url: string, token: string, log: (line: string) => void, fetchImpl: typeof fetch = fetch, waitSeconds = 180): Promise<void> {
+export async function pushRestore(file: Buffer, url: string, token: string, log: (line: string) => void, fetchImpl: typeof fetch = fetch, waitSeconds = 180, force = false): Promise<void> {
   const base = url.replace(/\/+$/, '');
-  const res = await fetchImpl(`${base}/api/admin/restore`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/octet-stream' }, body: new Uint8Array(file) });
+  const res = await fetchImpl(`${base}/api/admin/restore${force ? '?force=1' : ''}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/octet-stream' }, body: new Uint8Array(file) });
   const body = (await res.json().catch(() => ({}))) as { error?: string; participants?: number };
   if (res.status === 404) throw new OrcoError('not_found', 'The server does not take restores: set ORCO_RESTORE_TOKEN on it and redeploy (or check the address)');
   if (!res.ok) throw new OrcoError(res.status === 409 ? 'conflict' : res.status === 403 ? 'forbidden' : 'invalid', body.error ?? `The server answered ${res.status}`);

@@ -12,7 +12,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, extname, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { parseArgs } from 'node:util';
-import { Backups, backupTo, networkFilesystemWarning, restore } from './backups.js';
+import { Backups, backupAsIs, backupTo, networkFilesystemWarning, restore } from './backups.js';
 import { Bridge } from './bridge/bridge.js';
 import { loadBridgeConfig } from './bridge/config.js';
 import { doctor } from './bridge/doctor.js';
@@ -49,9 +49,10 @@ Server commands (run where the database lives):
   backup <file>              Write a consistent copy of the database, safe while serving (PostgreSQL: pg_dump;
                              MongoDB: mongodump; a name ending in .db gets a SQLite copy from any database)
   restore <file> [--force]   Replace the SQLite database with a backup (stop the server first)
-  push-restore <file> --url <server> --token <t>
+  push-restore <file> --url <server> --token <t> [--force]
                              Seed an empty server from a backup over HTTPS (the server needs
-                             ORCO_RESTORE_TOKEN); waits until it is back with the board
+                             ORCO_RESTORE_TOKEN); waits until it is back with the board. --force
+                             also replaces one with sign-ups but no tickets or messages
   migrate --from <db> [--to <db>] [--dry-run] [--force]
                              Copy everything between SQLite, PostgreSQL and MongoDB (stop the server first);
                              --to defaults to the configured database; refuses a target holding data
@@ -240,9 +241,9 @@ export function main(): void {
   // orco push-restore (#149): seed an empty server from a backup over HTTPS.
   if (command === 'push-restore') {
     const token = values.token ?? process.env.ORCO_RESTORE_TOKEN;
-    if (!sub || !values.url || !token) throw new OrcoError('invalid', 'Usage: orco push-restore <backup.db> --url <server> --token <ORCO_RESTORE_TOKEN> (or set ORCO_RESTORE_TOKEN)');
+    if (!sub || !values.url || !token) throw new OrcoError('invalid', 'Usage: orco push-restore <backup.db> --url <server> --token <ORCO_RESTORE_TOKEN> (or set ORCO_RESTORE_TOKEN) [--force: replace a board with sign-ups but no tickets or messages]');
     checkBackup(sub);
-    void pushRestore(readFileSync(sub), values.url, token, (line) => console.log(line)).catch((err: Error) => {
+    void pushRestore(readFileSync(sub), values.url, token, (line) => console.log(line), fetch, 180, values.force).catch((err: Error) => {
       console.error(err.message);
       process.exitCode = 1;
     });
@@ -255,6 +256,21 @@ export function main(): void {
     const result = migrateData(parseTarget(values.from), values.to ? parseTarget(values.to) : target, { dryRun: values['dry-run'], force: values.force, log: (line) => console.log(line) });
     if (!result.dryRun) console.log(`Done: ${result.rows} rows in ${Object.keys(result.tables).length} tables. Point ORCO_DB or ORCO_DATABASE_URL at the new database and start the server.`);
     return;
+  }
+
+  // orco backup reads the database as it is (#150): it never upgrades the schema under a running server.
+  if (command === 'backup' && sub) {
+    if (target.kind === 'sqlite') {
+      backupAsIs(target.path, sub);
+      console.log(`Backed up ${dbName} to ${sub}`);
+      return;
+    }
+    if (/\.(db|sqlite3?)$/i.test(sub)) {
+      if (existsSync(sub)) throw new OrcoError('conflict', `${sub} already exists; pick a new file name`);
+      migrateData(target, parseTarget(sub));
+      console.log(`Backed up ${dbName} to ${sub}`);
+      return;
+    }
   }
 
   // A backup of a PostgreSQL or MongoDB database with its own tool (a .db name gets a SQLite copy instead).

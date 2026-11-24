@@ -797,9 +797,11 @@ numbers, comments and history, so `API-12` in notes and commits still matches:
 
 1. On the old machine: `orco backup board.db`.
 2. On the new server, add `ORCO_RESTORE_TOKEN` to its environment (a long random value, like the
-   output of `openssl rand -hex 32`) and deploy. Don't create anyone on it first: the restore only
-   works while the server has no people or agents.
-3. `orco push-restore board.db --url https://orco.example.com --token <that value>`. The server
+   output of `openssl rand -hex 32`) and deploy. The restore works on a server with no people or
+   agents; if someone has already signed up there but nothing has been posted or filed, add
+   `--force` below to replace it (a server with any ticket or message is always refused, and the
+   old database is kept beside the new one).
+3. `orco push-restore board.db --url https://orco.example.com --token <that value>` (add `--force` for a server with sign-ups only). The server
    checks the file (sound, an Orco database, not from a newer Orco), saves it and restarts; at
    start it restores it before opening its database, then `push-restore` waits until it is back.
    This relies on the server restarting when it exits (`restart: unless-stopped` in Docker

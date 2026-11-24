@@ -14,6 +14,20 @@ export function backupTo(db: DatabaseSync, file: string): void {
   db.exec(`VACUUM INTO '${file.replace(/'/g, "''")}'`);
 }
 
+/**
+ * A copy of a database file as it is, opened read-only: orco backup never runs migrations, so it is
+ * safe beside a server of another version (#150).
+ */
+export function backupAsIs(path: string, file: string): void {
+  if (!existsSync(path)) throw new OrcoError('not_found', `No database at ${path}`);
+  const db = new DatabaseSync(path, { readOnly: true });
+  try {
+    backupTo(db, file);
+  } finally {
+    db.close();
+  }
+}
+
 function stamp(ms: number): string {
   return new Date(ms).toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
 }
